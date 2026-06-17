@@ -68,3 +68,7 @@ infra/gitea-push-pat.txt
 
 # fan-out 目标清单含主机信息,按需提交;真实租户配置 deploy/tenants.json 已忽略
 
+
+# Nginx + certbot 运行时状态(含 TLS 私钥、Let's Encrypt 账户私钥,绝不提交)
+nginx/certbot-etc/
+nginx/certbot-webroot/

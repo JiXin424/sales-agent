@@ -1,0 +1,29 @@
+# 让 docker build 只发必要文件,避免把 node_modules(300MB+)/媒体/git 历史塞进构建上下文。
+# Dockerfile 实际 COPY 的:console/(前端,会 npm ci 重建)、pyproject.toml、src/、config/、scripts/、eval/。
+.git/
+.gitignore
+.claude/
+.vscode/
+**/node_modules/
+console/dist/
+console/tsconfig.tsbuildinfo
+build/
+dist/
+*.egg-info/
+UNKNOWN.egg-info/
+__pycache__/
+.pytest_cache/
+data/
+logs/
+secrets/
+infra/
+docs/
+nginx/
+# 仓库根游离的大文件(镜像内用的是 src/.../static/ 下的正式副本)
+coach_mode.png
+cocah.mp4
+cocah.html
+=0.20.0
+*.md
+Dockerfile
+docker-compose*.yml

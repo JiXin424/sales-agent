@@ -1,0 +1,12 @@
+{
+  "_comment": "CI/CD fan-out 目标清单(push 到 main 后,Gitea Action 对每台目标机 SSH 部署)。这里只有主机信息,无密钥/凭证。每台目标机本地的真实租户配置在其各自的 deploy/tenants.json + secrets/(不入库)。",
+  "registry": "172.25.186.210:5000/sales-agent",
+  "targets": [
+    {
+      "host": "47.120.50.181",
+      "user": "root",
+      "dir": "/root/code/sales-agent",
+      "port": 22
+    }
+  ]
+}

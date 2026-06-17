@@ -1,0 +1,59 @@
+name: deploy
+# push 到 main → build 镜像 → 推私有 registry → fan-out 部署到 deploy/deploy-targets.json 里每台目标机。
+# runner 跑在源宿主机上(:host 标签),复用主机 docker(已登录 registry)和免密 ssh,零 secret。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: 172.25.186.210:5000
+  IMAGE_NAME: sales-agent
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image (sha + latest)
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          echo "Building ${REGISTRY}/${IMAGE_NAME}:${SHA} and :latest"
+          docker build \
+            -t ${REGISTRY}/${IMAGE_NAME}:${SHA} \
+            -t ${REGISTRY}/${IMAGE_NAME}:latest .
+
+      - name: Push image
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          docker push ${REGISTRY}/${IMAGE_NAME}:${SHA}
+          docker push ${REGISTRY}/${IMAGE_NAME}:latest
+          echo "::notice::pushed ${REGISTRY}/${IMAGE_NAME}:${SHA}"
+
+  deploy-fanout:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to each target (rolling)
+        run: |
+          set -e
+          SHA=$(git rev-parse --short HEAD)
+          IMAGE="${REGISTRY}/${IMAGE_NAME}:${SHA}"
+          echo "Rolling out ${IMAGE}"
+          # 解析目标清单 -> user|host|port|dir
+          python3 - <<'PY' > /tmp/targets.txt
+          import json
+          d = json.load(open("deploy/deploy-targets.json"))
+          for t in d.get("targets", []):
+              print(f"{t.get('user','root')}|{t['host']}|{t.get('port',22)}|{t['dir']}")
+          PY
+          while IFS='|' read -r user host port dir; do
+            [ -z "$host" ] && continue
+            echo "=== target ${user}@${host}:${dir} ==="
+            ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p "$port" "${user}@${host}" \
+              "cd '${dir}' && REGISTRY_IMAGE='${IMAGE}' scripts/deploy-release.sh --yes"
+          done < /tmp/targets.txt

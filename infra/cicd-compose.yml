@@ -1,13 +1,18 @@
-# CI/CD 基础设施:私有 Registry + Gitea + Act Runner
+# CI/CD 基础设施(Gitea + 私有 Registry)
 # 与应用 docker-compose.yml 分离,独立生命周期。
-# 启动: cd infra && docker compose -f cicd-compose.yml up -d <service>
+# 启动: cd infra && docker compose -f cicd-compose.yml up -d
+#
+# 注意:act_runner 不在此 compose 里——它作为宿主机二进制(/usr/local/bin/act_runner)
+# 以 systemd 服务运行(gitea-runner.service),这样 Gitea Action 的 job 用 :host 标签
+# 直接在源宿主机上执行,复用主机的 docker(登录缓存)和免密 ssh,无需任何 secret。
+#
+# 镜像版本:Gitea 用具体 tag 1.24(阿里云源对 :latest/:1 缓存了古早的 1.15.9,
+# 不支持 Actions;具体 tag 会回源拉新)。act_runner 用 v0.6.1 宿主机二进制。
 #
 # 安全说明:
-#   - registry 监听 0.0.0.0:5000(源公网 IP 是阿里云 EIP,NAT 到私网,
-#     容器无法直接 bind EIP),靠 htpasswd basic auth + 阿里云安全组
-#     (建议把入方向 TCP:5000 限定到目标机 IP)把关。
-#   - act_runner 持有主机 /var/run/docker.sock = 源机器 root 等价,
-#     靠 main 分支保护(限制谁能 push 触发)+ runner 仅限本仓库 缓解。
+#   - registry 只绑源私网 IP 172.25.186.210:5000(同 VPC 内网可达,不暴露公网),
+#     靠 htpasswd basic auth 把关。
+#   - Gitea web :3001 暴露在公网 IP;首次用 CLI 建管理员并设强密码。
 
 services:
   registry:
@@ -15,7 +20,7 @@ services:
     container_name: sales-agent-registry
     restart: unless-stopped
     ports:
-      # 只绑源私网 IP(同 VPC 内网可达,不暴露公网)。两机同 cn-heyuan + 同 VPC。
+      # 只绑源私网 IP(同 VPC 内网可达,不暴露公网)
       - "172.25.186.210:5000:5000"
     environment:
       REGISTRY_AUTH: htpasswd
@@ -25,5 +30,29 @@ services:
       - ./htpasswd:/auth/htpasswd:ro
       - registry-data:/var/lib/registry
 
+  gitea:
+    image: gitea/gitea:1.24
+    container_name: gitea
+    restart: unless-stopped
+    environment:
+      USER_UID: "1000"
+      USER_GID: "1000"
+      # 跳过 web 安装向导(用 CLI 建 admin)
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__server__DOMAIN: "47.120.55.219"
+      GITEA__server__ROOT_URL: "http://47.120.55.219:3001/"
+      # 不启用内置 SSH server,git 走 HTTP(runner 用 http://127.0.0.1:3001 clone)
+      GITEA__server__START_SSH_SERVER: "false"
+      GITEA__server__DISABLE_SSH: "true"
+      # 启用 Actions(CI/CD)
+      GITEA__actions__ENABLED: "true"
+    ports:
+      - "3001:3000"   # web(3000 被 omniagent-web 占用)
+    volumes:
+      - gitea-data:/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+
 volumes:
   registry-data:
+  gitea-data:

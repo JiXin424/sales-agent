@@ -62,6 +62,8 @@ infra/registry-password.txt
 infra/deploy_key
 infra/deploy_key.pub
 infra/runner.env
+infra/gitea-admin-password.txt
+infra/runner-reg-token.txt
 
 # fan-out 目标清单含主机信息,按需提交;真实租户配置 deploy/tenants.json 已忽略
 

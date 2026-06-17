@@ -203,13 +203,25 @@ if [ "$ASSUME_YES" -ne 1 ]; then
   fi
 fi
 
-if compgen -G "images/*.tar" >/dev/null; then
+if [ -n "${REGISTRY_IMAGE:-}" ]; then
+  # Registry pull 路径(CI 默认走这条)。REGISTRY_IMAGE 形如 host:5000/sales-agent:<tag>。
+  REG_HOST="${REGISTRY_HOST:-172.25.186.210:5000}"
+  if [ -n "${REGISTRY_USER:-}" ] && [ -n "${REGISTRY_PASS:-}" ]; then
+    echo "Logging into registry ${REG_HOST}"
+    echo "${REGISTRY_PASS}" | docker login "${REG_HOST}" -u "${REGISTRY_USER}" --password-stdin
+  fi
+  echo "Pulling image: ${REGISTRY_IMAGE}"
+  docker pull "${REGISTRY_IMAGE}"
+  # 让 renderer 用精确 tag 而非 inventory 的默认值
+  export OVERRIDE_IMAGE="${REGISTRY_IMAGE}"
+elif compgen -G "images/*.tar" >/dev/null; then
+  # 离线/冷启动回退:从发布包的 tar 加载镜像
   for image_tar in images/*.tar; do
     echo "Loading docker image: $image_tar"
     docker load -i "$image_tar"
   done
 else
-  echo "No image tar found under images/. Docker will use local/pullable image tags from $INVENTORY."
+  echo "No REGISTRY_IMAGE and no images/*.tar; using inventory image tag as-is."
 fi
 
 python3 scripts/render-multitenant-deploy.py "$INVENTORY" --compose-out "$COMPOSE_FILE"

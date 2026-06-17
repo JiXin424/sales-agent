@@ -23,7 +23,7 @@ fi
 for line in "${lines[@]}"; do
   IFS='|' read -r user host port dir <<< "$line"
   echo "=== git pull @ ${user}@${host}:${dir} ==="
-  ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p "$port" "${user}@${host}" \
+  ssh -n -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p "$port" "${user}@${host}" \
     "cd '${dir}' && git fetch origin && git reset --hard origin/main && echo synced-to-\$(git rev-parse --short HEAD)"
 done
 echo "code-sync 完成"

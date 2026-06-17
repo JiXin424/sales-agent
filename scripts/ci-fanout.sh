@@ -35,7 +35,7 @@ while IFS='|' read -r user host port dir method local name; do
   if [ "$local" = "True" ]; then
     ( cd "$dir" && REGISTRY_IMAGE="$IMAGE" $script $args )
   else
-    ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p "$port" "${user}@${host}" \
+    ssh -n -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p "$port" "${user}@${host}" \
       "cd '${dir}' && REGISTRY_IMAGE='${IMAGE}' ${script} ${args}"
   fi
 done < /tmp/ci-targets.txt

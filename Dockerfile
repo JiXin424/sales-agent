@@ -33,20 +33,29 @@ RUN if [ -f /etc/apt/sources.list ]; then \
     gcc libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# 先复制依赖文件，利用 Docker 缓存
+# 先只装依赖（仅 pyproject.toml 的依赖变化时才重跑这层——几十秒）。
+# 用一个空 package stub 让 `pip install -e .` 能解析并安装依赖，
+# 装完删掉 stub；真正源码在下一步 COPY，再做 --no-deps 的秒级 editable 重装。
 COPY pyproject.toml ./
+RUN pip install --no-cache-dir --upgrade pip \
+      -i https://mirrors.aliyun.com/pypi/simple/ \
+      --trusted-host mirrors.aliyun.com \
+    && mkdir -p src/sales_agent && : > src/sales_agent/__init__.py \
+    && pip install --no-cache-dir -e . \
+      -i https://mirrors.aliyun.com/pypi/simple/ \
+      --trusted-host mirrors.aliyun.com \
+    && rm -rf src
+
+# 复制源码（纯代码改动只从这层开始失效，跳过上面的依赖安装层）
 COPY src/ ./src/
 COPY config/ ./config/
 COPY scripts/ ./scripts/
 COPY eval/ ./eval/
 
-# 安装依赖（阿里云 PyPI 镜像）
-RUN pip install --no-cache-dir --upgrade pip \
-    -i https://mirrors.aliyun.com/pypi/simple/ \
-    --trusted-host mirrors.aliyun.com \
-    && pip install --no-cache-dir -e . \
-    -i https://mirrors.aliyun.com/pypi/simple/ \
-    --trusted-host mirrors.aliyun.com
+# editable 重装（--no-deps，秒级），把 editable 指向真实 src + 生成 console 脚本
+RUN pip install --no-cache-dir --no-deps -e . \
+      -i https://mirrors.aliyun.com/pypi/simple/ \
+      --trusted-host mirrors.aliyun.com
 
 # 控制台前端构建产物（打进镜像，FastAPI 托管）
 COPY --from=frontend /console/dist /app/console/dist

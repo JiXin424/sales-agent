@@ -1,0 +1,4 @@
+{
+  "_comment": "源码镜像服务器清单(未来的第二/第三个开发机)。每台需先 git clone 主控 Gitea 仓库并配好 pull 认证。CI push 后会自动对这里每台 git pull。当前为空,加一条即生效。",
+  "targets": []
+}

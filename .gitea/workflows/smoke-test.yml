@@ -1,0 +1,17 @@
+name: smoke-test
+on:
+  push:
+    paths:
+      - ".gitea/workflows/smoke-test.yml"
+  workflow_dispatch:
+
+jobs:
+  host-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: host echo
+        run: echo "SMOKE_OK running on host $(hostname)"
+      - name: docker reachable
+        run: docker info --format 'docker {{.ServerVersion}}'
+      - name: ssh to target
+        run: ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new 47.120.50.181 'echo SSH_OK $(hostname)'

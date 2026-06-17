@@ -1,0 +1,29 @@
+# CI/CD 基础设施:私有 Registry + Gitea + Act Runner
+# 与应用 docker-compose.yml 分离,独立生命周期。
+# 启动: cd infra && docker compose -f cicd-compose.yml up -d <service>
+#
+# 安全说明:
+#   - registry 监听 0.0.0.0:5000(源公网 IP 是阿里云 EIP,NAT 到私网,
+#     容器无法直接 bind EIP),靠 htpasswd basic auth + 阿里云安全组
+#     (建议把入方向 TCP:5000 限定到目标机 IP)把关。
+#   - act_runner 持有主机 /var/run/docker.sock = 源机器 root 等价,
+#     靠 main 分支保护(限制谁能 push 触发)+ runner 仅限本仓库 缓解。
+
+services:
+  registry:
+    image: registry:2
+    container_name: sales-agent-registry
+    restart: unless-stopped
+    ports:
+      # 只绑源私网 IP(同 VPC 内网可达,不暴露公网)。两机同 cn-heyuan + 同 VPC。
+      - "172.25.186.210:5000:5000"
+    environment:
+      REGISTRY_AUTH: htpasswd
+      REGISTRY_AUTH_HTPASSWD_REALM: Sales-Agent Registry
+      REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd
+    volumes:
+      - ./htpasswd:/auth/htpasswd:ro
+      - registry-data:/var/lib/registry
+
+volumes:
+  registry-data:

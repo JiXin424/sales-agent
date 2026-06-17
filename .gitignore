@@ -1,0 +1,67 @@
+# Secrets — 绝不提交
+.env
+*.env
+secrets/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Data
+data/sales-agent/tenants/*/documents/*.pdf
+data/sales-agent/tenants/*/documents/*.docx
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+# Generated deployment files
+docker-compose.generated.yml
+traefik/generated-dynamic.yml
+deploy/tenants.json
+
+# Frontend 构建产物(console 自带 dist/node_modules)
+console/node_modules/
+console/dist/
+console/tsconfig.tsbuildinfo
+
+# 仓库根游离的大文件副本(正式副本在 src/.../static/ 下,会进镜像)
+coach_mode.png
+cocah.mp4
+cocah.html
+
+# Traefik 运行时凭证/状态(绝不提交)
+traefik/acme.json
+traefik/certs/
+
+# 游离的 pip resolver 垃圾
+=0.20.0
+
+# CI/CD 基础设施凭证(绝不提交)
+infra/htpasswd
+infra/registry-password.txt
+infra/deploy_key
+infra/deploy_key.pub
+infra/runner.env
+
+# fan-out 目标清单含主机信息,按需提交;真实租户配置 deploy/tenants.json 已忽略
+

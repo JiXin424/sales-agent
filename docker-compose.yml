@@ -1,0 +1,230 @@
+# ============================================================
+# Sales Agent — Docker Compose
+# ============================================================
+# 开发模式：只启动 PostgreSQL
+#   docker compose up -d postgres
+#
+# 多租户 dedicated mode（单容器模式）：
+#   docker compose --profile taishan up -d
+#   docker compose --profile tenant-b up -d
+#
+# 角色拆分模式（推荐生产部署）：
+#   docker compose --profile taishan-split up -d
+#   docker compose --profile tenant-b-split up -d
+# ============================================================
+
+services:
+  # ============================================================
+  # Traefik HTTPS 反向代理 + 自动 SSL 证书
+  # ============================================================
+  # 内置 ACME 客户端，自动向 Let's Encrypt 申请和续期证书
+  # 无需手动操作 certbot，证书生命周期全自动管理
+  # ============================================================
+  traefik:
+    image: traefik:v3.3
+    container_name: sales-agent-traefik
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - ./traefik/certs:/etc/traefik/certs:ro
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  postgres:
+    image: docker.1ms.run/pgvector/pgvector:pg16
+    container_name: sales-agent-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sales_agent
+      POSTGRES_USER: sales_agent
+      POSTGRES_PASSWORD: sales_agent_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sales_agent -d sales_agent"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # 单容器模式（all-in-one，向后兼容）
+  # ============================================================
+
+  # --- Dedicated mode: 泰山兄弟 ---
+  taishan-agent:
+    image: sales-agent:latest
+    profiles: ["taishan"]
+    container_name: sales-agent-taishan
+    restart: unless-stopped
+    env_file:
+      - ./secrets/taishan.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://sales_agent:sales_agent_dev@postgres:5432/sales_agent
+    volumes:
+      - ./data/taishan:/data/taishan
+      - ./logs/taishan:/logs/taishan
+    # 端口不再映射到宿主机，由 Nginx 容器代理
+    expose:
+      - "8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # --- Dedicated mode: 租户 B ---
+  tenant-b-agent:
+    image: sales-agent:latest
+    profiles: ["tenant-b"]
+    container_name: sales-agent-tenant-b
+    restart: unless-stopped
+    env_file:
+      - ./secrets/tenant-b.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://sales_agent:sales_agent_dev@postgres:5432/sales_agent
+    volumes:
+      - ./data/tenant-b:/data/tenant_b
+      - ./logs/tenant-b:/logs/tenant_b
+    ports:
+      - "8102:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ============================================================
+  # 角色拆分模式（生产推荐）
+  # ============================================================
+
+  # --- 泰山兄弟：API ---
+  taishan-api:
+    image: sales-agent:latest
+    profiles: ["taishan-split"]
+    container_name: sales-agent-taishan-api
+    restart: unless-stopped
+    env_file:
+      - ./secrets/taishan.env
+    environment:
+      PROCESS_ROLE: api
+      DATABASE_URL: postgresql+asyncpg://sales_agent:sales_agent_dev@postgres:5432/sales_agent
+    volumes:
+      - ./data/taishan:/data/taishan
+      - ./logs/taishan:/logs/taishan
+    # 端口映射到宿主机，供本地前端（vite dev :4000）代理访问
+    # 宿主机 8000 被 omniagent-api 占用，改用 8001
+    ports:
+      - "8001:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # --- 泰山兄弟：DingTalk Stream ---
+  taishan-stream:
+    image: sales-agent:latest
+    profiles: ["taishan-split"]
+    container_name: sales-agent-taishan-stream
+    restart: unless-stopped
+    env_file:
+      - ./secrets/taishan.env
+    environment:
+      PROCESS_ROLE: stream
+      DATABASE_URL: postgresql+asyncpg://sales_agent:sales_agent_dev@postgres:5432/sales_agent
+    volumes:
+      - ./logs/taishan:/logs/taishan
+    # 不对外暴露 API 端口 — Stream 模式通过 WebSocket 长连接工作
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  # --- 泰山兄弟：后台 Worker ---
+  taishan-worker:
+    image: sales-agent:latest
+    profiles: ["taishan-split"]
+    container_name: sales-agent-taishan-worker
+    restart: unless-stopped
+    env_file:
+      - ./secrets/taishan.env
+    environment:
+      PROCESS_ROLE: worker
+      DATABASE_URL: postgresql+asyncpg://sales_agent:sales_agent_dev@postgres:5432/sales_agent
+    volumes:
+      - ./data/taishan:/data/taishan
+      - ./logs/taishan:/logs/taishan
+    # 不对外暴露 API 端口
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # --- 租户 B：API ---
+  tenant-b-api:
+    image: sales-agent:latest
+    profiles: ["tenant-b-split"]
+    container_name: sales-agent-tenant-b-api
+    restart: unless-stopped
+    env_file:
+      - ./secrets/tenant-b.env
+    environment:
+      PROCESS_ROLE: api
+      DATABASE_URL: postgresql+asyncpg://sales_agent:sales_agent_dev@postgres:5432/sales_agent
+    volumes:
+      - ./data/tenant-b:/data/tenant_b
+      - ./logs/tenant-b:/logs/tenant_b
+    ports:
+      - "8102:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # --- 租户 B：DingTalk Stream ---
+  tenant-b-stream:
+    image: sales-agent:latest
+    profiles: ["tenant-b-split"]
+    container_name: sales-agent-tenant-b-stream
+    restart: unless-stopped
+    env_file:
+      - ./secrets/tenant-b.env
+    environment:
+      PROCESS_ROLE: stream
+      DATABASE_URL: postgresql+asyncpg://sales_agent:sales_agent_dev@postgres:5432/sales_agent
+    volumes:
+      - ./logs/tenant-b:/logs/tenant_b
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  # --- 租户 B：后台 Worker ---
+  tenant-b-worker:
+    image: sales-agent:latest
+    profiles: ["tenant-b-split"]
+    container_name: sales-agent-tenant-b-worker
+    restart: unless-stopped
+    env_file:
+      - ./secrets/tenant-b.env
+    environment:
+      PROCESS_ROLE: worker
+      DATABASE_URL: postgresql+asyncpg://sales_agent:sales_agent_dev@postgres:5432/sales_agent
+    volumes:
+      - ./data/tenant-b:/data/tenant_b
+      - ./logs/tenant-b:/logs/tenant_b
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:

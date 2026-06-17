@@ -1,0 +1,105 @@
+app:
+  name: "Sales Agent v0"
+  log_level: "info"
+  max_message_chars: 6000
+
+database:
+  url: "postgresql+asyncpg://sales_agent:sales_agent_dev@localhost:5432/sales_agent"
+  echo: false
+
+conversation:
+  history_turns: 4
+  history_turns_configurable: true
+  expire_after_hours: 8
+  force_previous_on_continuation_intent: true
+  summary_update_policy: "threshold"
+  summary_after_turns: 8
+  summary_after_chars: 5000
+  idle_summary_check_minutes: 30
+  refresh_summary_before_context_overflow: true
+  reset_commands:
+    - "新话题"
+    - "清空上下文"
+    - "重新开始"
+    - "忘掉前面"
+    - "/reset"
+    - "/new"
+
+source_display:
+  sales_visible_mode: "title_only"
+  max_visible_sources: 3
+  keep_snippet_ref: true
+  provide_snippet_page: true
+  show_chunk_text_in_message: false
+
+model:
+  provider: "openai_compatible"
+  api_key_ref: "env:MODEL_API_KEY"
+  api_key_env: "SALES_AGENT_API_KEY"  # 兼容旧格式
+  base_url: "https://api.example.com/v1"
+  chat_model: "qwen-plus"
+  embedding_model: "text-embedding-v3"
+  temperature: 0.3
+  timeout_seconds: 30
+  max_retries: 2
+
+retrieval:
+  top_k: 5
+  min_score: 0.35
+  chunk_size: 700
+  chunk_overlap: 120
+
+risk:
+  tenant_custom_rules_enabled: false
+  default_price_commitment_action: "warn"
+  default_delivery_commitment_action: "block"
+  default_unsupported_claim_action: "rewrite"
+  default_discount_commitment_action: "warn"
+  default_contract_commitment_action: "block"
+  default_competitor_attack_action: "rewrite"
+  default_sensitive_external_message_action: "warn"
+  default_cross_tenant_leakage_action: "block"
+  default_manipulative_sales_action: "block"
+
+logging:
+  store_prompts: true
+  store_retrieval_sources: true
+  store_full_conversation: true
+  redact_sensitive_text: false
+
+# --- 延迟优化 ---
+latency:
+  enabled: true
+  default_path: "standard"
+  long_message_chars: 3000
+  long_history_chars: 5000
+  processing_notice_after_seconds: 5.0
+
+path_router:
+  enable_fast_path: true
+  enable_slow_path_notice: true
+  llm_router_confidence_threshold: 0.75
+  clarify_confidence_threshold: 0.45
+
+# --- 钉钉单聊集成 ---
+# enabled 默认 false，通过环境变量 DINGTALK_ENABLED=true 开启
+# 凭证通过环境变量注入，不在此处配置
+dingtalk:
+  enabled: false
+  message_mode: "stream"  # "stream"（默认，WebSocket 常驻连接）或 "http"（HTTP 回调）
+  mode: "single_chat"
+  callback_path: "/integrations/dingtalk/events"
+  async_processing: true
+  reply_format: "markdown"
+  max_reply_chars: 3000
+  reset_commands:
+    - "新话题"
+    - "清空上下文"
+    - "重新开始"
+    - "忘掉前面"
+    - "/reset"
+    - "/new"
+  rate_limit:
+    per_user_per_minute: 20
+    per_user_per_day: 500
+    per_tenant_per_minute: 200

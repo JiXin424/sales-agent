@@ -1,0 +1,37 @@
+/* React Bits — Global Animation Styles (Light Theme Adapted) */
+
+/* ===== BlurText ===== */
+.blur-text {
+  display: inline-block;
+}
+
+.blur-text span {
+  display: inline-block;
+  will-change: transform, filter, opacity;
+}
+
+/* ===== Page Header Title Enhancement ===== */
+.page-header-title {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* ===== Magnet ===== */
+.magnet-wrapper {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s ease-out;
+}
+
+/* ===== Loading Pulse ===== */
+.loading-pulse {
+  animation: loadingPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes loadingPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}

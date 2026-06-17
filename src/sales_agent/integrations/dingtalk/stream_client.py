@@ -1,0 +1,315 @@
+"""钉钉 Stream 模式客户端。
+
+使用 dingtalk-stream SDK 建立常驻 WebSocket 连接，
+收到消息后根据配置选择流式卡片或传统回复模式。
+
+Stream 模式优势：
+- 不需要公网回调 URL
+- SDK 内置断线重连和 ping keepalive
+- 部署更简单（NAT/防火墙友好）
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+
+import dingtalk_stream
+
+from sales_agent.core.config import get_settings
+from sales_agent.core.database import get_session_factory
+from sales_agent.core.tenant_runtime import get_tenant_runtime
+from sales_agent.integrations.dingtalk.config import DingTalkConfig
+from sales_agent.integrations.dingtalk.processor import handle_dingtalk_event
+from sales_agent.integrations.dingtalk.media_adapter import extract_download_codes, supported_media_type
+
+logger = logging.getLogger(__name__)
+
+# 快速命令集合（不走流式卡片，直接回复）
+_FAST_COMMANDS = {"帮助", "help", "？", "?", "新话题", "清空上下文", "重新开始", "忘掉前面", "/reset", "/new"}
+
+
+class SalesAgentChatbotHandler(dingtalk_stream.ChatbotHandler):
+    """钉钉 Stream 模式消息处理器。
+
+    收到 Stream 消息后：
+    1. 过滤：只处理单聊文本消息
+    2. 转换：构造事件参数
+    3. 处理：根据配置选择流式卡片或传统回复
+    4. 回复：通过 session webhook 或互动卡片 API
+    """
+
+    def __init__(self, config: DingTalkConfig):
+        super().__init__()
+        self._config = config
+        self._card_sender = None
+
+    def _get_card_sender(self):
+        """懒初始化 CardSender。"""
+        global _card_sender
+        if self._card_sender is None and self._config.streaming_enabled:
+            from sales_agent.integrations.dingtalk.card_sender import DingTalkCardSender
+            self._card_sender = DingTalkCardSender(self._config)
+            _card_sender = self._card_sender
+        return self._card_sender
+
+    async def process(
+        self, callback: dingtalk_stream.CallbackMessage,
+    ) -> tuple[int, str]:
+        """处理钉钉 Stream 回调消息。
+
+        SDK 会在收到 WebSocket 帧后调用此方法。
+        返回 (status_code, message) 作为 ACK。
+        """
+        try:
+            incoming = dingtalk_stream.ChatbotMessage.from_dict(callback.data)
+        except Exception as e:
+            logger.error("Failed to parse DingTalk Stream message: %s", e)
+            return dingtalk_stream.AckMessage.STATUS_OK, "parse_error"
+
+        # 1. 只处理单聊
+        if getattr(incoming, "conversation_type", "2") != "1":
+            logger.debug("Ignoring non-single chat Stream message")
+            return dingtalk_stream.AckMessage.STATUS_OK, "ignored"
+
+        # 2. 提取文本和媒体 downloadCode
+        message_type = getattr(incoming, "message_type", "") or "text"
+        text_parts = []
+        try:
+            text_parts = incoming.get_text_list() or []
+        except Exception:
+            text_parts = []
+        text_content = "\n".join(str(t).strip() for t in text_parts if str(t).strip())
+        if not text_content and hasattr(incoming, "text") and incoming.text and hasattr(incoming.text, "content"):
+            text_content = (incoming.text.content or "").strip()
+
+        media_download_codes = []
+        try:
+            media_download_codes = incoming.get_image_list() or []
+        except Exception:
+            media_download_codes = []
+        raw_event = callback.data if isinstance(callback.data, dict) else {}
+        if not media_download_codes:
+            media_download_codes = extract_download_codes(raw_event)
+
+        if not text_content and message_type == "text":
+            self.reply_text("暂时只支持文字、图片和语音消息。", incoming)
+            return dingtalk_stream.AckMessage.STATUS_OK, "unsupported"
+        if message_type != "text" and not supported_media_type(message_type):
+            self.reply_text("暂时只支持文字、图片和语音消息。", incoming)
+            return dingtalk_stream.AckMessage.STATUS_OK, "unsupported"
+
+        # 3. 提取发送者信息
+        corp_id = getattr(incoming, "chatbot_corp_id", "") or ""
+        sender_id = getattr(incoming, "sender_staff_id", "") or getattr(incoming, "sender_id", "") or ""
+        sender_name = getattr(incoming, "sender_nick", "") or ""
+        message_id = getattr(incoming, "message_id", "") or ""
+        conversation_id = getattr(incoming, "conversation_id", "") or ""
+
+        # 4. 获取运行时上下文
+        settings = get_settings()
+        runtime = get_tenant_runtime()
+
+        # 5. 定义回复函数（使用 session webhook，用于 fallback 和快速命令）
+        async def reply_fn(text: str) -> None:
+            """通过 session webhook 回复。"""
+            try:
+                if self._config.reply_format == "markdown":
+                    self.reply_markdown("销售助手", text, incoming)
+                else:
+                    self.reply_text(text, incoming)
+            except Exception as e:
+                logger.error("Failed to reply via session webhook: %s", e)
+                # 降级：尝试纯文本
+                try:
+                    self.reply_text(text, incoming)
+                except Exception:
+                    logger.error("Failed to reply via text fallback: %s", e)
+
+        # 6. 判断是否走流式卡片
+        use_streaming = (
+            self._config.streaming_enabled
+            and message_type == "text"
+            and text_content.strip() not in _FAST_COMMANDS
+        )
+
+        factory = get_session_factory()
+        async with factory() as db:
+            try:
+                if use_streaming:
+                    await self._handle_streaming(
+                        db=db,
+                        settings=settings,
+                        runtime=runtime,
+                        event_id=f"ding_{message_id}" if message_id else f"ding_stream_{id(callback)}",
+                        corp_id=corp_id,
+                        sender_id=sender_id,
+                        sender_name=sender_name,
+                        text_content=text_content,
+                        media_download_codes=media_download_codes,
+                        raw_event=raw_event,
+                        message_id=message_id,
+                        dingtalk_conversation_id=conversation_id,
+                        reply_fn=reply_fn,
+                    )
+                else:
+                    # 原有非流式路径
+                    await handle_dingtalk_event(
+                        db, self._config, settings, runtime,
+                        event_id=f"ding_{message_id}" if message_id else f"ding_stream_{id(callback)}",
+                        corp_id=corp_id,
+                        sender_id=sender_id,
+                        sender_name=sender_name,
+                        message_type=message_type,
+                        text=text_content,
+                        media_download_codes=media_download_codes,
+                        raw_event=raw_event,
+                        message_id=message_id,
+                        dingtalk_conversation_id=conversation_id,
+                        reply_fn=reply_fn,
+                    )
+                await db.commit()
+            except Exception as e:
+                await db.rollback()
+                logger.error("Stream event processing failed: %s", e, exc_info=True)
+                # 降级到非流式回复
+                try:
+                    await reply_fn("我这边暂时无法处理，请稍后再试。")
+                except Exception:
+                    pass
+
+        return dingtalk_stream.AckMessage.STATUS_OK, "OK"
+
+    async def _handle_streaming(
+        self,
+        db,
+        settings,
+        runtime,
+        *,
+        event_id,
+        corp_id,
+        sender_id,
+        sender_name,
+        text_content,
+        media_download_codes,
+        raw_event,
+        message_id,
+        dingtalk_conversation_id,
+        reply_fn,
+    ):
+        """流式处理路径：卡片 + LLM streaming。"""
+        from sales_agent.integrations.dingtalk.streaming_handler import handle_dingtalk_streaming
+        from sales_agent.integrations.dingtalk.user_mapper import DingTalkUserMapper
+        from sales_agent.integrations.dingtalk.conversation_mapper import DingTalkConversationMapper
+        from sales_agent.models.base import generate_id
+
+        # 用户映射
+        user_mapper = DingTalkUserMapper(db, runtime.tenant_id)
+        internal_user_id = await user_mapper.get_or_create_user(
+            corp_id=corp_id,
+            dingtalk_user_id=sender_id,
+            display_name=sender_name,
+        )
+
+        # 会话映射
+        conversation_id = DingTalkConversationMapper.generate_conversation_id(
+            runtime.tenant_id, sender_id,
+        )
+
+        card_sender = self._get_card_sender()
+        if card_sender is None:
+            # CardSender 初始化失败，降级
+            logger.warning("CardSender not available, falling back to non-streaming")
+            await handle_dingtalk_event(
+                db, self._config, settings, runtime,
+                event_id=event_id,
+                corp_id=corp_id,
+                sender_id=sender_id,
+                sender_name=sender_name,
+                message_type="text",
+                text=text_content,
+                media_download_codes=[],
+                raw_event={},
+                message_id=message_id,
+                dingtalk_conversation_id=dingtalk_conversation_id,
+                reply_fn=reply_fn,
+            )
+            return
+
+        try:
+            await handle_dingtalk_streaming(
+                db=db,
+                config=self._config,
+                settings=settings,
+                runtime=runtime,
+                card_sender=card_sender,
+                event_id=event_id,
+                corp_id=corp_id,
+                sender_id=sender_id,
+                sender_name=sender_name,
+                message=text_content,
+                message_id=message_id,
+                dingtalk_conversation_id=dingtalk_conversation_id,
+                user_id=internal_user_id,
+                conversation_id=conversation_id,
+            )
+        except Exception as e:
+            logger.error("Streaming handler failed, falling back to reply_fn: %s", e)
+            # 降级：用传统方式回复
+            try:
+                await reply_fn("我这边暂时无法处理，请稍后再试。")
+            except Exception:
+                pass
+
+
+# ============================================================
+# Stream Worker 管理
+# ============================================================
+
+_stream_task: asyncio.Task | None = None
+_card_sender: "DingTalkCardSender | None" = None
+
+
+async def start_dingtalk_stream_worker() -> None:
+    """启动 Stream 模式 worker（在 FastAPI lifespan 中调用）。"""
+    global _stream_task
+
+    settings = get_settings()
+    config = settings.dingtalk
+    runtime = get_tenant_runtime()
+
+    credential = dingtalk_stream.Credential(config.app_key, config.app_secret)
+    client = dingtalk_stream.DingTalkStreamClient(credential)
+
+    handler = SalesAgentChatbotHandler(config)
+    client.register_callback_handler(
+        dingtalk_stream.ChatbotMessage.TOPIC,
+        handler,
+    )
+
+    _stream_task = asyncio.create_task(client.start())
+    logger.info(
+        "DingTalk Stream worker started: tenant=%s, corp_id=%s, streaming=%s",
+        runtime.tenant_id,
+        config.corp_id,
+        config.streaming_enabled,
+    )
+
+
+async def stop_dingtalk_stream_worker() -> None:
+    """停止 Stream 模式 worker。"""
+    global _stream_task, _card_sender
+    if _stream_task:
+        _stream_task.cancel()
+        try:
+            await _stream_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        _stream_task = None
+    if _card_sender:
+        try:
+            await _card_sender.close()
+        except Exception:
+            pass
+        _card_sender = None
+    logger.info("DingTalk Stream worker stopped")

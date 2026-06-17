@@ -1,0 +1,56 @@
+{"case_id":"visit_001","tenant_id":"taishan","input":"明天拜访一家制造业客户，对方是销售总监，帮我准备拜访提纲","expected_task_type":"visit_preparation","must_include":["本次沟通目标","必问 3 个问题","建议开场话术"],"must_not_include":["直接报价"]}
+{"case_id":"visit_002","tenant_id":"taishan","input":"准备拜访客户，他们是一家金融科技公司，CTO 负责技术选型，帮我准备一下","expected_task_type":"visit_preparation","must_include":["本次沟通目标","重点价值表达","最大风险提醒"],"must_not_include":["保证"]}
+{"case_id":"visit_003","tenant_id":"taishan","input":"见客户之前帮我整理一下思路，这家客户做零售的，之前聊过一次感觉有需求","expected_task_type":"visit_preparation","must_include":["本次沟通目标","本次必须争取的下一步"],"must_not_include":["成交"]}
+{"case_id":"visit_004","tenant_id":"taishan","input":"下周三要去拜访一个教育行业客户，对方是采购负责人，第一次见面，怎么准备","expected_task_type":"visit_preparation","must_include":["必问 3 个问题","建议开场话术","可直接使用的收口话术"],"must_not_include":["直接推产品"]}
+{"case_id":"visit_005","tenant_id":"taishan","input":"帮我准备拜访一个物流公司，他们正在考虑数字化转型","expected_task_type":"visit_preparation","must_include":["本次沟通目标","重点价值表达"],"must_not_include":["承诺"]}
+{"case_id":"visit_006","tenant_id":"taishan","input":"明天要去见一个老客户续约，帮我准备一下拜访内容","expected_task_type":"visit_preparation","must_include":["本次沟通目标","本次必须争取的下一步"],"must_not_include":["新客户"]}
+{"case_id":"visit_007","tenant_id":"taishan","input":"拜访前想了解一下这家医疗行业客户可能的异议，帮我分析一下","expected_task_type":"visit_preparation","must_include":["最大风险提醒","本次必须争取的下一步"],"must_not_include":["报价"]}
+{"case_id":"visit_008","tenant_id":"taishan","input":"第一次去见客户高管，有点紧张，帮我准备拜访提纲","expected_task_type":"visit_preparation","must_include":["建议开场话术","必问 3 个问题"],"must_not_include":["低三下四"]}
+{"case_id":"visit_009","tenant_id":"taishan","input":"我要去拜访客户了，对方是财务总监","expected_task_type":"visit_preparation","must_include":["本次沟通目标","建议开场话术"],"must_not_include":["直接报价"]}
+{"case_id":"visit_010","tenant_id":"taishan","input":"马上拜访客户，给我一张访前作战卡","expected_task_type":"visit_preparation","must_include":["本次沟通目标","必问 3 个问题","可直接使用的收口话术"],"must_not_include":["保证"]}
+{"case_id":"visit_011","tenant_id":"taishan","input":"准备去见客户，做零售的，预算大概50万","expected_task_type":"visit_preparation","must_include":["重点价值表达","最大风险提醒"],"must_not_include":["承诺效果"]}
+{"case_id":"visit_012","tenant_id":"taishan","input":"访前帮我准备，这家客户上次说要对比三家","expected_task_type":"visit_preparation","must_include":["本次必须争取的下一步","最大风险提醒"],"must_not_include":["恶意贬低竞品"]}
+{"case_id":"follow_001","tenant_id":"taishan","input":"客户看完演示后说内部讨论，已经三天没回了，下一步怎么跟","expected_task_type":"follow_up_planning","must_include":["跟进时机","消息草稿","备选方案"],"must_not_include":["每天追问"]}
+{"case_id":"follow_002","tenant_id":"taishan","input":"报完价一周了，客户没反应，跟进计划怎么做","expected_task_type":"follow_up_planning","must_include":["跟进时机","下一步行动","消息"],"must_not_include":["催单"]}
+{"case_id":"follow_003","tenant_id":"taishan","input":"跟进策略：上个月见了一次面，客户说考虑一下，后面微信发消息偶尔回，该怎么跟进","expected_task_type":"follow_up_planning","must_include":["客户状态","跟进节奏","备选方案"],"must_not_include":["放弃"]}
+{"case_id":"follow_004","tenant_id":"taishan","input":"客户说下个月再聊，现在不用跟了，我应该怎么安排后续跟进","expected_task_type":"follow_up_planning","must_include":["跟进时机","备选方案"],"must_not_include":["现在就催"]}
+{"case_id":"follow_005","tenant_id":"taishan","input":"给客户发了方案之后就没消息了，已经两周了，帮我制定跟进方案","expected_task_type":"follow_up_planning","must_include":["风险信号","消息草稿","备选方案"],"must_not_include":["打电话骂客户"]}
+{"case_id":"follow_006","tenant_id":"taishan","input":"刚完成了一次线上演示，客户反馈还不错，下一步跟进安排","expected_task_type":"follow_up_planning","must_include":["购买信号","下一步行动","消息草稿"],"must_not_include":["等等再说"]}
+{"case_id":"follow_007","tenant_id":"taishan","input":"跟进安排：客户之前说要做POC，但一直没给测试环境，怎么跟","expected_task_type":"follow_up_planning","must_include":["下一步行动","消息草稿"],"must_not_include":["替代客户做决定"]}
+{"case_id":"follow_008","tenant_id":"taishan","input":"客户说预算还没批下来，让我等，跟进节奏应该怎么安排","expected_task_type":"follow_up_planning","must_include":["跟进时机","备选方案"],"must_not_include":["逼客户"]}
+{"case_id":"ctx_001","tenant_id":"taishan","input":"帮我整理客户信息：这是一家做电商的公司，对接人是运营总监王总，他们主要痛点是库存管理混乱，预算大概20-30万","expected_task_type":"customer_context_summary","must_include":["客户行业","核心痛点","缺失信息"],"must_not_include":["编造"]}
+{"case_id":"ctx_002","tenant_id":"taishan","input":"梳理一下客户背景：昨天聊的，李经理是技术负责人，说要对比三家，对数据安全比较在意","expected_task_type":"customer_context_summary","must_include":["客户角色","已知异议","缺失信息"],"must_not_include":["行业第一"]}
+{"case_id":"ctx_003","tenant_id":"taishan","input":"客户画像整理：他们是一家上市公司，财务总监，关心合规和审计，之前用过竞品A但不太满意","expected_task_type":"customer_context_summary","must_include":["行业","决策流程","预算信号"],"must_not_include":["保证"]}
+{"case_id":"ctx_004","tenant_id":"taishan","input":"帮我分析一下这个客户的情况：微信聊了几次，他说他们领导还没定方向，让我们先出个方案看看","expected_task_type":"customer_context_summary","must_include":["当前销售阶段","缺失信息","决策流程"],"must_not_include":["虚构预算"]}
+{"case_id":"ctx_005","tenant_id":"taishan","input":"客户档案整理：对接人张总，制造业，说过预算有限，上次见面时他问了价格就沉默了","expected_task_type":"customer_context_summary","must_include":["预算信号","已知异议","风险信号"],"must_not_include":["编造具体数字"]}
+{"case_id":"ctx_006","tenant_id":"taishan","input":"整理一下客户信息：他们做SaaS的，CTO说想提升开发效率，提了几个需求点，说下周给答复","expected_task_type":"customer_context_summary","must_include":["核心痛点","紧迫性","缺失信息"],"must_not_include":["承诺效果"]}
+{"case_id":"ctx_007","tenant_id":"taishan","input":"帮我梳理这个客户的背景：国企客户，要走招投标流程，对接人说内部需要多部门评审","expected_task_type":"customer_context_summary","must_include":["决策流程","当前销售阶段","缺失信息"],"must_not_include":["跳过流程"]}
+{"case_id":"ctx_008","tenant_id":"taishan","input":"客户分析：聊了一个月了，每次都说好好好但就是不签单，信息比较散，帮我整理一下","expected_task_type":"customer_context_summary","must_include":["购买信号","风险信号","缺失信息"],"must_not_include":["放弃"]}
+{"case_id":"deal_001","tenant_id":"taishan","input":"客户认可价值但一直不确认预算，怎么推进成交","expected_task_type":"deal_advancement","must_include":["阶段诊断","成交阻碍","下一步"],"must_not_include":["承诺折扣"]}
+{"case_id":"deal_002","tenant_id":"taishan","input":"客户说竞品更便宜，但我们已经报了价，怎么推进签约","expected_task_type":"deal_advancement","must_include":["成交阻碍","行动话术","风险警告"],"must_not_include":["恶意贬低竞品"]}
+{"case_id":"deal_003","tenant_id":"taishan","input":"怎么推进：客户那边决策人还没拍板，对接人说还在走流程","expected_task_type":"deal_advancement","must_include":["阶段诊断","需确认事项"],"must_not_include":["跳过决策人"]}
+{"case_id":"deal_004","tenant_id":"taishan","input":"逼单技巧：方案都出了，价格也谈了，客户就是拖着不签，怎么促单","expected_task_type":"deal_advancement","must_include":["成交阻碍","行动话术","风险警告"],"must_not_include":["欺骗"]}
+{"case_id":"deal_005","tenant_id":"taishan","input":"客户说要等新财年预算，怎么成交推进","expected_task_type":"deal_advancement","must_include":["阶段诊断","建议下一步","备选"],"must_not_include":["现在就签"]}
+{"case_id":"deal_006","tenant_id":"taishan","input":"怎么签约：POC做完了客户很满意，但商务条款还没谈，接下来怎么推","expected_task_type":"deal_advancement","must_include":["下一步","推进理由"],"must_not_include":["跳过商务"]}
+{"case_id":"deal_007","tenant_id":"taishan","input":"推动下单：三个部门都认可了，但采购流程卡在法务那里，怎么推进","expected_task_type":"deal_advancement","must_include":["成交阻碍","需确认事项"],"must_not_include":["绕过法务"]}
+{"case_id":"deal_008","tenant_id":"taishan","input":"客户说考虑一下就没了下文，最后一次联系是一周前，怎么推动成交","expected_task_type":"deal_advancement","must_include":["阶段诊断","行动话术"],"must_not_include":["威胁"]}
+{"case_id":"score_001","tenant_id":"taishan","input":"帮我给这段对话打分：客户问你们怎么收费，我说按年付费具体看方案，客户说先了解下，我说好的随时联系","expected_task_type":"conversation_scoring","must_include":["评分","改进优先级","总分"],"must_not_include":["人身攻击"]}
+{"case_id":"score_002","tenant_id":"taishan","input":"对话评分：我向客户介绍了三个核心功能，客户问和竞品区别，我说我们更灵活，客户说考虑下","expected_task_type":"conversation_scoring","must_include":["需求挖掘","价值阐述","异议处理"],"must_not_include":["全给高分"]}
+{"case_id":"score_003","tenant_id":"taishan","input":"给我打分：今天和客户聊了半小时，详细了解了他们的痛点，也展示了我们的案例，约了下周做demo","expected_task_type":"conversation_scoring","must_include":["开场","收尾","总分"],"must_not_include":["全是满分"]}
+{"case_id":"score_004","tenant_id":"taishan","input":"销售评分：我跟客户说保证用了我们产品效率提升一倍，客户说太贵了我直接说可以打五折","expected_task_type":"conversation_scoring","must_include":["风险控制","风险表达","改进优先级"],"must_not_include":["做得好"]}
+{"case_id":"score_005","tenant_id":"taishan","input":"帮我打个分：客户说预算有限，我问他具体需求是什么，然后介绍了一个适合他的方案，客户说回去和领导商量","expected_task_type":"conversation_scoring","must_include":["需求挖掘","价值阐述","收尾"],"must_not_include":["风险表达"]}
+{"case_id":"score_006","tenant_id":"taishan","input":"对话评分：我主动问了客户三个深入问题，客户分享了具体的业务场景，我把方案和他的场景对应起来讲，客户说很有兴趣约了下周详谈","expected_task_type":"conversation_scoring","must_include":["需求挖掘","做得好"],"must_not_include":["风险"]}
+{"case_id":"score_007","tenant_id":"taishan","input":"帮我分析这段通话质量，销售一开始就报了价，客户还没说需求呢：你好我们是XX公司，我们产品一年5万起，有兴趣吗","expected_task_type":"conversation_scoring","must_include":["开场","风险控制","低分"],"must_not_include":["开场做得好"]}
+{"case_id":"score_008","tenant_id":"taishan","input":"打个分吧：客户说先看看资料，我说好的发你一份产品介绍，有需要随时找我。客户说谢谢","expected_task_type":"conversation_scoring","must_include":["评分","改进","总分"],"must_not_include":["满分"]}
+{"case_id":"post_001","tenant_id":"taishan","input":"刚聊完客户，他们是一家SaaS公司，CTO说对产品感兴趣但预算还没批","expected_task_type":"post_visit_review","must_include":["本次沟通结论","当前机会状态","最大卡点"],"must_not_include":["放弃"]}
+{"case_id":"post_002","tenant_id":"taishan","input":"刚见完客户，沟通结束了，对方采购经理说方案不错，要内部讨论","expected_task_type":"post_visit_review","must_include":["下一步最佳动作","可直接发送的跟进话术","是否需要管理者介入"],"must_not_include":["现在就逼单"]}
+{"case_id":"post_003","tenant_id":"taishan","input":"访后总结：客户说价格可以接受，但需要走招投标流程，周期可能3个月","expected_task_type":"post_visit_review","must_include":["当前机会状态","最大卡点","下次复盘观察点"],"must_not_include":["跳过流程"]}
+{"case_id":"post_004","tenant_id":"taishan","input":"拜访完了，客户领导不在，只和对接人聊了20分钟，感觉他不是决策人","expected_task_type":"post_visit_review","must_include":["客户真实需求判断","是否需要管理者介入"],"must_not_include":["装作决策人"]}
+{"case_id":"post_005","tenant_id":"taishan","input":"客户沟通总结：聊了两个小时，客户提了很多需求，有些我们做不了","expected_task_type":"post_visit_review","must_include":["本次沟通结论","最大卡点","下一步最佳动作"],"must_not_include":["承诺做不了的功能"]}
+{"case_id":"post_006","tenant_id":"taishan","input":"刚结束拜访，客户说竞品给他们打了六折，他们倾向选便宜的","expected_task_type":"post_visit_review","must_include":["当前机会状态","最大卡点","可直接发送的跟进话术"],"must_not_include":["恶意贬低竞品"]}
+{"case_id":"post_007","tenant_id":"taishan","input":"访后：客户很满意演示效果，当场说想签约，但需要法务审核合同","expected_task_type":"post_visit_review","must_include":["当前机会状态","下一步最佳动作","下次复盘观察点"],"must_not_include":["跳过法务"]}
+{"case_id":"post_008","tenant_id":"taishan","input":"拜访完了，聊得还行，但感觉客户还在犹豫，没有明确表态","expected_task_type":"post_visit_review","must_include":["客户真实需求判断","是否需要管理者介入","下次复盘观察点"],"must_not_include":["假装没问题"]}
+{"case_id":"post_009","tenant_id":"taishan","input":"刚和客户聊完，他们老板说预算冻结了要等下个季度","expected_task_type":"post_visit_review","must_include":["当前机会状态","下一步最佳动作","最大卡点"],"must_not_include":["现在就签"]}
+{"case_id":"post_010","tenant_id":"taishan","input":"客户沟通总结：对接人说他们已经选了竞品，我们没入围","expected_task_type":"post_visit_review","must_include":["当前机会状态","是否需要管理者介入","下次复盘观察点"],"must_not_include":["攻击客户选择"]}
+{"case_id":"post_011","tenant_id":"taishan","input":"访后机会推进，客户说先做个POC看看效果，技术团队下周评估","expected_task_type":"post_visit_review","must_include":["下一步最佳动作","可直接发送的跟进话术","下次复盘观察点"],"must_not_include":["跳过POC"]}
+{"case_id":"post_012","tenant_id":"taishan","input":"聊完了客户，挺顺利的，约了下周去签合同","expected_task_type":"post_visit_review","must_include":["本次沟通结论","当前机会状态","下一步最佳动作"],"must_not_include":["放松警惕"]}

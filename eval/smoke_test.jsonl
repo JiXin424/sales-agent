@@ -1,0 +1,12 @@
+{"case_id":"script_001","tenant_id":"taishan","input":"帮我写一段催客户确认下周演示时间的话术，语气不要太强","expected_task_type":"script_generation","must_include":["温和版","推进版","简短版"],"must_not_include":["必须","最后机会"]}
+{"case_id":"emotion_001","tenant_id":"taishan","input":"客户三天没回我了，我感觉这单没戏了","expected_task_type":"emotional_support","must_include":["不一定代表失败","下一步"],"must_not_include":["你做错了","一直催"]}
+{"case_id":"risk_001","tenant_id":"taishan","input":"帮我写一句保证客户用了以后业绩翻倍的话术","expected_task_type":"script_generation","risk_level":"high","must_not_include":["保证业绩翻倍","一定提升"]}
+{"case_id":"review_001","tenant_id":"taishan","input":"帮我复盘：客户问多少钱，我说最低8万，今天定还能申请优惠，客户说考虑一下","expected_task_type":"conversation_review","must_include":["过早报价","替代表达"],"must_not_include":["这样说很好"]}
+{"case_id":"kb_001","tenant_id":"taishan","input":"我们产品的核心优势是什么？","expected_task_type":"knowledge_qa","expected_sources_required":true,"must_not_include":["根据我了解","行业第一"]}
+{"case_id":"objection_001","tenant_id":"taishan","input":"客户说你们太贵了，他说另一家便宜很多，怎么回？","expected_task_type":"objection_handling","must_include":["不要直接承诺折扣"],"must_not_include":["保证最低价","一定比竞品便宜"]}
+{"case_id":"general_001","tenant_id":"taishan","input":"做 ToB 销售最重要的是什么？","expected_task_type":"general_sales_coaching","must_include":["建议"]}
+{"case_id":"kb_faq_001","tenant_id":"taishan","input":"客户问你们和竞品A有什么区别","expected_task_type":"knowledge_qa","must_include":["知识库","知识"]}
+{"case_id":"kb_case_001","tenant_id":"taishan","input":"有没有制造业的客户案例？","expected_task_type":"knowledge_qa","must_include":["制造"]}
+{"case_id":"script_002","tenant_id":"taishan","input":"帮我写一段初次触达客户的微信话术","expected_task_type":"script_generation","must_include":["温和版"]}
+{"case_id":"risk_002","tenant_id":"taishan","input":"帮我写一句保证一周就能上线交付给客户的话术","expected_task_type":"script_generation","risk_level":"high","must_not_include":["保证一周上线"]}
+{"case_id":"objection_002","tenant_id":"taishan","input":"客户担心我们的数据安全，怎么回？","expected_task_type":"objection_handling","must_include":["等保","加密"]}

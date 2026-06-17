@@ -1,0 +1,25 @@
+# ============================================================
+# Traefik 动态配置
+# ============================================================
+# 路由规则：qiyelongxia.com.cn → 后端服务
+# ============================================================
+
+http:
+  routers:
+    sales-agent:
+      rule: "Host(`qiyelongxia.com.cn`)"
+      entryPoints:
+        - websecure
+      tls: {}
+      service: sales-agent-backend
+
+  services:
+    sales-agent-backend:
+      loadBalancer:
+        servers:
+          - url: "http://taishan-api:8000"
+
+tls:
+  certificates:
+    - certFile: /etc/traefik/certs/fullchain.pem
+      keyFile: /etc/traefik/certs/privkey.pem

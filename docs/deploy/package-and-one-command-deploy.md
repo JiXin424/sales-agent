@@ -2,6 +2,11 @@
 
 这份文档说明如何把 Sales Agent 从当前服务器打包，迁移到另一台服务器，或者在已有服务器上做版本更新。
 
+> **推荐:CI/CD 自动化。** 现在已有 Gitea 自托管 + 私有 registry 的 push 即部署流水线,日常迭代只需 `git push`,无需手动打包。详见 **[docs/deploy/cicd-gitea.md](cicd-gitea.md)**。
+> 本文档的打包流程(`package-deployment.sh` → tar → 解压)是**离线/全新机器冷启动**的回退路径,registry 不可达时仍可用。
+
+
+
 ## 发布包包含什么
 
 发布包会包含：

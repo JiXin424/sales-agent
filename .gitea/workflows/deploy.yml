@@ -5,6 +5,11 @@ name: deploy
 on:
   push:
     branches: [main]
+    paths-ignore:      # 纯文档/示例改动不触发构建部署
+      - "docs/**"
+      - "**/*.md"
+      - "deploy/*.example.json"
+      - "deploy/*.example"
   workflow_dispatch:
 
 env:

@@ -23,6 +23,7 @@ import argparse
 import asyncio
 import json
 import sys
+import urllib.parse
 from pathlib import Path
 
 import httpx
@@ -49,6 +50,17 @@ PLUGIN_SET_URL = "https://api.dingtalk.com/v1.0/robot/plugins/set"
 PLUGIN_CLEAR_URL = "https://api.dingtalk.com/v1.0/robot/plugins/clear"
 PLUGIN_QUERY_URL = "https://api.dingtalk.com/v1.0/robot/plugins/query"
 MEDIA_UPLOAD_URL = "https://oapi.dingtalk.com/media/upload"
+
+
+def _pc_sidebar_url(https_url: str) -> str:
+    """把 https 入口 URL 包成 dingtalk:// 协议，强制 PC 端在钉钉侧边栏内嵌打开。
+
+    背景：PC 钉钉点机器人快捷入口，若 pcUrl 是普通 https，会跳到系统浏览器打开——
+    那里没有钉钉 JSAPI 桥（报 notInDingTalk / 5010），requestAuthCode 走不通。
+    用 dingtalk://dingtalkclient/page/link?url=<编码后的 https> 尝试让钉钉在内嵌窗口打开。
+    实验性，是否被钉钉接受需实测；回退：不带 --pc-sidebar 重跑即可恢复 https。
+    """
+    return "dingtalk://dingtalkclient/page/link?url=" + urllib.parse.quote(https_url, safe="")
 
 
 def _load_env(env_file: Path) -> dict[str, str]:
@@ -147,8 +159,14 @@ async def main(args: argparse.Namespace) -> int:
             return f"{base}?action={action}&tenant_id={tenant_id}" if action else f"{base}?tenant_id={tenant_id}"
 
         print("\n[INFO] 计划注册的快捷入口：")
+        if args.pc_sidebar:
+            print("[INFO] ⚠️ --pc-sidebar 已开启：pcUrl 用 dingtalk:// 协议（强制 PC 侧边栏）；mobileUrl 保持 https")
         for zh_name, action in ENTRIES:
-            print(f"  - {zh_name}  ({action or '教练模式/默认页'})  ->  {_entry_url(zh_name, action)}")
+            u = _entry_url(zh_name, action)
+            pc_u = _pc_sidebar_url(u) if args.pc_sidebar else u
+            print(f"  - {zh_name}  ({action or '教练模式/默认页'})")
+            print(f"      pcUrl    = {pc_u}")
+            print(f"      mobileUrl= {u}")
 
         if args.dry_run:
             print("\n[DRY-RUN] 不会清空/注册。")
@@ -166,10 +184,11 @@ async def main(args: argparse.Namespace) -> int:
         plugin_list = []
         for zh_name, action in ENTRIES:
             url = _entry_url(zh_name, action)
+            pc_url = _pc_sidebar_url(url) if args.pc_sidebar else url
             plugin_list.append({
                 "name": json.dumps({"zh_CN": zh_name}, ensure_ascii=False),
                 "icon": media_id,
-                "pcUrl": url,
+                "pcUrl": pc_url,
                 "mobileUrl": url,
             })
         result = await _set(client, token, robot_code, plugin_list)
@@ -192,6 +211,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--tenant-id", default="", help="租户 ID（默认读 TENANT_ID）")
     p.add_argument("--name", default="教练模式", help="快捷入口名称（默认「教练模式」）")
     p.add_argument("--dry-run", action="store_true", help="只查询当前状态，不改动")
+    p.add_argument(
+        "--pc-sidebar", action="store_true",
+        help="PC 端 pcUrl 用 dingtalk:// 协议强制钉钉侧边栏内嵌打开（实验，解决 PC 跳浏览器 "
+             "notInDingTalk）；默认关闭=普通 https。失败回退：不带本参数重跑。",
+    )
     return p.parse_args()
 
 

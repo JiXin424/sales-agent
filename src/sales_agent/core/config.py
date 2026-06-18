@@ -205,6 +205,7 @@ class Settings(BaseModel):
             "app_key": os.getenv("DINGTALK_APP_KEY"),
             "app_secret": os.getenv("DINGTALK_APP_SECRET"),
             "robot_code": os.getenv("DINGTALK_ROBOT_CODE"),
+            "agent_id": os.getenv("DINGTALK_AGENT_ID"),
             "encrypt_token": os.getenv("DINGTALK_ENCRYPT_TOKEN"),
             "aes_key": os.getenv("DINGTALK_AES_KEY"),
             "card_template_id": os.getenv("DINGTALK_CARD_TEMPLATE_ID"),

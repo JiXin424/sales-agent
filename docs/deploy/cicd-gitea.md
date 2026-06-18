@@ -1,133 +1,148 @@
-# CI/CD:Gitea 自托管 + 私有 Registry(push 即部署多机)
+# CI/CD 完整配置(交接文档)
 
-push 到 `main` → 自动 build 镜像 → 推私有 registry → fan-out 部署到 `deploy/deploy-targets.json` 里每台目标机。
+> 本文件是 CI/CD 系统的**唯一权威说明**,供接手的 agent / 运维查阅。最后更新对应仓库 HEAD。
 
-## 架构
+## 1. 概览
+
+`git push main` → 主控 Gitea Action → build 镜像 → 推 registry → fan-out 部署到 3 台。开发在主控改代码,push 后全自动。
 
 ```
-git commit + push (main)
-      ↓
-┌──── 源服务器 47.120.55.219 ────────────────────┐
-│ Gitea(:3001 web,git 走 HTTP) docker 容器        │
-│ 私有 registry(172.25.186.210:5000,htpasswd)    │
-│ act_runner(宿主机二进制, systemd, :host 标签) │
-│ Gitea Action:                                   │
-│   build-and-push → 推 <sha> + :latest           │
-│   deploy-fanout  → 遍历目标机 SSH 部署           │
-└────┬───────────────────────────────────────────┘
-     ↓ pull 172.25.186.210:5000/sales-agent:<sha>
-目标机(固定部署目录,secrets/data 永不覆盖)
+你(主控 47.120.50.181)/root/code/sales-agent  git push
+        │ code
+        ▼
+┌── 主控 47.120.50.181(河源 cn-heyuan,私网 172.25.186.209)──┐
+│ Gitea(web :3002)+ 公网 registry(:5000,自签 TLS)          │
+│ act_runner(宿主机二进制 v0.6.1,systemd gitea-runner)      │
+│ Action: build → 推 registry.internal → fan-out 三台         │
+└──┬────────────────┬───────────────────┬────────────────────┘
+   ↓ 私网(本地)     ↓ SSH + image-retag   ↓ SSH(公网,跨地域)
+ 主控自己           本机 47.120.55.219     杭州 47.118.16.235(cn-hangzhou)
+ deploy-release     image-retag           deploy-release
+ api:8002           sales-agent:latest    api:8002
+                    (traefik 不动)        DingTalk 关
+                    qiyelongxia.com.cn
 ```
 
-源/目标同在 `cn-heyuan`、同 VPC,registry 走**私网 IP**,免费内网、不暴露公网。
+**3 台角色:**
+- **主控 47.120.50.181**:控制平面(Gitea+registry+runner)+ 也跑 sales-agent(deploy-release,隔离端口 8002)+ **开发 checkout**(`/root/code/sales-agent` 完整源码)。
+- **本机 47.120.55.219(生产)**:跑 sales-agent 生产(image-retag,保留 `docker-compose.yml` + traefik 路由 qiyelongxia.com.cn,api:8001)。**纯运行时,无源码**(开发已移到主控)。
+- **杭州 47.118.16.235(跨地域)**:跑 sales-agent(deploy-release,隔离端口 8002,DingTalk 关)。纯运行时。
 
-## 组件
+## 2. 核心设计:`registry.internal` 分流
 
-| 组件 | 位置 | 说明 |
-|------|------|------|
-| Gitea | 源 docker,`infra/cicd-compose.yml` 的 `gitea` 服务,web `:3001` | git 服务 + Actions。`:latest` 在阿里云源缓存了古早 1.15.9(不支持 Actions),所以**固定用 `gitea/gitea:1.24`** tag |
-| Registry | 源 docker,`registry:2`,绑 `172.25.186.210:5000` | htpasswd basic auth。凭证在 `infra/htpasswd` + `infra/registry-password.txt`(gitignore) |
-| act_runner | 源**宿主机**二进制 `/usr/local/bin/act_runner`,systemd `gitea-runner.service` | 用 `:host` 标签,job 直接在源宿主机跑 |
-| deploy.yml | `.gitea/workflows/deploy.yml` | build-and-push + deploy-fanout 两个 job |
-| deploy-targets.json | `deploy/deploy-targets.json` | fan-out 目标清单(主机信息,无密钥) |
+Docker tag 内嵌 registry 主机名;杭州跨地域只能走公网、其余走私网,**主机名不同无法共用 tag**。解法:用名字 `registry.internal`,各机 `/etc/hosts` 解析到自己能到的 IP:
 
-启动/重启 CI 基础设施:
+| 机器 | /etc/hosts 里 registry.internal → |
+|------|----------------------------------|
+| 主控 | `127.0.0.1` |
+| 本机(同 VPC) | `172.25.186.209`(主控私网) |
+| 杭州(跨地域) | `47.120.50.181`(主控公网) |
 
+自签证书 SAN 覆盖 `registry.internal` + `172.25.186.209` + `47.120.50.181` + `127.0.0.1`,各机连哪个都匹配。CA 证书在各机 `/etc/docker/certs.d/registry.internal:5000/ca.crt`(正规 TLS,**无需 insecure-registries**)。
+
+## 3. 网络 & 防火墙(关键)
+
+- 主控 47.120.50.181:私网 172.25.186.209,公网 47.120.50.181,cn-heyuan。
+- 本机 47.120.55.219:私网 172.25.186.210,cn-heyuan,**与主控同 VPC**(私网互通)。
+- 杭州 47.118.16.235:私网 172.18.128.88,cn-**hangzhou**,**跨地域,私网不通主控**,只能走公网。
+- **杭州拉镜像要主控两层防火墙都放行 TCP:5000 来源 47.118.16.235**:
+  1. 阿里云**安全组**(控制台):入方向 TCP:5000 ← 47.118.16.235。
+  2. 主控本地 **ufw**(默认 INPUT DROP):`ufw allow from 47.118.16.235 to any port 5000 proto tcp`。
+  - 只开一个不够(实测)。
+- 各机 `docker login registry.internal:5000 -u salesagent`(密码见凭证)。
+
+## 4. 凭证位置(都 gitignore,勿提交)
+
+**主控 `/root/code/sales-agent/infra/`:**
+- `htpasswd` / `registry-password.txt` —— registry 用户 `salesagent` 的密码。
+- `domain.crt` / `domain.key` —— registry TLS 证书+私钥。
+- `registry-ca.crt` —— registry CA(分发到各消费者)。
+- `gitea-admin-password.txt` —— Gitea 管理员 `gitea-admin` 密码。
+
+**主控 `/root/cicd-certs/`(生成证书时留的):** `ca.key`(CA 私钥)、`master-gitea-admin.txt`、`master-gitea-push-pat.txt`(本机 push 主控用的 PAT)。
+
+**各目标机 `/root/code/sales-agent/secrets/taishan.env`:** 真实凭证(MODEL_API_KEY、DingTalk 等)。**DingTalk 在主控/杭州关闭**(避免与生产 stream 重复回复),只有本机生产开着。
+
+## 5. 部署方法 & 脚本
+
+`deploy/deploy-targets.json` 每个目标带 `method` 字段:
+
+| method | 脚本 | 用于 | 干什么 |
+|--------|------|------|--------|
+| `deploy-release` | `scripts/deploy-release.sh --yes` | 主控、杭州 | `REGISTRY_IMAGE` pull → 渲染 compose(`scripts/render-multitenant-deploy.py`,image 走 `OVERRIDE_IMAGE` env 注入 sha)→ `docker compose up -d` → 健康检查 |
+| `image-retag` | `scripts/deploy-image-retag.sh --yes` | 本机生产 | pull registry 镜像 → retag 成 `sales-agent:latest` → `docker compose -f docker-compose.yml --profile taishan-split up -d`。**不动 compose/traefik**,最低风险 |
+
+`local: true` 的目标(主控)在主控本地执行(不 SSH);其余 SSH。
+
+**fan-out 调度:`scripts/ci-fanout.sh`** —— 读 `deploy/deploy-targets.json`,按 method 调对应脚本。
+
+## 6. Gitea Action workflow(`.gitea/workflows/deploy.yml`)
+
+触发:`push` 到 main(忽略 docs/*.md 改动)+ 手动 `workflow_dispatch`。三个 job:
+1. `build-and-push`:从本地 Gitea(`127.0.0.1:3002`)fetch 精确 SHA → `docker build` tag `<sha>`+`latest` → push `registry.internal:5000/sales-agent`。
+2. `deploy-fanout`:`IMAGE=...:<sha> scripts/ci-fanout.sh` 部署三台。
+3. `sync-code`:`scripts/sync-code.sh` 把代码 git pull 到"源码镜像"服务器(清单空则 no-op,为未来开发机准备)。
+
+runner 跑在主控宿主机(`:host` 标签),复用主机 docker(已登录 registry)+ 免密 ssh 到各目标 → **零 Gitea secret**。
+
+## 7. ⚠️ 已踩过的坑(务必记住)
+
+1. **fan-out 的 `ssh` 必须 `ssh -n`**(`scripts/ci-fanout.sh`、`scripts/sync-code.sh`)。否则 `while read` 循环里的 ssh 吸走清单文件的 stdin,循环提前结束、**跳过第一个 SSH 之后的目标**(曾导致杭州被跳过、一直不更新)。
+2. **Gitea 镜像 tag 必须用具体版本 `1.24`**。阿里云源对 `:latest`/`:1` 缓存了古早 1.15.9(不支持 Actions)。
+3. **pgvector 基础镜像从 `docker.1ms.run` 拉会失败**(缺 in-toto attestation manifest)。已改推到自家 registry(`registry.internal:5000/pgvector/pgvector:pg16`),`tenants.json` 的 `postgres_image` 指向它。
+4. **杭州跨地域要 SG + ufw 两层都开 :5000**(见 §3)。
+5. **workflow 不用 `actions/checkout@v4`**(国内拉 github.com 失败 `unexpected EOF`),改为从本地 Gitea `git fetch` 精确 SHA(用自动 `GITHUB_TOKEN`,`oauth2:` 鉴权)。
+6. **credential.helper store 不可靠**(git 把端口 `:3001` 存成 `%3a3001` 导致认证失败)。push 认证用 **PAT 内嵌进 origin 的 push URL**(本机)。
+7. 本机 image-retag:生产 stream/worker 若跑旧镜像,首次部署会重建它们(几秒 DingTalk 中断),属正常。
+
+## 8. 日常操作
+
+**改代码部署(在主控):**
 ```bash
-cd /root/code/sales-agent/infra
-docker compose -f cicd-compose.yml up -d          # Gitea + registry
-systemctl restart gitea-runner.service            # act_runner
-```
-
-## 为什么 act_runner 跑在宿主机(不是容器)
-
-`:host` 模式下 job 在 **runner 进程所在环境**执行。放宿主机上,job 直接复用:
-- 主机 docker daemon(`/root/.docker/config.json` 里的 registry 登录缓存)→ `docker build/push` 免登录;
-- 主机 `~/.ssh` 免密 → SSH 到目标机免密。
-
-**因此整个 CI 零 Gitea secret**。代价:能触发 workflow 的人等价于源机 root,靠 `main` 分支保护 + Gitea 私有仓库缓解。
-
-## 目标机要求
-
-1. **daemon.json** 加 `insecure-registries`(registry 走 HTTP):
-   ```json
-   { "insecure-registries": ["172.25.186.210:5000"] }
-   ```
-   然后 `systemctl reload docker`。
-2. **docker login** 一次(缓存凭证,后续 pull 免登录):
-   ```bash
-   docker login 172.25.186.210:5000 -u salesagent   # 用 infra/registry-password.txt 的密码
-   ```
-3. **免密 SSH**:源机 `~/.ssh` 已能免密到目标(部署密钥或 root 免密)。
-4. **部署目录**有脚本 + 配置(见下)。
-
-## 目标机首次 bootstrap(每台做一次)
-
-```bash
-# 目标机上
 cd /root/code/sales-agent
-# 取部署脚本(可用 git clone,或从发布包解压;CI 后续只 pull 镜像,不动脚本)
-cp deploy/tenants.example.json deploy/tenants.json   # 然后编辑
-cp deploy/tenant.env.example secrets/<租户>.env && chmod 600 secrets/<租户>.env
+git add -A && git commit -m "..." && git push   # 触发 CI,三台自动更新
+# 看 run:http://47.120.50.181:3002/gitea-admin/sales-agent/actions
 ```
 
-编辑 `deploy/tenants.json`,关键项:
-
-```jsonc
-{
-  "image": "172.25.186.210:5000/sales-agent:latest",   // registry ref(CI 会用 sha 覆盖)
-  "database": { "expose_host_port": false },           // postgres 不映射宿主端口,避开冲突
-  "traefik": { "enabled": false },                     // 不起自己的 traefik(用隔离端口时)
-  "tenants": [{ "id": "taishan", "api_port": 8002, "roles": ["api","worker"], ... }]
-}
-```
-
-`secrets/<租户>.env` 填真实凭证(不能有 `sk-example`/`example.com` 等占位符,否则 `deploy-release.sh` 校验失败)。
-
-首次部署(手动验证一次,之后交给 CI):
+**回滚(某台):**
 ```bash
-REGISTRY_IMAGE=172.25.186.210:5000/sales-agent:latest scripts/deploy-release.sh --yes
+# deploy-release 目标(主控/杭州)
+REGISTRY_IMAGE=registry.internal:5000/sales-agent:<旧sha> scripts/deploy-release.sh --yes
+# image-retag 目标(本机)
+REGISTRY_IMAGE=registry.internal:5000/sales-agent:<旧sha> scripts/deploy-image-retag.sh --yes
 ```
+每个 push 的 sha tag 都留存在 registry,可随时回滚。
 
-## 日常迭代
-
+**重启主控 CI 基础设施:**
 ```bash
-# 源机上改代码
-git add -A && git commit -m "fix: ..." && git push origin main
+cd /root/code/sales-agent/infra && docker compose -f cicd-compose.yml up -d   # Gitea + registry
+systemctl restart gitea-runner.service                                          # act_runner
 ```
 
-Gitea → 仓库 → Actions 看 `deploy` 跑绿即可。两个 job:
-- `build-and-push`:build → tag `<short-sha>` + `:latest` → push。
-- `deploy-fanout`:对 `deploy/deploy-targets.json` 每台目标 SSH 跑 `REGISTRY_IMAGE=.../sales-agent:<sha> scripts/deploy-release.sh --yes`(pull → 改 tag → up -d → 健康检查)。
+## 9. 扩展(加机器)
 
-每个 push 的 sha tag 都留存在 registry。
+**加部署目标:** 在目标机 bootstrap(脚本+tenants.json+secrets+CA+login,见历史 commit),然后 `deploy/deploy-targets.json` 加一条(带 `method`)。push 即生效。
 
-## 回滚(一行)
+**加"源码同步"开发机:** 该机 `git clone` 主控 Gitea 仓库 + 配 pull 认证,然后 `deploy/code-sync-targets.json` 加一条。push 后 `sync-code` job 自动 `git pull` 到它。
 
-```bash
-# 目标机上 pin 回某个旧 sha
-REGISTRY_IMAGE=172.25.186.210:5000/sales-agent:<旧sha> scripts/deploy-release.sh --yes
-```
+**加全新项目(多项目):** 在主控 Gitea 建新仓库 + 写该项目 `.gitea/workflows/*.y`。当前 runner 是 repo 级(只服务 sales-agent);多项目时给每个 repo 注册 runner,或升级成实例级(注意 Gitea 这版 `/admin/actions/runners/registration-token` 是 404,实例级 token 要从 web 管理页取)。
 
-或从源机远程触发:
-```bash
-ssh <target> "cd /root/code/sales-agent && REGISTRY_IMAGE=172.25.186.210:5000/sales-agent:<旧sha> scripts/deploy-release.sh --yes"
-```
+## 10. 关键文件清单(仓库内)
 
-## 隔离端口(与目标机已有服务共存)
+- `infra/cicd-compose.yml`(主控)—— Gitea + registry
+- `.gitea/workflows/deploy.yml` —— CI 流水线
+- `deploy/deploy-targets.json` —— 部署目标清单(+method)
+- `deploy/code-sync-targets.json` —— 源码镜像清单(未来)
+- `scripts/ci-fanout.sh` —— fan-out 调度(⚠️ ssh -n)
+- `scripts/deploy-release.sh` / `scripts/deploy-image-retag.sh` —— 两种部署
+- `scripts/render-multitenant-deploy.py` —— compose 渲染(`OVERRIDE_IMAGE`/traefik 开关/pg 端口可配)
+- `scripts/sync-code.sh` —— 源码同步(⚠️ ssh -n)
+- `Dockerfile` —— 多阶段构建(已优化:依赖层与源码层分离,纯代码改动增量构建 ~6s)
 
-目标机若已占用 80/443/5432,在 `deploy/tenants.json`:
-- `"traefik": { "enabled": false }` —— 不起 sales-agent 的 traefik,API 走 `api_port` 直连;
-- `"database": { "expose_host_port": false }` —— postgres 不映射宿主端口(app 走容器内网连);
-- 租户 `api_port` 选空闲端口(如 8002)。
+## 11. 验证 checklist
 
-## 关键文件
-
-- `infra/cicd-compose.yml` — Gitea + registry
-- `infra/htpasswd` / `infra/registry-password.txt` — registry 凭证(gitignore)
-- `infra/gitea-admin-password.txt` — Gitea 管理员密码(gitignore)
-- `/etc/systemd/system/gitea-runner.service` — act_runner 守护
-- `.gitea/workflows/deploy.yml` — CI 流水线
-- `deploy/deploy-targets.json` — fan-out 目标清单
-- `scripts/render-multitenant-deploy.py` — compose 渲染(`OVERRIDE_IMAGE` / traefik 开关 / postgres 端口可配)
-- `scripts/deploy-release.sh` — 目标机部署(`REGISTRY_IMAGE` pull 路径)
+- 三台 `docker inspect sales-agent-<id>-api --format '{{.Config.Image}}'` == 最新 sha(主控/杭州)或 sales-agent:latest(本机)。
+- 三台 `/health` 200、`/ready` 200。
+- 本机 `curl -k https://qiyelongxia.com.cn/` 200(生产 traefik 未动)。
+- 杭州 `docker pull registry.internal:5000/sales-agent:smoke` 成功(跨地域公网+TLS+CA+SG+ufw 全对)。
+- registry tags 含每个历史 sha(`curl -sk -u salesagent:<pass> https://registry.internal:5000/v2/sales-agent/tags/list`)。

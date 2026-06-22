@@ -2,6 +2,7 @@
 
 import { apiGet, apiPost, apiPut } from './client';
 import type {
+  BuiltinPrompt,
   PaginatedResponse,
   PromptVersion,
   PromptFilters,
@@ -15,7 +16,14 @@ function base(tid: string) {
 
 export function createPromptVersion(
   tenantId: string,
-  data: { task_type: string; template_text: string; description?: string; version?: string },
+  data: {
+    task_type?: string;
+    template_text: string;
+    description?: string;
+    version?: string;
+    prompt_category?: string;
+    prompt_key?: string | null;
+  },
 ) {
   return apiPost<PromptVersion>(base(tenantId), data);
 }
@@ -49,4 +57,8 @@ export function archivePromptVersion(tenantId: string, versionId: string) {
 
 export function previewPrompt(tenantId: string, req: PromptPreviewRequest) {
   return apiPost<PromptPreviewResponse>(`${base(tenantId)}/preview`, req);
+}
+
+export function listBuiltinPrompts(tenantId: string) {
+  return apiGet<BuiltinPrompt[]>(`${base(tenantId)}/builtin`);
 }

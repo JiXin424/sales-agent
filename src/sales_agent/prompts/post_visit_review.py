@@ -61,9 +61,9 @@ POST_VISIT_REVIEW_PROMPT = """## 任务：访后复盘 — 生成访后机会推
 
 ## 用户输入
 
-{{message}}
+{message}
 
-{{context_block}}
+{context_block}
 
-{{retrieval_block}}
+{retrieval_block}
 """

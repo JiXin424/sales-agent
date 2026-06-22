@@ -195,10 +195,15 @@ export interface FeedbackSummary {
 
 // --- Prompts ---
 
+export type PromptCategory = 'task' | 'system' | 'router' | 'risk' | 'coach';
+
 export interface PromptVersion {
   id: string;
   tenant_id: string;
-  task_type: string;
+  task_type: string | null;
+  prompt_category: PromptCategory;
+  prompt_key: string | null;
+  required_placeholders: string[];
   version: string;
   status: 'draft' | 'active' | 'archived';
   template_text: string;
@@ -207,11 +212,22 @@ export interface PromptVersion {
   updated_at: string;
 }
 
+export interface BuiltinPrompt {
+  prompt_category: PromptCategory;
+  prompt_key: string;
+  template: string;
+  required_placeholders: string[];
+  description: string;
+}
+
 export interface PromptPreviewRequest {
-  task_type: string;
+  prompt_category?: PromptCategory;
+  prompt_key?: string | null;
+  task_type?: string | null;
   version_id?: string | null;
-  sample_message: string;
+  sample_message?: string;
   sample_context?: Record<string, unknown> | null;
+  sample_variables?: Record<string, string> | null;
   run_generation?: boolean;
 }
 
@@ -219,7 +235,9 @@ export interface PromptPreviewResponse {
   rendered_prompt: string;
   model_output: string | null;
   version_id: string | null;
-  task_type: string;
+  prompt_category?: PromptCategory;
+  prompt_key?: string | null;
+  task_type?: string | null;
 }
 
 // --- Knowledge / Ingestion ---
@@ -302,6 +320,7 @@ export interface FeedbackFilters {
 }
 
 export interface PromptFilters {
+  prompt_category?: PromptCategory;
   task_type?: string;
   status?: string;
   limit?: number;

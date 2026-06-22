@@ -24,6 +24,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sales_agent.models.quick_session import QuickSession
+from sales_agent.prompts.coach_quick import (
+    SB_CARD_TEMPLATE,
+    SB_SPLIT_TEMPLATE,
+    SB_SYSTEM,
+    SW_CARD_TEMPLATE,
+    SW_SYSTEM,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +88,7 @@ def _sw_start() -> tuple[str, dict[str, Any], str]:
 
 async def _sw_advance(
     chat_model: Any, stage: str, payload: dict[str, Any], text: str,
+    prompts: dict[str, str] | None = None,
 ) -> tuple[str, dict[str, Any], str, bool]:
     text = _clean(text)
     if stage == "small_win":
@@ -95,7 +103,10 @@ async def _sw_advance(
         return "energy", {**payload, "gratitude": text}, SMALL_WIN_QUESTIONS["energy"], False
     # energy → 出卡（LLM 生成小赢卡；无模型或失败回退规则模板 _sw_render_card）
     payload = {**payload, "energy_sentence": _sw_energy(text, payload)}
-    card = await _sw_llm_card(chat_model, payload)
+    card = await _sw_llm_card(
+        chat_model, payload,
+        (prompts or {}).get("sw_card"), (prompts or {}).get("sw_system"),
+    )
     if not card:
         card = _sw_render_card(payload)
     return "completed", payload, card, True
@@ -119,24 +130,24 @@ def _sw_render_card(payload: dict[str, Any]) -> str:
     return _sw_sanitize(card)
 
 
-async def _sw_llm_card(chat_model: Any, payload: dict[str, Any]) -> str | None:
-    """LLM 生成小赢卡（6 段固定结构）；无模型或失败时返回 None，由调用方回退 _sw_render_card。"""
-    prompt = (
-        "销售员刚做完一次「小赢欣赏」对话，下面是他逐轮说出的原始内容：\n"
-        f"【今天的小赢】{payload.get('small_win', '')}\n"
-        f"【他觉得自己做得不错的地方】{payload.get('strength', '')}\n"
-        f"【他想感谢的】{payload.get('gratitude', '')}\n"
-        f"【他的能量句（可能为“AI代写”或空）】{payload.get('energy_sentence', '')}\n\n"
-        "请严格按下面格式输出小赢卡，不要加额外标题或开场白，每段都基于上面内容填实：\n"
-        "## 小赢卡\n\n"
-        "**今天的小赢**\n用他的小赢原文改写成一句完整的话。\n\n"
-        "**我欣赏你的是**\n你表现出了【一个具体优势/品质】，比如【引用他小赢里的具体证据】。\n\n"
-        "**这件事的意义**\n它说明你正在从【旧状态/困难】走向【新状态/可能性】，哪怕只是一步。\n\n"
-        "**今天值得感谢**\n用他的感谢原话改写，落到具体对象。\n\n"
-        "**给自己的能量句**\n一句短而真诚的鼓励，不超过 25 字；若他给了能量句且不是“AI代写”，可润色后用。\n\n"
-        "最后以这句收尾：小赢不是小事，它是状态恢复和持续成长的起点。"
+async def _sw_llm_card(
+    chat_model: Any, payload: dict[str, Any],
+    tpl: str | None = None, system: str | None = None,
+) -> str | None:
+    """LLM 生成小赢卡（6 段固定结构）；无模型或失败时返回 None，由调用方回退 _sw_render_card。
+
+    Args:
+        tpl: 调用方经 ``PromptRegistry`` 解析的出卡模板；None 时回退内置。
+        system: 调用方解析的 system 人设；None 时回退 SW_SYSTEM。
+    """
+    template = tpl or SW_CARD_TEMPLATE
+    prompt = template.format(
+        small_win=payload.get("small_win", ""),
+        strength=payload.get("strength", ""),
+        gratitude=payload.get("gratitude", ""),
+        energy_sentence=payload.get("energy_sentence", ""),
     )
-    return await _llm_generate(chat_model, SW_SYSTEM, prompt, max_tokens=600, temperature=0.4)
+    return await _llm_generate(chat_model, system or SW_SYSTEM, prompt, max_tokens=600, temperature=0.4)
 
 
 def _sw_needs_clarify(text: str) -> bool:
@@ -203,17 +214,7 @@ def _sb_start() -> tuple[str, dict[str, Any], str]:
 # 第 2 步帮拆「事实/解释/担心」、第 4 步出 7 段破框卡，都用 LLM；
 # 无模型或调用失败时回退到下面的规则版（_sb_split / _sb_final_reply）。
 
-SB_SYSTEM = (
-    "你是一位有经验的销售军师，专门帮一线销售拆解卡点、给出今天就能做的最小行动。"
-    "语气清晰、坚定、支持行动。要求：不要一开始就给建议；不要讲大道理；"
- "不要泛泛鼓励；每次只推动一个最小行动；话术要短、自然、具体。"
-)
-
-# 小赢欣赏出卡（第 4 步小赢卡）的 LLM 人设；无模型或调用失败时回退 _sw_render_card。
-SW_SYSTEM = (
-    "你是一位温暖、具体的销售教练，帮一线销售把今天的一个小进展写成一张「小赢卡」。"
-    "语气平实真诚、不煽情、不堆感叹号；每段都要落到他说的具体事实，不要编造没说过的细节。"
-)
+# SW_SYSTEM / SB_SYSTEM 已外移到 prompts/coach_quick.py（纳入 DB 版本管理），顶部 import。
 
 
 async def _llm_generate(
@@ -238,39 +239,31 @@ async def _llm_generate(
         return None
 
 
-async def _sb_llm_split(chat_model: Any, sales_input: str, user_split: str) -> str | None:
-    prompt = (
-        "销售员正在拆解一个销售卡点。\n"
-        f"【他的卡点描述】{sales_input}\n"
-        f"【他对「事实 vs 解释」的拆分】{user_split}\n\n"
-        "请基于他实际说的内容，帮他拆成三类，简洁列出，不要编造、不要加建议：\n"
-        "**事实**：（客户明确说过、真实发生的事）\n"
-        "**解释**：（他的判断、猜测、推断）\n"
-        "**担心**：（他害怕或顾虑的）"
-    )
-    return await _llm_generate(chat_model, SB_SYSTEM, prompt, max_tokens=400, temperature=0.2)
+async def _sb_llm_split(
+    chat_model: Any, sales_input: str, user_split: str,
+    tpl: str | None = None, system: str | None = None,
+) -> str | None:
+    template = tpl or SB_SPLIT_TEMPLATE
+    prompt = template.format(sales_input=sales_input, user_split=user_split)
+    return await _llm_generate(chat_model, system or SB_SYSTEM, prompt, max_tokens=400, temperature=0.2)
 
 
-async def _sb_llm_card(chat_model: Any, payload: dict[str, Any]) -> str | None:
-    prompt = (
-        "销售员正在拆一个销售卡点，下面是这次对话收集到的内容：\n"
-        f"【卡点描述】{payload.get('sales_input', '')}\n"
-        f"【事实/解释/担心 拆分】{payload.get('split_text', '')}\n"
-        f"【他想到的其他可能】{payload.get('possibilities_attempt', '')}\n\n"
-        "请严格按下面 7 条格式输出，不要加额外标题或开场白，每条都要基于上面内容填实：\n"
-        "1. 事实是什么：简洁列出真实发生的事。\n"
-        "2. 旧框是什么：总结他现在卡住自己的那个解释。\n"
-        "3. 新框是什么：给一个更有行动力的新解释。\n"
-        "4. 还可以怎么做：给 2-3 个可选做法，每条一行，用「- 」开头。\n"
-        "5. 今天的最小行动：只给一个最推荐、今天就能做的动作。\n"
-        "6. 推荐话术：给一段可以直接复制发给客户的话，短、自然、具体。\n"
-        "7. 承诺和回传：你准备选哪个动作？几点前做？做完把客户反应发回来，我帮你复盘下一步。"
+async def _sb_llm_card(
+    chat_model: Any, payload: dict[str, Any],
+    tpl: str | None = None, system: str | None = None,
+) -> str | None:
+    template = tpl or SB_CARD_TEMPLATE
+    prompt = template.format(
+        sales_input=payload.get("sales_input", ""),
+        split_text=payload.get("split_text", ""),
+        possibilities_attempt=payload.get("possibilities_attempt", ""),
     )
-    return await _llm_generate(chat_model, SB_SYSTEM, prompt, max_tokens=900, temperature=0.4)
+    return await _llm_generate(chat_model, system or SB_SYSTEM, prompt, max_tokens=900, temperature=0.4)
 
 
 async def _sb_advance(
     chat_model: Any, stage: str, payload: dict[str, Any], text: str,
+    prompts: dict[str, str] | None = None,
 ) -> tuple[str, dict[str, Any], str, bool]:
     text = (text or "").strip()
     if stage == "awaiting_blocker":
@@ -279,7 +272,10 @@ async def _sb_advance(
     if stage == "awaiting_split":
         sales_input = payload.get("sales_input", "")
         facts, interp, worries = _sb_split(text)  # 结构化（也供规则版出卡回退）
-        split_text = await _sb_llm_split(chat_model, sales_input, text)
+        split_text = await _sb_llm_split(
+            chat_model, sales_input, text,
+            (prompts or {}).get("sb_split"), (prompts or {}).get("sb_system"),
+        )
         if not split_text:
             split_text = f"**事实**：{facts}\n**解释**：{interp}\n**担心**：{worries}"
         payload = {
@@ -298,7 +294,10 @@ async def _sb_advance(
         "new_frame": _sb_new_frame(text, payload),
         "minimum_action": _sb_minimum_action(payload),
     }
-    card = await _sb_llm_card(chat_model, payload)
+    card = await _sb_llm_card(
+        chat_model, payload,
+        (prompts or {}).get("sb_card"), (prompts or {}).get("sb_system"),
+    )
     if not card:
         card = _sb_final_reply(payload)
     return "completed", payload, card, True
@@ -567,8 +566,12 @@ async def advance_active_session(
     except (TypeError, json.JSONDecodeError):
         payload = {}
 
+    # 解析 coach prompt（接入 DB 版本管理；失败回退内置）
+    from sales_agent.services.prompt_resolver_helper import resolve_quick_session_prompts
+    prompts = await resolve_quick_session_prompts(db, tenant_id, session.agent_id)
+
     new_stage, new_payload, reply, completed = await advancer(
-        chat_model, session.stage, payload, user_text,
+        chat_model, session.stage, payload, user_text, prompts,
     )
     session.stage = new_stage
     session.payload_json = json.dumps(new_payload, ensure_ascii=False)

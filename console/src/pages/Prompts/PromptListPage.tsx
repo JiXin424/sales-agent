@@ -10,7 +10,8 @@ import {
   archivePromptVersion,
 } from '@/api/prompts';
 import { queryKeys } from '@/utils/queryKeys';
-import { TASK_TYPE_LABELS } from '@/utils/constants';
+import { TASK_TYPE_LABELS, PROMPT_CATEGORY_LABELS } from '@/utils/constants';
+import type { PromptCategory } from '@/api/types';
 import { truncate } from '@/utils/formatters';
 import PageHeader from '@/components/PageHeader';
 import LoadingState from '@/components/LoadingState';
@@ -26,14 +27,16 @@ export default function PromptListPage() {
   const queryClient = useQueryClient();
 
   // ---- Filters ----
+  const [category, setCategory] = useState<PromptCategory | undefined>(undefined);
   const [taskType, setTaskType] = useState<string | undefined>(undefined);
   const [status, setStatus] = useState<string | undefined>(undefined);
 
   // ---- Query ----
   const query = useQuery({
-    queryKey: queryKeys.prompts(tenantId!, { task_type: taskType, status }),
+    queryKey: queryKeys.prompts(tenantId!, { prompt_category: category, task_type: taskType, status }),
     queryFn: () =>
       listPromptVersions(tenantId!, {
+        prompt_category: category,
         task_type: taskType,
         status,
         limit: 100,
@@ -66,6 +69,11 @@ export default function PromptListPage() {
     label,
   }));
 
+  const categoryOptions = Object.entries(PROMPT_CATEGORY_LABELS).map(([value, label]) => ({
+    value,
+    label,
+  }));
+
   const statusOptions = [
     { value: 'draft', label: '草稿' },
     { value: 'active', label: '活跃' },
@@ -86,11 +94,23 @@ export default function PromptListPage() {
       ),
     },
     {
-      title: '任务类型',
-      dataIndex: 'task_type',
-      key: 'task_type',
-      width: 140,
-      render: (type: string) => TASK_TYPE_LABELS[type] || type,
+      title: '类别',
+      dataIndex: 'prompt_category',
+      key: 'prompt_category',
+      width: 110,
+      render: (c: string) => PROMPT_CATEGORY_LABELS[c] || c,
+    },
+    {
+      title: '标识',
+      key: 'identity',
+      width: 160,
+      render: (
+        _: unknown,
+        row: { task_type: string | null; prompt_key: string | null; prompt_category: string },
+      ) => {
+        const key = row.task_type || row.prompt_key || '';
+        return row.prompt_category === 'task' ? TASK_TYPE_LABELS[key] || key : key;
+      },
     },
     {
       title: '版本',
@@ -185,12 +205,22 @@ export default function PromptListPage() {
       <Space style={{ marginBottom: 16 }} size={12}>
         <Select
           allowClear
-          placeholder="任务类型"
-          style={{ width: 180 }}
-          value={taskType}
-          onChange={setTaskType}
-          options={taskTypeOptions}
+          placeholder="Prompt 类别"
+          style={{ width: 140 }}
+          value={category}
+          onChange={setCategory}
+          options={categoryOptions}
         />
+        {category === 'task' && (
+          <Select
+            allowClear
+            placeholder="任务类型"
+            style={{ width: 180 }}
+            value={taskType}
+            onChange={setTaskType}
+            options={taskTypeOptions}
+          />
+        )}
         <Select
           allowClear
           placeholder="状态"

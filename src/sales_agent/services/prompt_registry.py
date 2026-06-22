@@ -1,4 +1,16 @@
-"""Prompt 注册表服务：运行时 prompt 解析、版本管理和生命周期。"""
+"""Prompt 注册表服务：运行时 prompt 解析、版本管理和生命周期。
+
+统一承载所有层 prompt（task / system / router / risk / coach）。每个 ``(category, key)``
+组合在每个 tenant 下最多一个 active 版本。解析三级回退：
+
+  1. Agent ``prompt_set`` 映射 → 具体版本（独立副本，状态不限）；
+  2. tenant 级 active 版本（``status='active'``）；
+  3. ``prompt_defaults.BUILTIN_PROMPTS`` 内置常量。
+
+AgentPromptSet 的 ``task_prompt_versions_json`` 支持两种 schema（读取时自动兼容）：
+  - 新（嵌套）：``{"task": {"knowledge_qa": "<id>"}, "system": {...}, "coach": {...}}``
+  - 旧（扁平）：``{"knowledge_qa": "<id>"}``  —— 仅 task 类，顶层值为字符串。
+"""
 
 from __future__ import annotations
 
@@ -7,51 +19,33 @@ import logging
 import string
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sales_agent.models.prompt import PromptVersion
+from sales_agent.services.prompt_defaults import (
+    get_builtin,
+    required_placeholders_for,
+)
 from sales_agent.services.task_router import ALL_TASK_TYPES
 
 logger = logging.getLogger(__name__)
 
-# Python 常量默认 prompt（兼容回退）
-from sales_agent.prompts import (
-    emotional_support,
-    knowledge_qa,
-    script_generation,
-    objection_handling,
-    conversation_review,
-    general_coaching,
-    visit_preparation,
-    follow_up_planning,
-    customer_context_summary,
-    deal_advancement,
-    conversation_scoring,
-    post_visit_review,
-)
 
-_DEFAULT_PROMPTS = {
-    "emotional_support": emotional_support.EMOTIONAL_SUPPORT_PROMPT,
-    "knowledge_qa": knowledge_qa.KNOWLEDGE_QA_PROMPT,
-    "script_generation": script_generation.SCRIPT_GENERATION_PROMPT,
-    "objection_handling": objection_handling.OBJECTION_HANDLING_PROMPT,
-    "conversation_review": conversation_review.CONVERSATION_REVIEW_PROMPT,
-    "general_sales_coaching": general_coaching.GENERAL_COACHING_PROMPT,
-    "visit_preparation": visit_preparation.VISIT_PREPARATION_PROMPT,
-    "follow_up_planning": follow_up_planning.FOLLOW_UP_PLANNING_PROMPT,
-    "customer_context_summary": customer_context_summary.CUSTOMER_CONTEXT_SUMMARY_PROMPT,
-    "deal_advancement": deal_advancement.DEAL_ADVANCEMENT_PROMPT,
-    "conversation_scoring": conversation_scoring.CONVERSATION_SCORING_PROMPT,
-    "post_visit_review": post_visit_review.POST_VISIT_REVIEW_PROMPT,
-}
+def _build_default_task_prompts() -> dict[str, str]:
+    """从内置注册表派生 task 类默认 prompt（兼容旧 ``_DEFAULT_PROMPTS`` 用法）。"""
+    # 延迟 import 避免模块加载顺序问题
+    from sales_agent.services.prompt_defaults import BUILTIN_PROMPTS
 
-# 模板中必须包含的占位符
-_REQUIRED_PLACEHOLDERS = {"message"}
+    return {b.key: b.template for b in BUILTIN_PROMPTS if b.category == "task"}
+
+
+# 兼容别名：旧代码 ``from prompt_registry import _DEFAULT_PROMPTS``
+_DEFAULT_PROMPTS = _build_default_task_prompts()
 
 
 def _validate_task_type(task_type: str) -> None:
-    """校验 task_type 是否合法。"""
+    """校验 task_type 是否合法（仅 task 类需要）。"""
     if task_type not in ALL_TASK_TYPES:
         raise ValueError(
             f"Invalid task_type: {task_type!r}. "
@@ -59,8 +53,8 @@ def _validate_task_type(task_type: str) -> None:
         )
 
 
-def _validate_template(template_text: str) -> None:
-    """校验模板必须包含 {message} 占位符，防止缺失变量静默失败。"""
+def _validate_placeholders(template_text: str, required: list[str]) -> None:
+    """校验模板含指定的必须占位符，且 ``str.format`` 语法合法。"""
     formatter = string.Formatter()
     try:
         field_names = {
@@ -69,12 +63,47 @@ def _validate_template(template_text: str) -> None:
     except (ValueError, IndexError):
         raise ValueError("Prompt template contains invalid format placeholders.")
 
-    missing = _REQUIRED_PLACEHOLDERS - field_names
+    missing = set(required) - field_names
     if missing:
         raise ValueError(
             f"Prompt template is missing required placeholder(s): {', '.join(missing)}. "
-            f"Every template must contain {{{', '.join(missing)}}}."
+            f"This category requires {{{', '.join(missing)}}}."
         )
+
+
+def _validate_template(template_text: str) -> None:
+    """旧接口：默认要求 ``{message}`` 占位符。"""
+    _validate_placeholders(template_text, ["message"])
+
+
+def _validate_for_category(category: str, key: str, template_text: str) -> None:
+    """按 category/key 校验模板。
+
+    task 类额外校验 task_type 合法性；各类按 ``required_placeholders_for`` 要求占位符
+    （如 system 类要求 ``[]``，risk 类要求 ``[message, answer]``）。
+    """
+    if category == "task":
+        _validate_task_type(key)
+    required = required_placeholders_for(category, key)
+    _validate_placeholders(template_text, required)
+
+
+def _extract_version_id(mapping: Any, category: str, key: str) -> str | None:
+    """从 AgentPromptSet JSON 提取版本 ID，兼容新旧两种 schema。
+
+    新 schema（嵌套）：``{"task": {"knowledge_qa": "<id>"}, "system": {...}}``
+    旧 schema（扁平）：``{"knowledge_qa": "<id>"}`` —— 仅 task 类，顶层值为字符串。
+    """
+    if not isinstance(mapping, dict):
+        return None
+    sub = mapping.get(category)
+    if isinstance(sub, dict):
+        return sub.get(key)
+    if category == "task":
+        val = mapping.get(key)
+        if isinstance(val, str):
+            return val
+    return None
 
 
 class PromptRegistry:
@@ -83,69 +112,74 @@ class PromptRegistry:
     用法::
 
         registry = PromptRegistry(db)
+        # task 类（兼容旧接口）
         template = await registry.resolve(tenant_id, "knowledge_qa")
+        # 任意层
+        template = await registry.resolve_prompt("system", "system_constraint", tenant_id)
     """
 
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    async def resolve(self, tenant_id: str, task_type: str) -> str:
-        """解析租户+任务类型的活跃 prompt。
+    async def resolve_prompt(
+        self,
+        category: str,
+        key: str,
+        tenant_id: str,
+        agent_id: str | None = None,
+    ) -> str:
+        """通用三级回退解析任意层 prompt。
 
-        优先返回租户级 active 版本，否则回退到 Python 常量默认值。
+        顺序：Agent prompt_set 映射 → tenant active 版本 → 内置默认常量。
         """
+        if agent_id:
+            mapped = await self._resolve_agent_prompt_version(agent_id, category, key)
+            if mapped is not None:
+                logger.debug(
+                    "Resolved agent prompt: agent=%s %s/%s version_id=%s",
+                    agent_id, category, key, mapped.id,
+                )
+                return mapped.template_text
+
         stmt = select(PromptVersion).where(
             PromptVersion.tenant_id == tenant_id,
-            PromptVersion.task_type == task_type,
+            PromptVersion.prompt_category == category,
+            # COALESCE 兼容 prompt_key IS NULL 的旧行（回退到 task_type）
+            func.coalesce(PromptVersion.prompt_key, PromptVersion.task_type) == key,
             PromptVersion.status == "active",
         ).limit(1)
-        result = await self.db.execute(stmt)
-        version = result.scalar_one_or_none()
-
+        version = (await self.db.execute(stmt)).scalar_one_or_none()
         if version is not None:
             logger.debug(
-                "Resolved tenant prompt: tenant=%s task=%s version_id=%s",
-                tenant_id, task_type, version.id,
+                "Resolved tenant prompt: tenant=%s %s/%s version_id=%s",
+                tenant_id, category, key, version.id,
             )
             return version.template_text
 
-        # 回退到默认 prompt
-        default = _DEFAULT_PROMPTS.get(task_type)
-        if default is not None:
-            logger.debug(
-                "Using default prompt: tenant=%s task=%s", tenant_id, task_type,
-            )
-            return default
+        builtin = get_builtin(category, key)
+        if builtin is not None:
+            logger.debug("Using builtin prompt: %s/%s", category, key)
+            return builtin.template
 
-        # 不应该到这里，因为 task_type 已校验
-        raise ValueError(f"No prompt found for task_type: {task_type!r}")
+        raise ValueError(f"No prompt found for {category}/{key}")
+
+    async def resolve(self, tenant_id: str, task_type: str) -> str:
+        """解析租户+任务类型的活跃 task prompt（兼容旧接口）。"""
+        return await self.resolve_prompt("task", task_type, tenant_id)
 
     async def resolve_for_agent(
         self, agent_id: str | None, tenant_id: str, task_type: str
     ) -> str:
-        """解析 Agent 作用域的 prompt。
+        """解析 Agent 作用域的 task prompt（兼容旧接口）。"""
+        return await self.resolve_prompt("task", task_type, tenant_id, agent_id)
 
-        解析顺序：
-          1. Agent prompt_set 中该 task_type 映射的版本（独立副本，状态不限）；
-          2. tenant 级 active 版本；
-          3. Python 常量默认值。
-        agent_id 为 None 或无映射时回退到 tenant/默认（向后兼容）。
-        """
-        if agent_id:
-            mapped = await self._resolve_agent_prompt_version(agent_id, task_type)
-            if mapped is not None:
-                logger.debug(
-                    "Resolved agent prompt: agent=%s task=%s version_id=%s",
-                    agent_id, task_type, mapped.id,
-                )
-                return mapped.template_text
-        return await self.resolve(tenant_id, task_type)
-
-    async def _resolve_agent_prompt_version(self, agent_id: str, task_type: str):
-        """从 Agent prompt_set 映射里取出 task_type → PromptVersion。"""
+    async def _resolve_agent_prompt_version(
+        self, agent_id: str, category: str, key: str
+    ) -> PromptVersion | None:
+        """从 Agent prompt_set 映射里取出 (category, key) → PromptVersion。"""
         from sales_agent.models.agent import Agent
         from sales_agent.models.agent_prompt_set import AgentPromptSet
-        # 先取 Agent 当前绑定的 prompt_set_id（避免一个 Agent 多个 set 时取错）
+
         agent = (
             await self.db.execute(select(Agent).where(Agent.id == agent_id))
         ).scalar_one_or_none()
@@ -162,15 +196,14 @@ class PromptRegistry:
             mapping = json.loads(ps.task_prompt_versions_json or "{}")
         except (ValueError, json.JSONDecodeError):
             return None
-        version_id = mapping.get(task_type)
+        version_id = _extract_version_id(mapping, category, key)
         if not version_id:
             return None
-        pv = (
+        return (
             await self.db.execute(
                 select(PromptVersion).where(PromptVersion.id == version_id)
             )
         ).scalar_one_or_none()
-        return pv
 
     async def create_version(
         self,
@@ -179,18 +212,32 @@ class PromptRegistry:
         template_text: str,
         description: str = "",
         version: str = "",
+        prompt_category: str = "task",
+        prompt_key: str | None = None,
     ) -> PromptVersion:
-        """创建一个 draft 版本的 prompt。"""
-        _validate_task_type(task_type)
-        _validate_template(template_text)
+        """创建一个 draft 版本的 prompt。
 
+        Args:
+            task_type: task 类即 task_type；非 task 类可传任意值（仅用于兼容旧位置参数，
+                实际定位用 prompt_category + prompt_key）。
+            prompt_category: task / system / router / risk / coach（默认 task）。
+            prompt_key: 该类别下的具体标识；为 None 时 task 类取 task_type，否则取该值。
+        """
+        category = prompt_category
+        key = prompt_key or (task_type if category == "task" else task_type)
+        _validate_for_category(category, key, template_text)
+
+        placeholders = required_placeholders_for(category, key)
         pv = PromptVersion(
             tenant_id=tenant_id,
-            task_type=task_type,
+            prompt_category=category,
+            prompt_key=key,
+            task_type=task_type if category == "task" else None,
             version=version,
             status="draft",
             template_text=template_text,
             description=description,
+            required_placeholders_json=json.dumps(placeholders, ensure_ascii=False),
         )
         self.db.add(pv)
         await self.db.flush()
@@ -199,7 +246,7 @@ class PromptRegistry:
     async def activate_version(self, tenant_id: str, version_id: str) -> PromptVersion:
         """激活一个 draft 版本。
 
-        同一 tenant+task_type 的当前 active 版本会被自动归档。
+        同一 tenant + (category, key) 的当前 active 版本会被自动归档。
         """
         pv = await self._get_version_with_tenant_check(version_id, tenant_id)
         if pv is None:
@@ -209,15 +256,17 @@ class PromptRegistry:
                 f"Only draft versions can be activated, current status: {pv.status!r}"
             )
 
-        # 归档同 tenant+task_type 的当前 active 版本
+        # 归档同 tenant + (category, key) 的当前 active 版本
+        target_key = pv.prompt_key or pv.task_type
         stmt = select(PromptVersion).where(
             PromptVersion.tenant_id == tenant_id,
-            PromptVersion.task_type == pv.task_type,
+            PromptVersion.prompt_category == pv.prompt_category,
+            func.coalesce(PromptVersion.prompt_key, PromptVersion.task_type) == target_key,
             PromptVersion.status == "active",
         )
         result = await self.db.execute(stmt)
         current_active = result.scalar_one_or_none()
-        if current_active is not None:
+        if current_active is not None and current_active.id != pv.id:
             current_active.status = "archived"
             await self.db.flush()
 
@@ -243,7 +292,7 @@ class PromptRegistry:
         template_text: str | None = None,
         description: str | None = None,
     ) -> PromptVersion:
-        """更新一个 draft 版本的内容。"""
+        """更新一个 draft 版本的内容（按其 category 校验占位符）。"""
         pv = await self._get_version_with_tenant_check(version_id, tenant_id)
         if pv is None:
             raise ValueError(f"Prompt version not found: {version_id!r}")
@@ -251,7 +300,8 @@ class PromptRegistry:
             raise ValueError("Only draft versions can be updated.")
 
         if template_text is not None:
-            _validate_template(template_text)
+            key = pv.prompt_key or pv.task_type or ""
+            _validate_for_category(pv.prompt_category, key, template_text)
             pv.template_text = template_text
         if description is not None:
             pv.description = description
@@ -264,24 +314,29 @@ class PromptRegistry:
         tenant_id: str,
         task_type: str | None = None,
         status: str | None = None,
+        prompt_category: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[PromptVersion], int]:
-        """列出租户的 prompt 版本。返回 (versions, total)。"""
+        """列出租户的 prompt 版本。返回 (versions, total)。
+
+        可按 task_type（task 类）或 prompt_category（任意层）过滤。
+        """
         conditions = [PromptVersion.tenant_id == tenant_id]
+        if prompt_category is not None:
+            conditions.append(PromptVersion.prompt_category == prompt_category)
         if task_type is not None:
             _validate_task_type(task_type)
             conditions.append(PromptVersion.task_type == task_type)
         if status is not None:
             conditions.append(PromptVersion.status == status)
 
-        # Count
         from sqlalchemy import func
+
         count_stmt = select(func.count()).select_from(PromptVersion).where(*conditions)
         count_result = await self.db.execute(count_stmt)
         total = count_result.scalar() or 0
 
-        # Data
         stmt = (
             select(PromptVersion)
             .where(*conditions)

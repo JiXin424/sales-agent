@@ -117,3 +117,21 @@ jobs:
           git checkout FETCH_HEAD
       - name: Sync code to source-mirror servers
         run: scripts/sync-code.sh
+
+  distribute-ssh-key:
+    runs-on: ubuntu-latest
+    # 一次性：把 dev 用户的 SSH 公钥分发到所有目标服务器
+    steps:
+      - name: add dev key to all servers
+        run: |
+          PUBKEY='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOSG8946rhg9UevYzdP1tYOtGbP+FRLOv/pwTld/8QCM dev@sales-agent-master'
+          for host in 127.0.0.1 47.120.55.219 47.118.16.235; do
+            echo "Adding key to ${host}..."
+            ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new root@${host} \
+              "mkdir -p /root/.ssh && chmod 700 /root/.ssh && echo '${PUBKEY}' >> /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && echo 'OK'"
+          done
+          # Also add to dev user's authorized_keys on this machine for self-SSH
+          mkdir -p /home/dev/.ssh && chmod 700 /home/dev/.ssh
+          echo "${PUBKEY}" >> /home/dev/.ssh/authorized_keys
+          chmod 600 /home/dev/.ssh/authorized_keys
+          echo "SSH keys distributed to all targets"

@@ -274,6 +274,19 @@ class SetPromptBindingRequest(BaseModel):
     version_id: str | None = None
 
 
+class EffectivePromptResponse(BaseModel):
+    """某 (category, key) 当前生效的 prompt（DB active 优先，否则内置默认）。"""
+
+    prompt_category: str
+    prompt_key: str
+    template: str
+    required_placeholders: list[str]
+    description: str = ""
+    source: str  # "db_active" | "builtin"
+    version_id: str | None = None
+    version: str = ""
+
+
 # --- 知识上传 & 导入任务 ---
 
 

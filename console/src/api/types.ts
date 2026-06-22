@@ -220,6 +220,17 @@ export interface BuiltinPrompt {
   description: string;
 }
 
+export interface EffectivePrompt {
+  prompt_category: PromptCategory;
+  prompt_key: string;
+  template: string;
+  required_placeholders: string[];
+  description: string;
+  source: 'db_active' | 'builtin';
+  version_id: string | null;
+  version: string;
+}
+
 export interface PromptPreviewRequest {
   prompt_category?: PromptCategory;
   prompt_key?: string | null;

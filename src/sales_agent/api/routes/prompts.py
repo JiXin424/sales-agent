@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sales_agent.api.deps import DbSession
 from sales_agent.api.schemas import (
     BuiltinPromptResponse,
+    EffectivePromptResponse,
     PromptPreviewRequest,
     PromptPreviewResponse,
     PromptVersionCreate,
@@ -135,6 +136,60 @@ async def list_builtin_prompts(
         )
         for b in BUILTIN_PROMPTS
     ]
+
+
+@router.get("/effective", response_model=list[EffectivePromptResponse])
+async def list_effective_prompts(
+    tenant_id: str,
+    db: DbSession,
+):
+    """列出所有内置 (category, key) 的当前生效 prompt。
+
+    每项返回运行时实际会用的内容：DB active 版本优先，否则内置默认。
+    ``source`` 标记来源（``db_active`` / ``builtin``），前端据此区分"已自定义/用默认"。
+    """
+    await _verify_tenant(tenant_id, db)
+    from sqlalchemy import func, select
+
+    from sales_agent.models.prompt import PromptVersion
+    from sales_agent.services.prompt_defaults import BUILTIN_PROMPTS
+
+    result: list[dict] = []
+    for b in BUILTIN_PROMPTS:
+        stmt = (
+            select(PromptVersion)
+            .where(
+                PromptVersion.tenant_id == tenant_id,
+                PromptVersion.prompt_category == b.category,
+                func.coalesce(PromptVersion.prompt_key, PromptVersion.task_type) == b.key,
+                PromptVersion.status == "active",
+            )
+            .limit(1)
+        )
+        pv = (await db.execute(stmt)).scalar_one_or_none()
+        if pv is not None:
+            result.append({
+                "prompt_category": b.category,
+                "prompt_key": b.key,
+                "template": pv.template_text,
+                "required_placeholders": list(b.required_placeholders),
+                "description": b.description,
+                "source": "db_active",
+                "version_id": pv.id,
+                "version": pv.version or "",
+            })
+        else:
+            result.append({
+                "prompt_category": b.category,
+                "prompt_key": b.key,
+                "template": b.template,
+                "required_placeholders": list(b.required_placeholders),
+                "description": b.description,
+                "source": "builtin",
+                "version_id": None,
+                "version": "",
+            })
+    return result
 
 
 @router.get("", response_model=PromptVersionListResponse)

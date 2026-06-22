@@ -3,6 +3,7 @@
 import { apiGet, apiPost, apiPut } from './client';
 import type {
   BuiltinPrompt,
+  EffectivePrompt,
   PaginatedResponse,
   PromptVersion,
   PromptFilters,
@@ -61,4 +62,8 @@ export function previewPrompt(tenantId: string, req: PromptPreviewRequest) {
 
 export function listBuiltinPrompts(tenantId: string) {
   return apiGet<BuiltinPrompt[]>(`${base(tenantId)}/builtin`);
+}
+
+export function listEffectivePrompts(tenantId: string) {
+  return apiGet<EffectivePrompt[]>(`${base(tenantId)}/effective`);
 }

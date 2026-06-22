@@ -1,0 +1,146 @@
+name: migrate-master
+# 一次性迁移 workflow: 把 CI/CD 主控从 47.120.50.181 迁移到 47.120.55.219
+# 通过当前主控的 runner (已有免密 SSH) 来执行所有远程操作。
+# 仅 workflow_dispatch 触发。
+
+on:
+  workflow_dispatch:
+
+jobs:
+  bootstrap-new-master:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git init .
+          git remote add origin "http://oauth2:${TOKEN}@127.0.0.1:3002/${GITHUB_REPOSITORY}.git"
+          git fetch --depth 1 origin "${GITHUB_SHA}"
+          git checkout FETCH_HEAD
+
+      - name: scp bootstrap script to 47.120.55.219
+        run: |
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new root@47.120.55.219 'mkdir -p /root/code/sales-agent/scripts /root/code/sales-agent/infra'
+          scp -o BatchMode=yes scripts/bootstrap-new-master.sh root@47.120.55.219:/root/code/sales-agent/scripts/
+          echo "bootstrap script copied to new master"
+
+      - name: run bootstrap on 47.120.55.219
+        run: |
+          ssh -o BatchMode=yes root@47.120.55.219 'bash /root/code/sales-agent/scripts/bootstrap-new-master.sh'
+          echo "bootstrap completed on new master"
+
+      - name: scp migration scripts to targets
+        run: |
+          # 复制迁移脚本到 heyuan (本机，local)
+          cp scripts/migration-update-target.sh /root/code/sales-agent/scripts/ 2>/dev/null || true
+
+          # 复制到 hangzhou
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new root@47.118.16.235 'mkdir -p /root/code/sales-agent/scripts'
+          scp -o BatchMode=yes scripts/migration-update-target.sh root@47.118.16.235:/root/code/sales-agent/scripts/
+
+          # 复制 tenants 模板到各目标
+          for target in root@47.120.55.219 root@47.118.16.235; do
+            scp -o BatchMode=yes deploy/tenants.*.json ${target}:/root/code/sales-agent/deploy/ 2>/dev/null || true
+          done
+          echo "migration scripts distributed"
+
+  update-targets:
+    runs-on: ubuntu-latest
+    needs: bootstrap-new-master
+    steps:
+      - name: checkout
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git init .
+          git remote add origin "http://oauth2:${TOKEN}@127.0.0.1:3002/${GITHUB_REPOSITORY}.git"
+          git fetch --depth 1 origin "${GITHUB_SHA}"
+          git checkout FETCH_HEAD
+
+      - name: update heyuan (本机 47.120.50.181)
+        run: |
+          # 本机也需要更新 /etc/hosts — registry.internal → benji 私网
+          echo "172.25.186.210 registry.internal  # → benji 新主控" >> /etc/hosts.tmp
+          # 合并去重
+          grep -v "registry.internal" /etc/hosts > /etc/hosts.clean || true
+          cat /etc/hosts.clean /etc/hosts.tmp > /etc/hosts.new
+          cp /etc/hosts /etc/hosts.bak.$(date +%Y%m%d) 2>/dev/null || true
+          cp /etc/hosts.new /etc/hosts
+          rm -f /etc/hosts.tmp /etc/hosts.clean /etc/hosts.new
+          echo "local /etc/hosts updated: registry.internal → 172.25.186.210"
+
+          # 复制新 registry CA
+          ssh -o BatchMode=yes root@47.120.55.219 'cat /root/code/sales-agent/infra/registry-ca.crt' > /tmp/registry-ca.crt
+          mkdir -p /etc/docker/certs.d/registry.internal:5000
+          cp /tmp/registry-ca.crt /etc/docker/certs.d/registry.internal:5000/ca.crt
+          rm -f /tmp/registry-ca.crt
+          echo "local CA cert updated"
+
+          # Docker login 新 registry
+          REGPASS=$(ssh -o BatchMode=yes root@47.120.55.219 'cat /root/code/sales-agent/infra/registry-password.txt')
+          echo "${REGPASS}" | docker login registry.internal:5000 -u salesagent --password-stdin 2>/dev/null || echo "docker login 可能需要手动重试"
+          echo "docker login done"
+
+          # 更新本机 tenants.json
+          cp deploy/tenants.heyuan.json deploy/tenants.json
+          echo "local tenants.json updated"
+
+      - name: update hangzhou (47.118.16.235)
+        run: |
+          # 通过 SSH 在 hangzhou 上执行迁移
+          ssh -n -o BatchMode=yes root@47.118.16.235 "bash /root/code/sales-agent/scripts/migration-update-target.sh --target hangzhou" || {
+            echo "自动迁移 hangzhou 失败，手动步骤:"
+            echo "1. 更新 /etc/hosts: 47.120.55.219 registry.internal"
+            echo "2. 从新主控 scp registry-ca.crt"
+            echo "3. docker login registry.internal:5000"
+          }
+
+      - name: push source code to new Gitea
+        run: |
+          # 把当前代码推送到新主控的 Gitea
+          NEW_GITEA="http://gitea-admin:FAKE_TOKEN_PLACEHOLDER@47.120.55.219:3002/gitea-admin/sales-agent.git"
+
+          # 获取新 Gitea token
+          GITEA_TOKEN=$(ssh -o BatchMode=yes root@47.120.55.219 'cat /root/code/sales-agent/infra/gitea-admin-token.txt' 2>/dev/null || echo "")
+
+          if [ -n "${GITEA_TOKEN}" ]; then
+            # 检查新 Gitea 是否已有仓库
+            REPO_EXISTS=$(curl -sS -o /dev/null -w '%{http_code}' \
+              "http://47.120.55.219:3002/api/v1/repos/gitea-admin/sales-agent" \
+              -H "Authorization: token ${GITEA_TOKEN}" 2>/dev/null || echo "000")
+
+            if [ "${REPO_EXISTS}" = "200" ]; then
+              echo "新 Gitea 仓库已存在，直接推送代码"
+              git remote add new-master "http://gitea-admin:${GITEA_TOKEN}@47.120.55.219:3002/gitea-admin/sales-agent.git" 2>/dev/null || git remote set-url new-master "http://gitea-admin:${GITEA_TOKEN}@47.120.55.219:3002/gitea-admin/sales-agent.git"
+              git push -f new-master main
+              echo "代码已推送到新 Gitea"
+            else
+              echo "新 Gitea 仓库状态: ${REPO_EXISTS}，需要先创建"
+              echo "手动步骤: 访问 http://47.120.55.219:3002/ 确认 Gitea 就绪，然后创建仓库"
+            fi
+          else
+            echo "无法获取新 Gitea token，跳过代码推送"
+          fi
+
+  summary:
+    runs-on: ubuntu-latest
+    needs: [bootstrap-new-master, update-targets]
+    steps:
+      - name: migration summary
+        run: |
+          echo "============================================"
+          echo "  CI/CD 迁移 — Phase 1 完成"
+          echo "============================================"
+          echo ""
+          echo "新主控: http://47.120.55.219:3002/"
+          echo "  Gitea admin token: /root/code/sales-agent/infra/gitea-admin-token.txt"
+          echo "  Registry 密码: /root/code/sales-agent/infra/registry-password.txt"
+          echo ""
+          echo "下一步 (手动):"
+          echo "  1. 确认新 Gitea Web 可访问"
+          echo "  2. 在新主控上 /root/code/sales-agent 确认源码完整"
+          echo "  3. git push origin main (在新主控上触发首次 CI)"
+          echo "  4. 观察 CI: http://47.120.55.219:3002/gitea-admin/sales-agent/actions"
+          echo ""
+          echo "回滚: docs/deploy/cicd-migration.md"

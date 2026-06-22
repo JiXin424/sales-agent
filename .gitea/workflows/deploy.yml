@@ -1,5 +1,5 @@
 name: deploy
-# 主控上的 CI:push main → build → 推 registry.internal → fan-out 部署到 deploy/deploy-targets.json 各目标。
+# 新主控(benji 47.120.55.219)上的 CI:push main → build → 推 registry.internal → fan-out 部署。
 # runner 跑在主控宿主机(:host),复用主机 docker(已登录 registry.internal)+ 免密 ssh 到各目标。
 # 不用 actions/checkout(国内拉 github 失败),直接从本地 Gitea(127.0.0.1:3002)git fetch 精确 SHA。
 
@@ -44,9 +44,48 @@ jobs:
           docker push ${REGISTRY}/${IMAGE_NAME}:latest
           echo "::notice::pushed ${REGISTRY}/${IMAGE_NAME}:${SHA}"
 
+  migrate-infra:
+    runs-on: ubuntu-latest
+    # 一次性：在 47.120.55.219 上搭建 CI/CD 基础设施。
+    # 幂等 — 如果新 Gitea 已在线则跳过 bootstrap。
+    steps:
+      - name: checkout (本地 Gitea)
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git init .
+          git remote add origin "http://oauth2:${TOKEN}@127.0.0.1:3002/${GITHUB_REPOSITORY}.git"
+          git fetch --depth 1 origin "${GITHUB_SHA}"
+          git checkout FETCH_HEAD
+
+      - name: check if migration already done
+        id: check
+        run: |
+          if curl -sS --connect-timeout 5 http://47.120.55.219:3002/api/v1/version >/dev/null 2>&1; then
+            echo "migration=done" >> $GITHUB_OUTPUT
+            echo "新 Gitea 已在线，跳过 bootstrap"
+          else
+            echo "migration=needed" >> $GITHUB_OUTPUT
+            echo "需要执行 bootstrap"
+          fi
+
+      - name: scp bootstrap to benji
+        if: steps.check.outputs.migration == 'needed'
+        run: |
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new root@47.120.55.219 'mkdir -p /root/code/sales-agent/scripts /root/code/sales-agent/infra /root/code/sales-agent/deploy'
+          scp -o BatchMode=yes scripts/bootstrap-new-master.sh root@47.120.55.219:/root/code/sales-agent/scripts/
+          scp -o BatchMode=yes deploy/tenants.benji.json root@47.120.55.219:/root/code/sales-agent/deploy/
+          echo "bootstrap script copied to benji"
+
+      - name: run bootstrap on benji
+        if: steps.check.outputs.migration == 'needed'
+        run: |
+          ssh -o BatchMode=yes root@47.120.55.219 'bash /root/code/sales-agent/scripts/bootstrap-new-master.sh' && \
+            echo "Bootstrap completed on new master" || echo "Bootstrap may have partially completed, check logs"
+
   deploy-fanout:
     runs-on: ubuntu-latest
-    needs: build-and-push
+    needs: [build-and-push, migrate-infra]
     steps:
       - name: checkout (本地 Gitea,精确 SHA)
         env:

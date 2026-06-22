@@ -611,4 +611,4 @@ PYTHONPATH=src pytest tests/integration/test_pilot_api.py -v
 
 | 日期 | 摘要 |
 |------|------|
-| [2026-06-22](changelog/2026-06-22.md) | Prompt 全层解耦到 DB 版本管理 + 访前/访后卡片 bug 修复 |
+| [2026-06-22](changelog/2026-06-22.md) | Prompt 全层解耦到 DB 版本管理 + 网页端「当前生效」总览直接编辑 |

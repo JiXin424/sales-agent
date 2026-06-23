@@ -1,5 +1,5 @@
 {
-  "_comment": "hangzhou (47.118.16.235) 多租户清单。示例：taishan + 未来 tenant-b。每租户独立端口/凭证。",
+  "_comment": "prod2 (47.120.50.181) 租户清单。开发用途，DingTalk 建议关闭。",
   "project_name": "sales-agent",
   "image": "registry.internal:5000/sales-agent:latest",
   "postgres_image": "registry.internal:5000/pgvector/pgvector:pg16",
@@ -14,22 +14,12 @@
   "tenants": [
     {
       "id": "taishan",
-      "name": "Taishan (hangzhou)",
+      "name": "Taishan (prod2 dev)",
       "api_port": 8002,
       "env_file": "secrets/taishan.env",
       "data_dir": "./data/taishan",
       "logs_dir": "./logs/taishan",
       "roles": ["api", "worker"]
-    },
-    {
-      "_comment": "示例第二租户 — 不同凭证，独立端口。取消注释并创建 secrets/tenant-b.env 即生效。",
-      "id": "tenant-b",
-      "name": "Tenant B (hangzhou)",
-      "api_port": 8102,
-      "env_file": "secrets/tenant-b.env",
-      "data_dir": "./data/tenant-b",
-      "logs_dir": "./logs/tenant-b",
-      "roles": ["api", "stream", "worker"]
     }
   ]
 }

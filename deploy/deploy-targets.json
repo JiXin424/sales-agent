@@ -1,9 +1,9 @@
 {
-  "_comment": "新主控 benji (47.120.55.219) 的 CI fan-out 目标清单。method: deploy-release(生成式compose)。local=true 在新主控本机执行(不SSH)。",
+  "_comment": "CI fan-out 目标清单。method: deploy-release(生成式compose)。local=true 在 prod3 本机执行(不SSH)。",
   "registry": "registry.internal:5000/sales-agent",
   "targets": [
-    { "name": "benji(新主控)",  "host": "127.0.0.1",    "user": "root", "dir": "/root/code/sales-agent", "method": "deploy-release", "local": true },
-    { "name": "heyuan(dev)",   "host": "47.120.50.181", "user": "root", "dir": "/root/code/sales-agent", "method": "deploy-release" },
-    { "name": "hangzhou",      "host": "47.118.16.235", "user": "root", "dir": "/root/code/sales-agent", "method": "deploy-release" }
+    { "name": "prod3(主控)",  "host": "127.0.0.1",    "user": "root", "dir": "/root/code/sales-agent", "method": "deploy-release", "local": true },
+    { "name": "prod2",       "host": "47.120.50.181", "user": "root", "dir": "/root/code/sales-agent", "method": "deploy-release" },
+    { "name": "test",        "host": "47.118.16.235", "user": "root", "dir": "/root/code/sales-agent", "method": "deploy-release" }
   ]
 }

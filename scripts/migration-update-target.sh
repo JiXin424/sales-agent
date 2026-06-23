@@ -2,20 +2,20 @@
 # ============================================================
 # Sales Agent — CI/CD 迁移: 目标服务器更新脚本
 # ============================================================
-# 在 47.120.50.181(dev) 和 47.118.16.235(hangzhou) 上以 root 执行。
+# 在 47.120.50.181(dev) 和 47.118.16.235(test) 上以 root 执行。
 #
 # 功能：
-#   1. 更新 /etc/hosts → registry.internal 指向 benji (新主控)
+#   1. 更新 /etc/hosts → registry.internal 指向 prod3 (主控)
 #   2. 部署新 registry CA 证书
 #   3. docker login 新 registry
-#   4. (仅 47.120.50.181) 更新 git remote 指向 benji Gitea
+#   4. (仅 47.120.50.181) 更新 git remote 指向 prod3 Gitea
 #
 # 用法:
 #   # 在 47.120.50.181 上（同 VPC，用私网 + dev 模式）:
-#   bash scripts/migration-update-target.sh --target heyuan
+#   bash scripts/migration-update-target.sh --target prod2
 #
 #   # 在 47.118.16.235 上（跨地域，用公网）:
-#   bash scripts/migration-update-target.sh --target hangzhou
+#   bash scripts/migration-update-target.sh --target test
 #
 # 前置条件:
 #   1. 新主控 (47.120.55.219) 的 bootstrap 已完成
@@ -44,7 +44,7 @@ while [ $# -gt 0 ]; do
     --target) TARGET="${2:-}"; shift ;;
     --skip-ssh) SKIP_SSH=1 ;;
     --help|-h)
-      echo "Usage: $0 --target <heyuan|hangzhou> [--skip-ssh]"
+      echo "Usage: $0 --target <prod2|test> [--skip-ssh]"
       exit 0
       ;;
     *) err "未知参数: $1" ;;
@@ -56,19 +56,19 @@ if [ -z "$TARGET" ]; then
   # 尝试自动检测
   MY_IP=$(hostname -I 2>/dev/null | grep -oE '47\.120\.50\.181' || echo "")
   if [ -n "$MY_IP" ]; then
-    TARGET="heyuan"
-    log "自动检测到 heyuan (47.120.50.181)"
+    TARGET="prod2"
+    log "自动检测到 prod2 (47.120.50.181)"
   else
     MY_IP=$(hostname -I 2>/dev/null | grep -oE '47\.118\.16\.235' || echo "")
     if [ -n "$MY_IP" ]; then
-      TARGET="hangzhou"
-      log "自动检测到 hangzhou (47.118.16.235)"
+      TARGET="test"
+      log "自动检测到 test (47.118.16.235)"
     fi
   fi
 fi
 
 if [ -z "$TARGET" ]; then
-  err "无法自动检测目标，请用 --target <heyuan|hangzhou> 指定"
+  err "无法自动检测目标，请用 --target <prod2|test> 指定"
 fi
 
 # ============================================================
@@ -81,19 +81,19 @@ REGISTRY_PORT="5000"
 REGISTRY_USER="salesagent"
 
 case "$TARGET" in
-  heyuan|dev)
-    TARGET_LABEL="heyuan (47.120.50.181)"
+  prod2)
+    TARGET_LABEL="prod2 (47.120.50.181)"
     REGISTRY_ROUTE="${NEW_MASTER_PRIVATE_IP}"     # 同 VPC 走私网
     UPDATE_GIT_REMOTE=1                           # dev 机需要改 git remote
     GIT_REMOTE_URL="http://${NEW_MASTER_PUBLIC_IP}:3002/gitea-admin/sales-agent.git"
     ;;
-  hangzhou)
-    TARGET_LABEL="hangzhou (47.118.16.235)"
+  test)
+    TARGET_LABEL="test (47.118.16.235)"
     REGISTRY_ROUTE="${NEW_MASTER_PUBLIC_IP}"     # 跨地域走公网
     UPDATE_GIT_REMOTE=0                          # 杭州没有源码，不需改 git
     ;;
   *)
-    err "未知目标: $TARGET (支持: heyuan, hangzhou)"
+    err "未知目标: $TARGET (支持: prod2, test)"
     ;;
 esac
 
@@ -107,10 +107,10 @@ log "=== 1/5 更新 /etc/hosts ==="
 
 if grep -q "${REGISTRY_HOSTNAME}" /etc/hosts; then
   # 替换现有条目
-  sed -i "s/.*${REGISTRY_HOSTNAME}.*/${REGISTRY_ROUTE} ${REGISTRY_HOSTNAME}  # → benji 新主控 (${TARGET})/" /etc/hosts
+  sed -i "s/.*${REGISTRY_HOSTNAME}.*/${REGISTRY_ROUTE} ${REGISTRY_HOSTNAME}  # → prod3 主控 (${TARGET})/" /etc/hosts
   log "已更新 /etc/hosts: ${REGISTRY_HOSTNAME} → ${REGISTRY_ROUTE}"
 else
-  echo "${REGISTRY_ROUTE} ${REGISTRY_HOSTNAME}  # → benji 新主控 (${TARGET})" >> /etc/hosts
+  echo "${REGISTRY_ROUTE} ${REGISTRY_HOSTNAME}  # → prod3 主控 (${TARGET})" >> /etc/hosts
   log "已添加 /etc/hosts: ${REGISTRY_HOSTNAME} → ${REGISTRY_ROUTE}"
 fi
 
@@ -190,10 +190,10 @@ if [ "$UPDATE_GIT_REMOTE" -eq 1 ]; then
       log "旧 origin 保存为 origin-old: ${OLD_ORIGIN}"
     fi
 
-    # 设置新 origin → benji Gitea
+    # 设置新 origin → prod3 Gitea
     git remote remove origin 2>/dev/null || true
     git remote add origin "$GIT_REMOTE_URL"
-    log "新 Git remote (push 到 benji 触发 CI):"
+    log "新 Git remote (push 到 prod3 触发 CI):"
     log "  origin: ${GIT_REMOTE_URL}"
     log ""
     log "  开发流程:"

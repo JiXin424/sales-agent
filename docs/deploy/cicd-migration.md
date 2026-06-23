@@ -1,6 +1,6 @@
 # CI/CD 迁移操作手册
 
-> 将 CI/CD 主控从 47.120.50.181 迁移到 47.120.55.219 (benji)
+> 将 CI/CD 主控从 47.120.50.181 迁移到 47.120.55.219 (prod3)
 >
 > 最后更新: 2026-06-22
 
@@ -66,8 +66,8 @@ git push origin main
 # 在新主控上
 cd /root/code/sales-agent
 
-# 使用 benji 专用配置
-cp deploy/tenants.benji.json deploy/tenants.json
+# 使用 prod3 专用配置
+cp deploy/tenants.prod3.json deploy/tenants.json
 
 # 确保 secrets/taishan.env 存在并正确配置
 # (如果已有，跳过此步)
@@ -75,10 +75,10 @@ cp deploy/tenants.benji.json deploy/tenants.json
 
 ### Step 4: 更新目标服务器
 
-#### 4a: 47.120.50.181 (heyuan dev 机)
+#### 4a: 47.120.50.181 (prod2 机)
 
 ```bash
-# SSH 到 heyuan
+# SSH 到 prod2
 ssh root@47.120.50.181
 
 # 如果脚本在本地，先拉取最新代码
@@ -86,10 +86,10 @@ cd /root/code/sales-agent
 git fetch origin-old 2>/dev/null && git reset --hard origin-old/main || true
 
 # 运行迁移脚本
-bash scripts/migration-update-target.sh --target heyuan
+bash scripts/migration-update-target.sh --target prod2
 
 # 创建本机 tenants.json
-cp deploy/tenants.heyuan.json deploy/tenants.json
+cp deploy/tenants.prod2.json deploy/tenants.json
 ```
 
 **注意:** 如果无法 SSH 免密到新主控，会提示手动操作:
@@ -97,17 +97,17 @@ cp deploy/tenants.heyuan.json deploy/tenants.json
 2. 从新主控获取 registry 密码 (`infra/registry-password.txt`)
 3. 手动执行 `docker login registry.internal:5000`
 
-#### 4b: 47.118.16.235 (hangzhou)
+#### 4b: 47.118.16.235 (test)
 
 ```bash
-# SSH 到 hangzhou
+# SSH 到 test
 ssh root@47.118.16.235
 
 cd /root/code/sales-agent
-bash scripts/migration-update-target.sh --target hangzhou
+bash scripts/migration-update-target.sh --target test
 
 # 创建本机多租户 tenants.json
-cp deploy/tenants.hangzhou.json deploy/tenants.json
+cp deploy/tenants.test.json deploy/tenants.json
 ```
 
 ### Step 5: 首次 CI/CD 验证
@@ -136,9 +136,9 @@ git push origin main
 **预期 CI 过程:**
 1. `build-and-push`: 构建镜像并推送到本地 registry
 2. `deploy-fanout`: 
-   - 本地 (benji) 通过 deploy-release 部署
-   - heyuan 通过 SSH + deploy-release 部署
-   - hangzhou 通过 SSH + deploy-release 部署
+   - 本地 (prod3) 通过 deploy-release 部署
+   - prod2 通过 SSH + deploy-release 部署
+   - test 通过 SSH + deploy-release 部署
 3. `sync-code`: no-op (清单为空)
 
 ### Step 6: 验证各目标
@@ -147,10 +147,10 @@ git push origin main
 # 检查新主控
 curl http://127.0.0.1:8001/health
 
-# 检查 heyuan dev 机
+# 检查 prod2 机
 ssh root@47.120.50.181 'curl -s http://127.0.0.1:8002/health'
 
-# 检查 hangzhou
+# 检查 test
 ssh root@47.118.16.235 'curl -s http://127.0.0.1:8002/health'
 ```
 
@@ -161,10 +161,10 @@ ssh root@47.118.16.235 'curl -s http://127.0.0.1:8002/health'
 cd /root/code/sales-agent
 
 # 旧 origin 已保存为 origin-old (指向本地 Gitea)
-# 新 origin 指向 benji Gitea
+# 新 origin 指向 prod3 Gitea
 git remote set-url origin http://47.120.55.219:3002/gitea-admin/sales-agent.git
 
-# 开发流程: git push origin main → 触发 benji CI
+# 开发流程: git push origin main → 触发 prod3 CI
 ```
 
 ---

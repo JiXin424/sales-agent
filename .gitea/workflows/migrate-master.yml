@@ -32,10 +32,10 @@ jobs:
 
       - name: scp migration scripts to targets
         run: |
-          # 复制迁移脚本到 heyuan (本机，local)
+          # 复制迁移脚本到 prod2 (本机，local)
           cp scripts/migration-update-target.sh /root/code/sales-agent/scripts/ 2>/dev/null || true
 
-          # 复制到 hangzhou
+          # 复制到 test
           ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new root@47.118.16.235 'mkdir -p /root/code/sales-agent/scripts'
           scp -o BatchMode=yes scripts/migration-update-target.sh root@47.118.16.235:/root/code/sales-agent/scripts/
 
@@ -58,10 +58,10 @@ jobs:
           git fetch --depth 1 origin "${GITHUB_SHA}"
           git checkout FETCH_HEAD
 
-      - name: update heyuan (本机 47.120.50.181)
+      - name: update prod2 (本机 47.120.50.181)
         run: |
-          # 本机也需要更新 /etc/hosts — registry.internal → benji 私网
-          echo "172.25.186.210 registry.internal  # → benji 新主控" >> /etc/hosts.tmp
+          # 本机也需要更新 /etc/hosts — registry.internal → prod3 私网
+          echo "172.25.186.210 registry.internal  # → prod3 主控" >> /etc/hosts.tmp
           # 合并去重
           grep -v "registry.internal" /etc/hosts > /etc/hosts.clean || true
           cat /etc/hosts.clean /etc/hosts.tmp > /etc/hosts.new
@@ -83,14 +83,14 @@ jobs:
           echo "docker login done"
 
           # 更新本机 tenants.json
-          cp deploy/tenants.heyuan.json deploy/tenants.json
+          cp deploy/tenants.prod2.json deploy/tenants.json
           echo "local tenants.json updated"
 
-      - name: update hangzhou (47.118.16.235)
+      - name: update test (47.118.16.235)
         run: |
-          # 通过 SSH 在 hangzhou 上执行迁移
-          ssh -n -o BatchMode=yes root@47.118.16.235 "bash /root/code/sales-agent/scripts/migration-update-target.sh --target hangzhou" || {
-            echo "自动迁移 hangzhou 失败，手动步骤:"
+          # 通过 SSH 在 test 上执行迁移
+          ssh -n -o BatchMode=yes root@47.118.16.235 "bash /root/code/sales-agent/scripts/migration-update-target.sh --target test" || {
+            echo "自动迁移 test 失败，手动步骤:"
             echo "1. 更新 /etc/hosts: 47.120.55.219 registry.internal"
             echo "2. 从新主控 scp registry-ca.crt"
             echo "3. docker login registry.internal:5000"

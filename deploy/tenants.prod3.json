@@ -1,5 +1,5 @@
 {
-  "_comment": "heyuan (dev 机 47.120.50.181) 租户清单。纯开发用途，DingTalk 建议关闭。可扩展多租户。",
+  "_comment": "prod3 (主控 47.120.55.219) 租户清单。CI deploy-release 使用此文件。",
   "project_name": "sales-agent",
   "image": "registry.internal:5000/sales-agent:latest",
   "postgres_image": "registry.internal:5000/pgvector/pgvector:pg16",
@@ -9,17 +9,18 @@
     "password": "sales_agent_dev",
     "expose_host_port": false
   },
-  "traefik": { "enabled": false },
+  "traefik": { "enabled": true },
   "output": { "compose_file": "docker-compose.generated.yml" },
   "tenants": [
     {
       "id": "taishan",
-      "name": "Taishan (heyuan dev)",
-      "api_port": 8002,
+      "name": "Taishan (prod3 生产)",
+      "domain": "qiyelongxia.com.cn",
+      "api_port": 8001,
       "env_file": "secrets/taishan.env",
       "data_dir": "./data/taishan",
       "logs_dir": "./logs/taishan",
-      "roles": ["api", "worker"]
+      "roles": ["api", "stream", "worker"]
     }
   ]
 }

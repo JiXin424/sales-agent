@@ -2,7 +2,7 @@
 # ============================================================
 # Sales Agent — 新主控 Bootstrap 脚本
 # ============================================================
-# 在 47.120.55.219 (benji) 上以 root 执行，一键搭建：
+# 在 47.120.55.219 (prod3) 上以 root 执行，一键搭建：
 #   Gitea (web :3002) + 私有 Docker Registry (:5000) + act_runner
 #
 # 前置条件：
@@ -349,13 +349,13 @@ act_runner register \
   --no-interactive \
   --instance "http://127.0.0.1:${GITEA_WEB_PORT}" \
   --token "$RUNNER_TOKEN" \
-  --name "benji-host-runner" \
+  --name "prod3-host-runner" \
   --labels "$ACT_RUNNER_LABELS" 2>/dev/null || {
     # 旧版语法兼容
     act_runner register \
       --instance "http://127.0.0.1:${GITEA_WEB_PORT}" \
       --token "$RUNNER_TOKEN" \
-      --name "benji-host-runner" \
+      --name "prod3-host-runner" \
       --labels "$ACT_RUNNER_LABELS" 2>/dev/null || \
     err "act_runner 注册失败"
   }
@@ -365,7 +365,7 @@ log "创建 gitea-runner systemd 服务..."
 
 cat > /etc/systemd/system/gitea-runner.service <<SYSTEMD
 [Unit]
-Description=Gitea Act Runner (host mode, benji master)
+Description=Gitea Act Runner (host mode, prod3 master)
 After=network.target docker.service
 
 [Service]
@@ -399,11 +399,11 @@ log "=== 10/10 配置 hosts + Docker 证书 + 首次推送 ==="
 
 # 10a: /etc/hosts — 本机 registry.internal 指向自己
 if ! grep -q "registry.internal" /etc/hosts; then
-  echo "${LOOPBACK} registry.internal  # benji 新主控 (本地)" >> /etc/hosts
+  echo "${LOOPBACK} registry.internal  # prod3 主控 (本地)" >> /etc/hosts
   log "/etc/hosts 已添加: 127.0.0.1 registry.internal"
 else
   # 更新现有条目
-  sed -i "s/.*registry.internal.*/${LOOPBACK} registry.internal  # benji 新主控 (本地)/" /etc/hosts
+  sed -i "s/.*registry.internal.*/${LOOPBACK} registry.internal  # prod3 主控 (本地)/" /etc/hosts
   log "/etc/hosts 已更新 registry.internal → 127.0.0.1"
 fi
 

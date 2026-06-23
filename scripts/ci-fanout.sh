@@ -31,10 +31,10 @@ while IFS='|' read -r user host port dir method local name; do
   esac
   echo "=== [$name] $method @ ${user}@${host}:${dir} ==="
   if [ "$local" = "True" ]; then
-    ( REGISTRY_IMAGE="$IMAGE" bash "$script" $args )
+    REGISTRY_IMAGE="$IMAGE" bash "$script" $args || echo "⚠️  [$name] 部署失败，继续下一台" >&2
   else
     ssh -n -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p "$port" "${user}@${host}" \
-      "REGISTRY_IMAGE='${IMAGE}' bash '${script}' ${args}"
+      "REGISTRY_IMAGE='${IMAGE}' bash '${script}' ${args}" || echo "⚠️  [$name] SSH 部署失败，继续下一台" >&2
   fi
 done < /tmp/ci-targets.txt
 echo "fan-out 完成"

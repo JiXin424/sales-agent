@@ -27,16 +27,16 @@ PY
 while IFS='|' read -r user host port dir method local name; do
   [ -z "$host" ] && continue
   case "$method" in
-    deploy-release) script="scripts/deploy-release.sh"; args="--yes" ;;
-    image-retag)    script="scripts/deploy-image-retag.sh"; args="--yes" ;;
+    deploy-release) script="${dir}/scripts/deploy-release.sh"; args="--yes" ;;
+    image-retag)    script="${dir}/scripts/deploy-image-retag.sh"; args="--yes" ;;
     *) echo "未知 method: $method ($name),跳过" >&2; continue ;;
   esac
   echo "=== [$name] $method @ ${user}@${host}:${dir} ==="
   if [ "$local" = "True" ]; then
-    ( cd "$dir" && REGISTRY_IMAGE="$IMAGE" $script $args )
+    ( REGISTRY_IMAGE="$IMAGE" bash "$script" $args )
   else
     ssh -n -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p "$port" "${user}@${host}" \
-      "cd '${dir}' && REGISTRY_IMAGE='${IMAGE}' ${script} ${args}"
+      "REGISTRY_IMAGE='${IMAGE}' bash '${script}' ${args}"
   fi
 done < /tmp/ci-targets.txt
 echo "fan-out 完成"

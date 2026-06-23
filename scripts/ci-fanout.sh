@@ -31,6 +31,7 @@ while IFS='|' read -r user host port dir method local name; do
   esac
   echo "=== [$name] $method @ ${user}@${host}:${dir} ==="
   if [ "$local" = "True" ]; then
+    git -C "$REPO_DIR" pull origin main 2>/dev/null || true
     REGISTRY_IMAGE="$IMAGE" bash "$script" $args || echo "⚠️  [$name] 部署失败，继续下一台" >&2
   else
     # 先 git pull 更新部署脚本，再执行部署

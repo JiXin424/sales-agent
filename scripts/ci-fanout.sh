@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
 # CI fan-out:读 deploy/deploy-targets.json,按每台的 method 部署。
 # 用法: IMAGE=registry.internal:5000/sales-agent:<sha> scripts/ci-fanout.sh
-#
-# method:
-#   deploy-release → scripts/deploy-release.sh --yes  (生成式 compose,用于全新/隔离部署)
-#   image-retag    → scripts/deploy-image-retag.sh    (保留现有 compose+traefik,用于生产机)
-# local=true 的目标在本机直接执行(不 SSH)。
 set -euo pipefail
 IMAGE="${IMAGE:?需要 IMAGE 环境变量}"
 
-python3 - <<'PY' > /tmp/ci-targets.txt
-import json
-d = json.load(open("deploy/deploy-targets.json"))
+# 仓库根目录 = 本脚本所在目录的父目录
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+python3 - "$REPO_DIR/deploy/deploy-targets.json" <<'PY' > /tmp/ci-targets.txt
+import json, sys
+d = json.load(open(sys.argv[1]))
 for t in d.get("targets", []):
     print("|".join([
         t.get("user", "root"),

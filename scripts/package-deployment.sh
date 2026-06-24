@@ -54,7 +54,7 @@ fi
 mkdir -p "$OUTPUT_DIR"
 WORK_DIR="$(mktemp -d)"
 BUNDLE_DIR="$WORK_DIR/$PACKAGE_NAME"
-mkdir -p "$BUNDLE_DIR"/{deploy,scripts,docs/deploy,images,traefik/certs,data,logs,secrets}
+mkdir -p "$BUNDLE_DIR"/{deploy,scripts,docs/deploy,images,data,logs,secrets}
 
 copy_file() {
   src="$1"
@@ -76,7 +76,6 @@ copy_file scripts/check-tenant.sh scripts/check-tenant.sh
 copy_file scripts/check-all-tenants.sh scripts/check-all-tenants.sh
 copy_file scripts/deploy-release.sh scripts/deploy-release.sh
 copy_file scripts/init-db.sql scripts/init-db.sql
-copy_file traefik/traefik.yml traefik/traefik.yml
 copy_file docs/multitenant-deployment.md docs/deploy/multitenant-deployment.md
 copy_file docs/deploy/package-and-one-command-deploy.md docs/deploy/package-and-one-command-deploy.md
 if [ -f docs/deploy/clone-agent-instance.md ]; then
@@ -90,7 +89,7 @@ docker save "$IMAGE" -o "$BUNDLE_DIR/images/sales-agent-image.tar"
 
 if [ "$INCLUDE_BASE_IMAGES" -eq 1 ]; then
   echo "Saving base images if present locally"
-  for base_image in docker.1ms.run/pgvector/pgvector:pg16 traefik:v3.3; do
+  for base_image in docker.1ms.run/pgvector/pgvector:pg16; do
     if docker image inspect "$base_image" >/dev/null 2>&1; then
       safe_name="$(echo "$base_image" | tr '/:' '__')"
       docker save "$base_image" -o "$BUNDLE_DIR/images/${safe_name}.tar"

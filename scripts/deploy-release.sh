@@ -70,7 +70,7 @@ if ! docker compose version >/dev/null 2>&1; then
   exit 1
 fi
 
-mkdir -p deploy secrets data logs traefik/certs images
+mkdir -p deploy secrets data logs images
 
 # ──────────────────────────────────────────────
 # 2. Discover env files & select tenant(s)

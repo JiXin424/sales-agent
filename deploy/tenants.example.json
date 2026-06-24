@@ -2,7 +2,6 @@
   "project_name": "sales-agent",
   "image": "sales-agent:latest",
   "postgres_image": "docker.1ms.run/pgvector/pgvector:pg16",
-  "traefik_image": "traefik:v3.3",
   "database": {
     "name": "sales_agent",
     "user": "sales_agent",
@@ -10,9 +9,7 @@
   },
   "traefik": {
     "enabled": true,
-    "static_config": "./traefik/traefik.yml",
-    "dynamic_output": "./traefik/generated-dynamic.yml",
-    "certs_dir": "./traefik/certs"
+    "dynamic_output": "/root/code/traefik/dynamic.d/generated-sales-agent.yml"
   },
   "output": {
     "compose_file": "docker-compose.generated.yml"

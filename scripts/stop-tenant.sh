@@ -165,7 +165,7 @@ for tid in "${SELECTED[@]}"; do
   done
 done
 if [ "$STOP_DB_TRAEFIK" -eq 1 ]; then
-  echo "  shared: sales-agent-db, sales-agent-traefik"
+  echo "  shared: sales-agent-db"
 fi
 
 # ── Confirmation ──
@@ -193,7 +193,7 @@ for tid in "${SELECTED[@]}"; do
 done
 
 if [ "$STOP_DB_TRAEFIK" -eq 1 ]; then
-  for svc in sales-agent-db sales-agent-traefik; do
+  for svc in sales-agent-db; do
     if docker ps --format '{{.Names}}' 2>/dev/null | command grep -q "^${svc}$"; then
       echo "Stopping $svc"
       docker stop "$svc" 2>/dev/null || true

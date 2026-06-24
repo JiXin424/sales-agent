@@ -9,7 +9,10 @@
     "password": "sales_agent_dev",
     "expose_host_port": false
   },
-  "traefik": { "enabled": true },
+  "traefik": {
+    "enabled": true,
+    "dynamic_output": "/root/code/traefik/dynamic.d/generated-sales-agent.yml"
+  },
   "output": { "compose_file": "docker-compose.generated.yml" },
   "tenants": [
     {

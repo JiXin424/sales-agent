@@ -31,12 +31,12 @@ while IFS='|' read -r user host port dir method local name; do
   esac
   echo "=== [$name] $method @ ${user}@${host}:${dir} ==="
   if [ "$local" = "True" ]; then
-    git -C "$REPO_DIR" pull origin main 2>/dev/null || true
+    git -C "$REPO_DIR" stash 2>/dev/null; git -C "$REPO_DIR" fetch origin main && git -C "$REPO_DIR" reset --hard origin/main && echo "[fanout] git synced to $(git -C "$REPO_DIR" rev-parse --short HEAD)"
     REGISTRY_IMAGE="$IMAGE" bash "$script" $args || echo "⚠️  [$name] 部署失败，继续下一台" >&2
   else
-    # 先 git pull 更新部署脚本，再执行部署
+    # 先强制同步部署脚本（stash 本地修改避免 reset 失败），再执行部署
     ssh -n -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p "$port" "${user}@${host}" \
-      "git -C '${dir}' fetch origin main && git -C '${dir}' reset --hard origin/main 2>/dev/null; REGISTRY_IMAGE='${IMAGE}' bash '${script}' ${args}" \
+      "git -C '${dir}' stash 2>/dev/null; git -C '${dir}' fetch origin main && git -C '${dir}' reset --hard origin/main && echo '[fanout] git synced to' $(git -C '${dir}' rev-parse --short HEAD); REGISTRY_IMAGE='${IMAGE}' bash '${script}' ${args}" \
       || echo "⚠️  [$name] SSH 部署失败，继续下一台" >&2
   fi
 done < /tmp/ci-targets.txt

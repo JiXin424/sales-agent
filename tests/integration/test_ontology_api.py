@@ -73,3 +73,33 @@ async def test_ingest_reject_non_md(db_session, sample_tenant):
         )
     app.dependency_overrides.clear()
     assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_ingest_accepts_docx_pdf_pptx(db_session, sample_tenant):
+    """白名单接受 .docx/.pdf/.pptx（202），后台解析是 fire-and-forget。"""
+    from sales_agent.services.agent_migration import ensure_default_agent_for_tenant
+    agent = await ensure_default_agent_for_tenant(db_session, sample_tenant, "Test Tenant")
+    from sales_agent.main import app
+    from sales_agent.api.deps import get_db_session
+
+    async def _override_db():
+        yield db_session
+
+    app.dependency_overrides[get_db_session] = _override_db
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            f"/agents/{agent.id}/ontology/ingest",
+            files=[
+                ("files", ("r.docx", io.BytesIO(b"PK\x03\x04" + b"\x00" * 10), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")),
+                ("files", ("r.pdf", io.BytesIO(b"%PDF-1.4"), "application/pdf")),
+                ("files", ("r.pptx", io.BytesIO(b"PK\x03\x04" + b"\x00" * 10), "application/vnd.openxmlformats-officedocument.presentationml.presentation")),
+            ],
+        )
+    app.dependency_overrides.clear()
+    assert resp.status_code == 202
+    data = resp.json()
+    assert len(data) == 3
+    names = {d["filename"] for d in data}
+    assert names == {"r.docx", "r.pdf", "r.pptx"}

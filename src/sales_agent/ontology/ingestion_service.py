@@ -15,18 +15,45 @@ from sales_agent.ontology.schemas import EntityCandidate, FactCandidate, Ontolog
 
 
 def _read_content(path: Path) -> str:
-    """Read file content, using docling for binary office formats (.docx/.pdf/.pptx)."""
+    """Read file content. Binary office formats (.docx/.pdf/.pptx) are parsed into
+    text by lightweight libs (python-docx / pymupdf / python-pptx). Other files
+    (.md/.txt) are read as UTF-8.
+
+    Note: docling was the original choice but its torch-heavy dependency tree
+    (2.8GB+) would not install in the target environment (resolver thrash). These
+    lightweight libs cover text extraction for the LLM pipeline at a fraction of
+    the footprint."""
     ext = path.suffix.lower()
-    if ext in (".docx", ".pdf", ".pptx"):
+    if ext == ".docx":
         try:
-            from docling.document_converter import DocumentConverter
-            converter = DocumentConverter()
-            result = converter.convert(str(path))
-            return result.document.export_to_markdown()
+            from docx import Document
+            doc = Document(str(path))
+            return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
         except Exception:
-            raise RuntimeError(f"docling 转换失败：{path.name}")
-    else:
-        return path.read_text(encoding="utf-8")
+            raise RuntimeError(f"docx 解析失败：{path.name}")
+    if ext == ".pdf":
+        try:
+            import fitz  # pymupdf
+            parts: list[str] = []
+            with fitz.open(str(path)) as doc:
+                for page in doc:
+                    parts.append(page.get_text())
+            return "\n".join(parts)
+        except Exception:
+            raise RuntimeError(f"pdf 解析失败：{path.name}")
+    if ext == ".pptx":
+        try:
+            from pptx import Presentation
+            prs = Presentation(str(path))
+            texts: list[str] = []
+            for slide in prs.slides:
+                for shape in slide.shapes:
+                    if shape.has_text_frame:
+                        texts.append(shape.text_frame.text)
+            return "\n".join(texts)
+        except Exception:
+            raise RuntimeError(f"pptx 解析失败：{path.name}")
+    return path.read_text(encoding="utf-8")
 
 
 class ExtractorProtocol(Protocol):

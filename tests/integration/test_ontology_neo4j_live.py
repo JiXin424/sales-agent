@@ -211,3 +211,37 @@ async def test_live_real_llm_ingest_retrieve(tmp_path, db_session):
         async with neo_client.session() as s:
             await s.run("MATCH (n) WHERE n.tenant_id = $t DETACH DELETE n", t=tenant)
         await neo_client.close()
+
+
+@pytest.mark.asyncio
+async def test_live_docx_file_ingest(tmp_path, db_session):
+    """真实 .docx 文件 → _read_content(python-docx) → ingest → retrieve 端到端。
+    验证 docx 二进制能被解析成文本并走通图谱入库（用 FakeExtractor 隔离 LLM）。"""
+    try:
+        from docx import Document as DocxDoc
+    except ImportError:
+        pytest.skip("python-docx 未安装")
+
+    tenant = f"livedocx_{uuid.uuid4().hex[:8]}"
+    client = Neo4jClient(_config())
+    repo = OntologyRepository(client)
+    try:
+        path = tmp_path / "sample.docx"
+        doc = DocxDoc()
+        doc.add_paragraph("福多多提供员工福利产品。")
+        doc.save(str(path))
+
+        job, stats = await OntologyIngestionService(
+            db_session, repo, FakeEmbedding(), FakeExtractor()
+        ).ingest_paths(tenant_id=tenant, agent_id="agent1", paths=[path])
+
+        assert job.status == "completed"
+        assert stats.entities_created == 1
+        assert stats.facts_created == 1
+
+        retrieval = OntologyRetrievalService(repo, FakeEmbedding())
+        evidence = await retrieval.retrieve(tenant_id=tenant, agent_id="agent1", question="福利卡")
+        assert len(evidence.matched_entities) >= 1
+    finally:
+        await _cleanup(client, tenant)
+        await client.close()

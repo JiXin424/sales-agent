@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 from sales_agent.core.secret_resolver import resolve_secret, key_fingerprint, SecretResolutionError
 from sales_agent.llm import ModelProvider, OpenAICompatibleChat, OpenAICompatibleEmbedding
@@ -192,6 +192,29 @@ class TenantRuntime:
     def get_log_info(self) -> dict[str, Any]:
         """返回脱敏的日志信息。"""
         return self.get_debug_info()
+
+    # System env vars to exclude from config display (common Linux / Docker / Python noise).
+    _SYSTEM_ENV_KEYS: ClassVar[set[str]] = {
+        "PATH", "HOME", "USER", "HOSTNAME", "PWD", "SHLVL", "TERM",
+        "LANG", "LC_ALL", "TZ", "DEBIAN_FRONTEND",
+        "PYTHONPATH", "PYTHONUNBUFFERED", "PYTHONIOENCODING",
+        "PIP_REQUIRE_VIRTUALENV", "PIP_NO_CACHE_DIR",
+        "VIRTUAL_ENV", "CONDA_PREFIX",
+        "DOCKER_HOST", "DOCKER_CONFIG",
+        "HOSTNAME", "OLDPWD", "LS_COLORS", "which_declare",
+        "_", "BASH_FUNC",
+    }
+
+    def get_all_env_vars(self) -> dict[str, str]:
+        """返回所有非空的非系统环境变量（用于前端配置展示）。"""
+        result: dict[str, str] = {}
+        for key, value in sorted(os.environ.items()):
+            if not value:
+                continue
+            if key in self._SYSTEM_ENV_KEYS or key.startswith("BASH_FUNC_"):
+                continue
+            result[key] = value
+        return result
 
 
 # 全局单例

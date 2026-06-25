@@ -78,13 +78,65 @@ h1 { font-size: 27px; font-weight: 700; margin-bottom: 14px; letter-spacing: 1px
     overlay.classList.add('active');
   }
 
+  // 浏览器（非钉钉容器，如 PC 快捷入口跳出的 Chrome）里 JSAPI 不可用 → OAuth2 扫码免登。
+  function redirectToOAuth2() {
+    var clientId = '__APP_KEY__';
+    var redirectUri = encodeURIComponent(window.location.origin + '/integrations/dingtalk/oauth2-callback');
+    var state = action + ':' + tenantId;
+    show('即将跳转钉钉登录…', '');
+    window.location.href = 'https://login.dingtalk.com/oauth2/auth'
+      + '?redirect_uri=' + redirectUri
+      + '&client_id=' + encodeURIComponent(clientId)
+      + '&response_type=code&scope=openid&prompt=consent'
+      + '&state=' + encodeURIComponent(state);
+  }
+
   document.getElementById('startBtn').addEventListener('click', function () {
+    // UA 检测：非钉钉容器（PC 浏览器）→ OAuth2；钉钉容器（手机端 webview）→ JSAPI 流程
+    if (!/DingTalk/i.test(navigator.userAgent)) {
+      redirectToOAuth2();
+      return;
+    }
     show('正在呼叫 ' + label + '...', '');
 
-    dd.ready(function () {
+    // 超时兜底 + 阶段追踪：PC 端若 dd.config 未通过，requestAuthCode 会静默不回调。
+    var settled = false;
+    var stage = 'start';
+    var timer = setTimeout(function () {
+      if (!settled) {
+        settled = true;
+        show('呼叫超时（卡在阶段：' + stage + '）。请确认在钉钉客户端中打开本页、且应用域名已配置', 'err');
+      }
+    }, 10000);
+
+    function finishOk(msg) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      show('✅ ' + (msg || '已开始'), 'ok');
+      setTimeout(function () {
+        dd.ready(function () { dd.biz.navigation.close(); });
+      }, 900);
+    }
+    function finishErr(msg) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      console.log('[quick] finishErr:', msg);
+      show(msg, 'err');
+    }
+    function fmtErr(err) {
+      return (err && (err.errorCode || err.errCode || err.errorMessage || err.message))
+        || JSON.stringify(err);
+    }
+
+    function requestCode() {
+      stage = 'requestAuthCode';
+      console.log('[quick] requestAuthCode start, corpId=', corpId);
       dd.runtime.permission.requestAuthCode({
         corpId: corpId,
         onSuccess: function (result) {
+          stage = 'whoami';
           var url = '/integrations/dingtalk/whoami'
             + '?code=' + encodeURIComponent(result.code)
             + '&action=' + encodeURIComponent(action)
@@ -93,27 +145,55 @@ h1 { font-size: 27px; font-weight: 700; margin-bottom: 14px; letter-spacing: 1px
             .then(function (resp) { return resp.json(); })
             .then(function (data) {
               if (data.status === 'ok') {
-                show('✅ ' + (data.message || '已开始'), 'ok');
-                setTimeout(function () {
-                  dd.ready(function () { dd.biz.navigation.close(); });
-                }, 900);
+                finishOk(data.message);
               } else {
-                show('操作失败：' + (data.detail || JSON.stringify(data)), 'err');
+                finishErr('操作失败：' + (data.detail || JSON.stringify(data)));
               }
             })
             .catch(function (err) {
-              show('请求失败：' + err.message, 'err');
+              finishErr('请求失败：' + err.message);
             });
         },
         onFail: function (err) {
-          show('验证失败：' + (err.errorMessage || JSON.stringify(err)), 'err');
+          finishErr('授权失败 [' + fmtErr(err) + ']');
         }
       });
-    });
+    }
 
-    dd.error(function () {
-      show('请在钉钉客户端中打开此页面', 'err');
-    });
+    // 关键顺序：先取签名 → dd.config → 再注册 dd.ready/dd.error。
+    // PC 端 dd.ready 在 dd.config 完成后才触发；先注册 dd.ready 可能在 config
+    // 之前触发，导致 requestAuthCode 在未鉴权状态下调用、卡死。
+    var pageUrl = location.href.split('#')[0];
+    stage = 'fetch_config';
+    console.log('[quick] pageUrl for signing:', pageUrl);
+    fetch('/integrations/dingtalk/jsapi-config?url=' + encodeURIComponent(pageUrl))
+      .then(function (r) { return r.json(); })
+      .then(function (cfg) {
+        console.log('[quick] jsapi-config resp:', cfg);
+        if (!cfg || !cfg.signature) {
+          dd.ready(function () { requestCode(); });
+          return;
+        }
+        stage = 'dd_config';
+        dd.config({
+          agentId: cfg.agentId,
+          corpId: cfg.corpId,
+          timeStamp: cfg.timeStamp,
+          nonceStr: cfg.nonceStr,
+          signature: cfg.signature,
+          jsApiList: ['runtime.permission.requestAuthCode', 'biz.navigation.close']
+        });
+        dd.ready(function () { requestCode(); });
+        dd.error(function (err) {
+          console.log('[quick] dd.error:', err);
+          finishErr('钉钉鉴权失败 [' + fmtErr(err) + ']，请检查应用域名是否已在钉钉后台配置');
+        });
+      })
+      .catch(function (e) {
+        console.log('[quick] jsapi-config fetch failed:', e);
+        dd.ready(function () { requestCode(); });
+        dd.error(function () { requestCode(); });
+      });
   });
 })();
 </script>

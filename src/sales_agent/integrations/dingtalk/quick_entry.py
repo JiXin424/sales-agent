@@ -15,8 +15,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import logging
+import secrets
+import time
+from html import escape as _html_escape
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +48,69 @@ _DINGTALK_PLUGIN_QUERY_URL = "https://api.dingtalk.com/v1.0/robot/plugins/query"
 def _get_dingtalk_config() -> DingTalkConfig:
     """获取钉钉配置。"""
     return get_settings().dingtalk
+
+
+# ============================================================
+# JSAPI 鉴权（dd.config）—— PC 端必需
+# 背景：PC 钉钉调用任何 dd JSAPI（含 requestAuthCode）前必须先 dd.config 鉴权，
+# 否则回调不触发、页面卡在 loading（本仓库的历史 bug）。移动端无需 dd.config，
+# 但带上也不影响（官方双端通用写法）。jsapi_ticket 来自 oapi/get_jsapi_ticket。
+# ============================================================
+
+# jsapi_ticket 进程级缓存（taishan 单租户单应用，一个进程对应一份 ticket）
+_jsapi_ticket_cache: dict[str, Any] = {"ticket": "", "expires_at": 0.0}
+_jsapi_ticket_lock = asyncio.Lock()
+
+
+def sign_jsapi(jsapi_ticket: str, noncestr: str, timestamp: str, url: str) -> str:
+    """钉钉 JSAPI 签名（dd.config 用）。
+
+    签名串固定为（键按字典序、``noncestr``/``timestamp`` 全小写）::
+
+        jsapi_ticket={jsapi_ticket}&noncestr={noncestr}&timestamp={timestamp}&url={url}
+
+    取 SHA1 的小写十六进制。
+
+    Note:
+        ``url`` 必须是当前网页完整 URL 且不含 ``#`` 及之后部分，需与前端
+        ``dd.config`` 时所在页面 URL 严格一致（含 query string）。
+    """
+    # 用 "&".join 拼接，避免源码里出现 "&timestamp" 字面量被编辑器/实体解码
+    # 误转成乘号 ×（历史坑：&times -> ×），导致签名串字节错误、dd.config 静默失败。
+    raw = "&".join([
+        f"jsapi_ticket={jsapi_ticket}",
+        f"noncestr={noncestr}",
+        f"timestamp={timestamp}",
+        f"url={url}",
+    ])
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+async def _get_jsapi_ticket(access_token: str) -> str:
+    """获取（并内存缓存）钉钉 jsapi_ticket。
+
+    jsapi_ticket 有效期 7200s，提前 5 分钟刷新；并发刷新用锁串行化。
+    """
+    async with _jsapi_ticket_lock:
+        cached = _jsapi_ticket_cache
+        if cached["ticket"] and time.time() < cached["expires_at"] - 300:
+            return cached["ticket"]
+
+        url = f"https://oapi.dingtalk.com/get_jsapi_ticket?access_token={access_token}"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url)
+        if resp.status_code >= 400:
+            raise RuntimeError(f"get_jsapi_ticket HTTP {resp.status_code}: {resp.text[:300]}")
+        data = resp.json()
+        if data.get("errcode") not in (0, None):
+            raise RuntimeError(f"get_jsapi_ticket error: {data}")
+        ticket = data.get("ticket", "")
+        if not ticket:
+            raise RuntimeError(f"no ticket in get_jsapi_ticket response: {data}")
+        cached["ticket"] = ticket
+        cached["expires_at"] = time.time() + int(data.get("expires_in", 7200))
+        logger.info("DingTalk jsapi_ticket refreshed, expires_in=%ss", data.get("expires_in"))
+        return ticket
 
 
 # --- Action 配置 ---
@@ -146,6 +214,7 @@ async def dingtalk_quick_page(
     """
     config = _get_dingtalk_config()
     corp_id = config.corp_id or ""
+    app_key = config.app_key or ""  # OAuth2 client_id（AppKey 非机密，可下发前端）
 
     action_cfg = _QUICK_ENTRY_ACTIONS.get(action)
     if action_cfg and action_cfg.get("session_type"):
@@ -155,6 +224,7 @@ async def dingtalk_quick_page(
             raise HTTPException(status_code=500, detail="Trigger template not found")
         html = html_path.read_text(encoding="utf-8")
         html = html.replace("__CORP_ID__", corp_id)
+        html = html.replace("__APP_KEY__", app_key)
         html = html.replace("__ACTION__", action)
         html = html.replace("__LABEL__", action_cfg.get("label", action))
         html = html.replace("__SUBTITLE__", action_cfg.get("subtitle", ""))
@@ -168,8 +238,48 @@ async def dingtalk_quick_page(
 
     html = html_path.read_text(encoding="utf-8")
     html = html.replace("__CORP_ID__", corp_id)
+    html = html.replace("__APP_KEY__", app_key)
 
     return HTMLResponse(content=html)
+
+
+# ============================================================
+# 快捷入口收尾逻辑：识别到 staffId userId 后，建会话(多轮类) 或 发引导消息(普通类)
+# whoami (JSAPI 路径) 与 oauth2-callback (浏览器路径) 共用
+# ============================================================
+
+
+async def _fulfill_quick_action(
+    sender: Any,
+    dingtalk_user_id: str,
+    action: str,
+    action_config: dict[str, Any],
+    tenant_id: str,
+) -> dict[str, Any]:
+    """识别到 staffId userId 后的统一收尾。抛出异常由各端点转成 HTTP/HTML 响应。"""
+    session_type = action_config.get("session_type")
+    if session_type:
+        from sales_agent.coach.quick_session import start_session, label_of
+        from sales_agent.core.database import get_session_factory
+
+        factory = get_session_factory()
+        async with factory() as session:
+            first_reply = await start_session(
+                session,
+                tenant_id=tenant_id,
+                external_user_id=dingtalk_user_id,
+                session_type=session_type,
+            )
+            await session.commit()
+        title = label_of(session_type)
+        await sender.send_markdown(dingtalk_user_id, title, first_reply)
+        return {"status": "ok", "action": action, "message": f"{title}已开始，请在单聊里直接回复。"}
+
+    label = action_config["label"]
+    icon = action_config["message_icon"]
+    questions = action_config["questions"]
+    await sender.send_text(dingtalk_user_id, f"{icon} {label}\n\n{questions}")
+    return {"status": "ok", "action": action, "message": f"{label}引导消息已发送到你的钉钉单聊。"}
 
 
 # ============================================================
@@ -231,67 +341,203 @@ async def dingtalk_quick_whoami(
     if not dingtalk_user_id:
         raise HTTPException(status_code=401, detail="Could not resolve userId from authCode")
 
-    # 4. 多轮状态机类入口（小赢欣赏 / 卡点破框）：落库建会话 + 发首轮提问，
-    #    后续回复由 streaming_handler 顶部推进。普通入口仍发静态引导消息。
-    session_type = action_config.get("session_type")
-    if session_type:
-        from sales_agent.coach.quick_session import start_session, label_of
-        from sales_agent.core.database import get_session_factory
-
-        factory = get_session_factory()
-        try:
-            async with factory() as session:
-                first_reply = await start_session(
-                    session,
-                    tenant_id=tenant_id,
-                    external_user_id=dingtalk_user_id,
-                    session_type=session_type,
-                )
-                await session.commit()
-        except Exception as e:
-            logger.error("Failed to start quick session: %s", e, exc_info=True)
-            raise HTTPException(status_code=500, detail=f"Session start failed: {e}")
-
-        title = label_of(session_type)
-        try:
-            await sender.send_markdown(dingtalk_user_id, title, first_reply)
-        except Exception as e:
-            logger.error("Failed to send quick-entry first reply: %s", e, exc_info=True)
-            raise HTTPException(status_code=502, detail=f"Message send failed: {e}")
-
-        logger.info(
-            "DingTalk quick-entry session started: action=%s tenant=%s user=%s",
-            action, tenant_id, dingtalk_user_id,
-        )
-        return {
-            "status": "ok",
-            "action": action,
-            "message": f"{title}已开始，请在单聊里直接回复。",
-        }
-
-    # 4b. 普通入口：发送静态引导消息到用户钉钉单聊
-    label = action_config["label"]
-    icon = action_config["message_icon"]
-    questions = action_config["questions"]
-    message_text = f"{icon} {label}\n\n{questions}"
-
+    # 4. 收尾：建会话(多轮类) 或 发引导消息(普通类)。JSAPI 与 OAuth2 路径共用。
     try:
-        await sender.send_text(dingtalk_user_id, message_text)
+        result = await _fulfill_quick_action(sender, dingtalk_user_id, action, action_config, tenant_id)
     except Exception as e:
-        logger.error("Failed to send quick-entry message: %s", e, exc_info=True)
-        raise HTTPException(status_code=502, detail=f"Message send failed: {e}")
+        logger.error("Failed to fulfill quick-entry action=%s: %s", action, e, exc_info=True)
+        raise HTTPException(status_code=502, detail=f"Quick-entry failed: {e}")
 
     logger.info(
         "DingTalk quick-entry triggered: action=%s tenant=%s user=%s",
         action, tenant_id, dingtalk_user_id,
     )
+    return result
 
-    # 返回简单成功页面
+
+# ============================================================
+# GET /integrations/dingtalk/jsapi-config — 返回 dd.config 鉴权参数
+# ============================================================
+
+
+@router.get("/jsapi-config")
+async def dingtalk_jsapi_config(
+    url: str = Query(..., description="当前网页完整 URL（不含 # 及之后部分），前端用 encodeURIComponent 编码"),
+) -> dict[str, Any]:
+    """返回 PC 端 ``dd.config`` 所需的鉴权参数。
+
+    PC 钉钉调用任何 dd JSAPI（含 ``requestAuthCode``）前必须先 ``dd.config`` 鉴权，
+    否则回调不触发、H5 卡死在 loading。移动端 ``requestAuthCode`` 无需 ``dd.config``，
+    但带上 dd.config 也不影响（官方双端通用写法），故两个页面统一先取本端点再 dd.config。
+
+    返回 ``{agentId, corpId, timeStamp, nonceStr, signature}``，前端直接喂给 ``dd.config``。
+    需要先配置 ``DINGTALK_AGENT_ID``，并在钉钉开发者后台把 H5 域名加入应用服务器域名。
+    """
+    config = _get_dingtalk_config()
+    if not config.app_key or not config.app_secret:
+        raise HTTPException(status_code=503, detail="DingTalk credentials not configured")
+    if not config.agent_id:
+        raise HTTPException(
+            status_code=503,
+            detail="DINGTALK_AGENT_ID not configured (required for PC dd.config auth)",
+        )
+
+    access_token = await _get_access_token(config)
+    ticket = await _get_jsapi_ticket(access_token)
+
+    noncestr = secrets.token_hex(8)
+    timestamp = str(int(time.time()))
+    signature = sign_jsapi(ticket, noncestr, timestamp, url)
+
+    logger.info("DingTalk jsapi-config issued (agent=%s url=%s)", config.agent_id, url)
     return {
-        "status": "ok",
-        "action": action,
-        "message": f"{label}引导消息已发送到你的钉钉单聊。",
+        "agentId": config.agent_id,
+        "corpId": config.corp_id,
+        "timeStamp": timestamp,
+        "nonceStr": noncestr,
+        "signature": signature,
     }
+
+
+# ============================================================
+# GET /integrations/dingtalk/oauth2-callback — OAuth2 网页登录回调（PC 浏览器场景）
+# PC 钉钉点机器人快捷入口默认跳系统浏览器，那里没有 JSAPI 桥（notInDingTalk），
+# 只能走 OAuth2 扫码免登识别用户。前端 UA 检测到非钉钉容器时跳 login.dingtalk.com，
+# 用户授权后回跳到本端点，完成 authCode→userId→发消息。
+# ============================================================
+
+
+def _parse_oauth_state(state: str) -> tuple[str, str]:
+    """解析 OAuth2 state（格式 ``action:tenant_id``）。返回 (action, tenant_id)。"""
+    action, _sep, tenant_id = state.partition(":")
+    return action, tenant_id
+
+
+def _oauth_result_page(ok: bool, message: str) -> HTMLResponse:
+    """OAuth2 回调结果页。
+
+    成功：不停留——极简 ✅ 后自动 ``window.close()`` + 跳 ``dingtalk://`` 弹回钉钉。
+    失败：显示错误信息（供排查，不自动关闭）。
+    """
+    if ok:
+        return _oauth_success_page(message)
+
+    color = "#ff4d4f"
+    template = (
+        '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1.0">'
+        "<title>快捷入口</title><style>"
+        "*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}"
+        "html,body{height:100%;background:linear-gradient(160deg,#1a1a2e 0%,#16213e 100%);"
+        'color:#fff;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}'
+        ".wrap{min-height:100vh;display:flex;flex-direction:column;align-items:center;"
+        "justify-content:center;text-align:center;padding:28px}"
+        ".box{font-size:64px;margin-bottom:18px}"
+        ".msg{font-size:17px;line-height:1.7;color:__COLOR__;max-width:420px;word-break:break-word}"
+        ".hint{margin-top:22px;font-size:13px;color:#6b7898}"
+        '</style></head><body><div class="wrap">'
+        '<div class="box">❌</div><div class="msg">__MESSAGE__</div>'
+        '<div class="hint">此页面可以关闭</div>'
+        "</div></body></html>"
+    )
+    html = template.replace("__COLOR__", color).replace("__MESSAGE__", _html_escape(message))
+    return HTMLResponse(content=html)
+
+
+def _oauth_success_page(message: str) -> HTMLResponse:
+    """登录+发送成功页：极简 ✅，加载即尝试关闭浏览器页并弹回钉钉客户端。
+
+    - ``window.close()``：浏览器只允许关闭"脚本打开"的标签页，钉钉拉起的 Chrome
+      标签通常关不掉，所以只作兜底（部分环境/历史栈为空时可关）。
+    - ``dingtalk://`` AppLink：可靠地唤起/置前钉钉客户端（Chrome 会先弹"打开钉钉?"确认）。
+    - 手动链接兜底：自动跳转被拦截时用户可点。
+    """
+    template = (
+        '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1.0">'
+        "<title>已发送</title><style>"
+        "*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}"
+        "html,body{height:100%;background:linear-gradient(160deg,#1a1a2e 0%,#16213e 100%);"
+        'color:#fff;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}'
+        ".wrap{min-height:100vh;display:flex;flex-direction:column;align-items:center;"
+        "justify-content:center;text-align:center;padding:28px}"
+        ".box{font-size:60px;margin-bottom:14px}"
+        ".msg{font-size:17px;color:#52c41a;max-width:420px}"
+        ".hint{margin-top:12px;font-size:13px;color:#6b7898}"
+        "a.link{margin-top:18px;font-size:14px;color:#5b8cff}"
+        '</style></head><body onload="goback()"><div class="wrap">'
+        '<div class="box">✅</div><div class="msg">__MESSAGE__</div>'
+        '<div class="hint">正在返回钉钉…</div>'
+        '<a class="link" id="backlink" href="#">若未自动返回，点此打开钉钉</a>'
+        "</div><script>"
+        "function goback(){"
+        "var dl='dingtalk://dingtalkclient';"
+        "var a=document.getElementById('backlink');if(a)a.href=dl;"
+        "try{window.opener=null;window.open('','_self');window.close();}catch(e){}"
+        "setTimeout(function(){try{window.location.href=dl;}catch(e){}},300);"
+        "}"
+        "</script></body></html>"
+    )
+    return HTMLResponse(content=template.replace("__MESSAGE__", _html_escape(message)))
+
+
+@router.get("/oauth2-callback", response_class=HTMLResponse)
+async def dingtalk_oauth2_callback(
+    authCode: str = Query("", description="OAuth2 回调授权码（login.dingtalk.com 回传）"),
+    code: str = Query("", description="个别版本回调用 code"),
+    state: str = Query("", description="action:tenant_id"),
+) -> HTMLResponse:
+    """OAuth2 网页登录回调（PC 浏览器场景）。
+
+    链路：authCode → userAccessToken → unionId → staffId userId（getbyunionid，需 qyapi_get_member）
+         → 复用 _fulfill_quick_action 发消息/建会话。
+
+    前置：钉钉后台「登录配置」已把本回调地址注册为重定向域名，且应用已开通 qyapi_get_member。
+    """
+    config = _get_dingtalk_config()
+    auth_code = authCode or code
+    if not auth_code:
+        return _oauth_result_page(False, "缺少授权码（authCode），请重新从钉钉入口进入。")
+
+    action, tenant_id = _parse_oauth_state(state)
+    if not action or not tenant_id:
+        return _oauth_result_page(False, f"参数解析失败（state={state or '空'}）。")
+
+    action_config = _QUICK_ENTRY_ACTIONS.get(action)
+    if action_config is None:
+        return _oauth_result_page(False, f"未知的入口类型：{action}")
+
+    # 租户校验
+    try:
+        from sales_agent.core.tenant_runtime import get_tenant_runtime
+        runtime = get_tenant_runtime()
+        if tenant_id != runtime.tenant_id:
+            return _oauth_result_page(False, "租户不匹配。")
+    except Exception:
+        return _oauth_result_page(False, f"租户不存在：{tenant_id}")
+
+    from sales_agent.integrations.dingtalk.message_sender import DingTalkMessageSender
+    sender = DingTalkMessageSender(config)
+
+    # authCode → staffId userId（OAuth2 三步）
+    try:
+        user_id = await sender.get_userid_by_oauth2_code(auth_code)
+    except Exception as e:
+        logger.error("OAuth2 resolve userId failed: %s", e, exc_info=True)
+        return _oauth_result_page(False, f"身份解析失败：{e}")
+
+    # 收尾：建会话(多轮类) 或 发引导消息(普通类)
+    try:
+        await _fulfill_quick_action(sender, user_id, action, action_config, tenant_id)
+    except Exception as e:
+        logger.error("OAuth2 fulfill failed action=%s: %s", action, e, exc_info=True)
+        return _oauth_result_page(False, f"发送失败：{e}")
+
+    logger.info(
+        "DingTalk quick-entry (OAuth2) triggered: action=%s tenant=%s user=%s",
+        action, tenant_id, user_id,
+    )
+    return _oauth_result_page(True, f"{action_config.get('label', action)}已发送到你的钉钉单聊，请查收。")
 
 
 # ============================================================

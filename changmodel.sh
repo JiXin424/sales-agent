@@ -77,9 +77,13 @@ CONFIG_FOUR='{
 
 CONFIG_FIVE='{
   "env": {
-    "ANTHROPIC_BASE_URL": "https://api.kimi.com/coding/",
-    "ANTHROPIC_AUTH_TOKEN": "sk-kimi-UhdCk5lsn6edgk56JaJonNGhFLagIVm1KkJzDfbLvEGiK9ahS09rA80YJamoPX5p",
-    "ANTHROPIC_MODEL": "kimi-k2.7-code"
+    "ANTHROPIC_AUTH_TOKEN": "f30719ed796f4a2c9d20938887379050.zBLCaDJODnjsb4e9",
+    "ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
+    "API_TIMEOUT_MS": "3000000",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": 1,
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5-turbo",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.1",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.2"
   }
 }'
 
@@ -91,7 +95,8 @@ echo "  1) glm(泰山-new)"
 echo "  2) 火山引擎(gtj)"
 echo "  3) glm(泰山-团队)"
 echo "  4) deepseek(gtj)"
-echo "  5) kimi"
+
+echo "  5) glm(刘英文)"
 echo ""
 echo "============================================"
 read -p "请选择 [1-5]: " choice
@@ -101,7 +106,7 @@ case $choice in
     2) apply_config "火山引擎(gtj)" "$CONFIG_TWO" ;;
     3) apply_config "glm(泰山-团队)" "$CONFIG_THREE" ;;
     4) apply_config "deepseek(gtj)" "$CONFIG_FOUR" ;;
-    5) apply_config "kimi" "$CONFIG_FIVE" ;;
+    5) apply_config "glm(泰山-new) 百万上下文[1m]" "$CONFIG_FIVE" ;;
     *)
         echo "无效选择，退出。"
         exit 1

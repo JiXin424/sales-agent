@@ -207,3 +207,74 @@ class DingTalkMessageSender:
 
         logger.info("Resolved DingTalk userId from authCode: %s", userid)
         return {"userid": userid, "name": result.get("name", "")}
+
+    # --- Quick Entry (PC 浏览器场景): OAuth2 网页登录 authCode → staffId userId ---
+    #
+    # 背景：PC 钉钉点机器人快捷入口默认跳系统浏览器打开 H5，浏览器里没有钉钉 JSAPI 桥
+    # （报 notInDingTalk / 5010），requestAuthCode 走不通。浏览器里识别用户只能走 OAuth2
+    # 网页登录。但 OAuth2 只拿到 unionId，而发消息的 batchSend 要 staffId 格式 userId，
+    # 需用 topapi/user/getbyunionid 转换（应用需开通 qyapi_get_member 成员信息读权限）。
+
+    async def get_userid_by_oauth2_code(self, auth_code: str) -> str:
+        """OAuth2 网页登录 authCode → staffId 格式 userId。
+
+        链路：authCode → userAccessToken (oauth2/userAccessToken)
+              → unionId (contact/users/me，用 userAccessToken)
+              → staffId userId (topapi/user/getbyunionid，用 app access_token + qyapi_get_member)
+
+        返回的 userId 与 JSAPI requestAuthCode 路径格式一致，可直接用于 batchSend。
+        """
+        # 1. authCode → userAccessToken
+        token_resp = await self._client.post(
+            "https://api.dingtalk.com/v1.0/oauth2/userAccessToken",
+            json={
+                "clientId": self._config.app_key,
+                "clientSecret": self._config.app_secret,
+                "code": auth_code,
+                "grantType": "authorization_code",
+            },
+        )
+        if token_resp.status_code >= 400:
+            raise ValueError(
+                f"oauth2/userAccessToken HTTP {token_resp.status_code}: {token_resp.text[:400]}"
+            )
+        tdata = token_resp.json()
+        user_access_token = tdata.get("accessToken", "")
+        if not user_access_token:
+            raise ValueError(f"No accessToken in oauth2/userAccessToken: {token_resp.text[:400]}")
+
+        # 2. userAccessToken → unionId。
+        #    兜底：部分版本 userAccessToken 响应直接带 unionId，可省去 contact/users/me
+        #    （该接口用「用户级 token」调用，权限点与应用级 token 不同，常因缺权限 403）。
+        union_id = tdata.get("unionId") or tdata.get("unionid") or ""
+        if not union_id:
+            me_resp = await self._client.get(
+                "https://api.dingtalk.com/v1.0/contact/users/me",
+                headers={"x-acs-dingtalk-access-token": user_access_token},
+            )
+            if me_resp.status_code >= 400:
+                # 把钉钉原始错误体完整抛出（含具体错误码，定位缺哪个权限）
+                raise ValueError(
+                    f"contact/users/me HTTP {me_resp.status_code}: {me_resp.text[:400]}"
+                )
+            union_id = me_resp.json().get("unionId") or me_resp.json().get("unionid") or ""
+            if not union_id:
+                raise ValueError(f"No unionId in contact/users/me: {me_resp.text[:400]}")
+
+        # 3. unionId → staffId userId（需 qyapi_get_member 权限）
+        app_token = await self._get_token()
+        u_resp = await self._client.post(
+            f"https://oapi.dingtalk.com/topapi/user/getbyunionid?access_token={app_token}",
+            json={"unionid": union_id},
+        )
+        if u_resp.status_code >= 400:
+            raise ValueError(f"getbyunionid HTTP {u_resp.status_code}: {u_resp.text[:400]}")
+        u_data = u_resp.json()
+        if u_data.get("errcode") not in (0, None):
+            raise ValueError(f"getbyunionid failed: {u_data}")
+        user_id = (u_data.get("result") or {}).get("userid", "")
+        if not user_id:
+            raise ValueError(f"No userid from getbyunionid: {u_data}")
+
+        logger.info("Resolved DingTalk userId via OAuth2: %s (unionId=%s)", user_id, union_id)
+        return user_id

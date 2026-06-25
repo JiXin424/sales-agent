@@ -29,13 +29,17 @@ ONTOLOGY_VECTOR_FALLBACK=conservative
 
 ## First Validation
 
-1. 启动 Postgres（与原流程一致）。
-2. 单独启动 Neo4j，或通过本地 compose 启动（如已配置）。
-3. 启动应用。
-4. 打开 `/agents/{agent_id}/knowledge`。
-5. 查看 ontology 状态面板。
-6. 用一份小的 Markdown 样本启动入库任务。
-7. 提一个 `knowledge_qa` 问题验证端到端链路。
+1. 启动 Postgres 与 Neo4j：
+   ```bash
+   docker compose up -d postgres
+   docker compose --profile ontology up -d neo4j   # 仅 ontology_neo4j 模式需要
+   ```
+   本地 compose 的 Neo4j 默认账密为 `neo4j / neo4jtest123`（见 `docker-compose.yml` 的 `NEO4J_AUTH`；生产请在 `secrets/*.env` 用 `NEO4J_PASSWORD` 覆盖）。浏览器可视化：<http://localhost:7474>，Bolt：`bolt://localhost:7687`。
+2. 启动应用。
+3. 打开 `/agents/{agent_id}/knowledge`。
+4. 查看 ontology 状态面板。
+5. 用一份小的 Markdown 样本启动入库任务。
+6. 提一个 `knowledge_qa` 问题验证端到端链路。
 
 ## Expected Behavior
 
@@ -54,3 +58,13 @@ ONTOLOGY_VECTOR_FALLBACK=conservative
 | GET | `/agents/{id}/ontology/jobs` | 入库任务列表与冲突统计 |
 
 `/ready` 在 `ontology_neo4j` 模式下会附带 Neo4j 就绪信息（`legacy_rag` 模式行为不变）。
+
+## Live 集成测试（真实 Neo4j）
+
+单元测试用 fake 仓库覆盖逻辑；要验证真实 Neo4j 的 Cypher、向量索引与 schema 启动初始化，启动上述 compose neo4j 后：
+
+```bash
+NEO4J_LIVE_TEST=1 .venv/bin/pytest tests/integration/test_ontology_neo4j_live.py -v
+```
+
+覆盖：schema 启动初始化（约束 + 向量索引）、真实 ingest → 检索 → 回答端到端、保守向量回退（图查不到时回退到向量并带回来源）。默认在 CI 跳过（无 Neo4j）。

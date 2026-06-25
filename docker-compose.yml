@@ -39,6 +39,33 @@ services:
       retries: 5
 
   # ============================================================
+  # Neo4j — 本体知识引擎（可选）
+  # 仅当 KNOWLEDGE_ENGINE=ontology_neo4j 时需要。
+  #   docker compose --profile ontology up -d neo4j
+  # app 容器内连接地址：bolt://neo4j:7687（账密见 NEO4J_AUTH，需与 secrets/*.env 的 NEO4J_* 一致）
+  # 宿主机可视化：http://localhost:7474
+  # ============================================================
+  neo4j:
+    image: docker.1ms.run/neo4j:5
+    profiles: ["ontology"]
+    container_name: sales-agent-neo4j
+    restart: unless-stopped
+    environment:
+      # 测试用密码（>=8 字符满足 Neo4j 5.x 要求）；生产请在 secrets/*.env 覆盖
+      NEO4J_AUTH: neo4j/neo4jtest123
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4jdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p neo4jtest123 'RETURN 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # ============================================================
   # 单容器模式（all-in-one，向后兼容）
   # ============================================================
 
@@ -209,3 +236,4 @@ services:
 
 volumes:
   pgdata:
+  neo4jdata:

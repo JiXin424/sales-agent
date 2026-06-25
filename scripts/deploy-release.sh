@@ -656,17 +656,46 @@ PY
 # 6. Port conflict detection
 # ──────────────────────────────────────────────
 python3 - "$FILTERED_INVENTORY" <<'PY'
-import json, pathlib, socket, sys
+import json, pathlib, socket, subprocess, sys
+
+PROJECT_CONTAINER_PREFIX = "sales-agent-"
+
+def _docker_port_holder(port: int):
+    """发布该宿主机端口的 docker 容器名；无或查询失败均为 None。"""
+    try:
+        out = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}\t{{.Ports}}"],
+            capture_output=True, text=True, timeout=5, check=False,
+        ).stdout
+    except Exception:
+        return None
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        name, ports = parts[0], parts[1]
+        # 形如 0.0.0.0:8003->8000/tcp
+        if f":{port}->" in ports:
+            return name
+    return None
 
 def port_in_use(port: int) -> bool:
-    """Check if a TCP port is already bound on this host."""
+    """端口是否被「外部进程」占用（真冲突）。
+
+    被本项目自身容器（sales-agent-*）占用的端口不算冲突——那正是本次
+    `docker compose up` 即将重建的容器，重新部署时应原地复用，不要往上顶。
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.5)
         try:
             s.bind(("0.0.0.0", port))
-            return False
+            return False  # 没人占用 → 空闲
         except OSError:
-            return True
+            pass  # 有东西占用，继续判断是谁
+    holder = _docker_port_holder(port)
+    if holder is not None and holder.startswith(PROJECT_CONTAINER_PREFIX):
+        return False  # 本项目自身容器（重新部署目标）→ 非冲突
+    return True  # 外部进程 / 未知占用者 → 当作冲突，保守顶端口
 
 data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 ports_seen: set[int] = set()

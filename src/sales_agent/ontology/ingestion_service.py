@@ -43,6 +43,7 @@ class OntologyIngestionService:
         tenant_id: str,
         agent_id: str | None,
         paths: list[Path],
+        progress_callback=None,
     ) -> tuple[IngestionJob, OntologyIngestionStats]:
         job = IngestionJob(
             tenant_id=tenant_id,
@@ -58,7 +59,8 @@ class OntologyIngestionService:
         stats = OntologyIngestionStats(documents_seen=len(paths))
         for path in paths:
             try:
-                await self._ingest_one(job, stats, tenant_id, agent_id, path)
+                await self._ingest_one(job, stats, tenant_id, agent_id, path,
+                                       progress_callback=progress_callback)
                 stats.documents_ingested += 1
             except Exception as exc:  # noqa: BLE001
                 stats.errors.append({"file": str(path), "error": str(exc)})
@@ -86,13 +88,32 @@ class OntologyIngestionService:
         tenant_id: str,
         agent_id: str | None,
         path: Path,
+        progress_callback=None,
     ) -> None:
         job.stage = "parsed"
+        if progress_callback:
+            await progress_callback(job.stage, {
+                "entities_created": stats.entities_created,
+                "entities_merged": stats.entities_merged,
+                "facts_created": stats.facts_created,
+                "facts_active": stats.facts_active,
+                "facts_pending_review": stats.facts_pending_review,
+                "conflicts_created": stats.conflicts_created,
+            })
         content = path.read_text(encoding="utf-8")
         source_document_id = generate_id()
         now = utcnow()
 
         job.stage = "extracting_entities"
+        if progress_callback:
+            await progress_callback(job.stage, {
+                "entities_created": stats.entities_created,
+                "entities_merged": stats.entities_merged,
+                "facts_created": stats.facts_created,
+                "facts_active": stats.facts_active,
+                "facts_pending_review": stats.facts_pending_review,
+                "conflicts_created": stats.conflicts_created,
+            })
         entities = await self.extractor.extract_entities(content)
         embeddings = await self.embedding_model.embed([
             f"{e.name} {json.dumps(e.properties, ensure_ascii=False)}" for e in entities
@@ -123,8 +144,26 @@ class OntologyIngestionService:
                 stats.entities_merged += 1
 
         job.stage = "extracting_facts"
+        if progress_callback:
+            await progress_callback(job.stage, {
+                "entities_created": stats.entities_created,
+                "entities_merged": stats.entities_merged,
+                "facts_created": stats.facts_created,
+                "facts_active": stats.facts_active,
+                "facts_pending_review": stats.facts_pending_review,
+                "conflicts_created": stats.conflicts_created,
+            })
         facts = await self.extractor.extract_facts(content, entities)
         job.stage = "writing_neo4j"
+        if progress_callback:
+            await progress_callback(job.stage, {
+                "entities_created": stats.entities_created,
+                "entities_merged": stats.entities_merged,
+                "facts_created": stats.facts_created,
+                "facts_active": stats.facts_active,
+                "facts_pending_review": stats.facts_pending_review,
+                "conflicts_created": stats.conflicts_created,
+            })
         for fact in facts:
             subject = name_to_entity.get(fact.subject_name)
             if subject is None:

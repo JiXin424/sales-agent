@@ -38,12 +38,38 @@ async def readiness_check():
             "deployment_mode": runtime.deployment_mode,
         }
 
-    return {
+    ready_detail = {
         "status": "ready",
         "tenant_id": runtime.tenant_id,
         "deployment_mode": runtime.deployment_mode,
         "debug": runtime.get_debug_info(),
     }
+
+    # 仅在启用 ontology_neo4j 知识引擎时附加 ontology 就绪信息。
+    # legacy_rag 模式下 /ready 行为与原先完全一致（不触发任何 neo4j 连接）。
+    from sales_agent.core.config import get_settings
+
+    settings = get_settings()
+    if settings.ontology.knowledge_engine == "ontology_neo4j":
+        neo4j_ready = False
+        try:
+            from sales_agent.ontology.neo4j_client import Neo4jClient
+
+            client = Neo4jClient(settings.neo4j)
+            if client.enabled:
+                neo4j_ready, _detail = await client.verify_connectivity()
+                await client.close()
+            else:
+                neo4j_ready = False
+        except Exception:  # noqa: BLE001 — /ready 绝不抛出
+            neo4j_ready = False
+        ready_detail["ontology"] = {
+            "knowledge_engine": settings.ontology.knowledge_engine,
+            "neo4j_configured": bool(settings.neo4j.uri),
+            "neo4j_ready": neo4j_ready,
+        }
+
+    return ready_detail
 
 
 @router.get("/diagnostics/model")

@@ -24,6 +24,7 @@ import AgentSettingsPage from './pages/Agents/AgentSettingsPage';
 import AgentCloneWizardPage from './pages/Agents/AgentCloneWizardPage';
 import AgentConversationsPage from './pages/Agents/AgentConversationsPage';
 import AgentKnowledgePage from './pages/Agents/AgentKnowledgePage';
+import OntologyExplorerPage from './pages/Agents/OntologyExplorerPage';
 import AgentFeedbackPage from './pages/Agents/AgentFeedbackPage';
 import CoachDashboardPage from './pages/Coach/CoachDashboardPage';
 import CoachUsersPage from './pages/Coach/CoachUsersPage';
@@ -39,8 +40,8 @@ import AgentEvalRunsPage from './pages/Agents/AgentEvalRunsPage';
 import AgentReviewQueuePage from './pages/Agents/AgentReviewQueuePage';
 import { useInstanceAgent } from './hooks/useInstanceAgent';
 
-/** 根路径 boot：解析当前实例的唯一 Agent，直进其 overview（单 Agent 模式）。 */
-function InstanceEntry() {
+/** 根路径 boot：解析当前实例的唯一 Agent，重定向到其指定子页（单 Agent 模式）。 */
+function InstanceEntry({ to = 'overview' }: { to?: string }) {
   const { data, isLoading, isError } = useInstanceAgent();
   if (isLoading) return <div style={{ padding: 48, textAlign: 'center' }}>加载实例 Agent…</div>;
   if (isError || !data) {
@@ -50,23 +51,26 @@ function InstanceEntry() {
       </div>
     );
   }
-  return <Navigate to={`/agents/${data.id}/overview`} replace />;
+  return <Navigate to={`/agents/${data.id}/${to}`} replace />;
 }
 
 export default function App() {
   return (
     <Routes>
-      {/* 根 + /dashboard → 当前实例唯一 Agent 的 overview（无列表）。 */}
+      {/* 根 → 当前实例 Agent 概览（带 AgentLayout 侧边栏）。
+          /dashboard → 同实例的运营面板（同样在 AgentLayout 内，带侧边栏）。 */}
       <Route path="/" element={<InstanceEntry />} />
-      <Route path="/dashboard" element={<InstanceEntry />} />
+      <Route path="/dashboard" element={<InstanceEntry to="dashboard" />} />
 
       {/* One Agent, one management shell. No list, no switcher. */}
       <Route path="/agents/:agentId" element={<AgentLayout />}>
         <Route index element={<Navigate to="overview" replace />} />
+        <Route path="dashboard" element={<DashboardPage />} />
         <Route path="overview" element={<AgentOverviewPage />} />
         <Route path="setup" element={<AgentSetupPage />} />
         <Route path="clone" element={<AgentCloneWizardPage />} />
         <Route path="knowledge" element={<AgentKnowledgePage />} />
+        <Route path="ontology" element={<OntologyExplorerPage />} />
         <Route path="prompts" element={<AgentPromptsPage />} />
         <Route path="channels" element={<AgentChannelsPage />} />
         <Route path="conversations" element={<AgentConversationsPage />} />

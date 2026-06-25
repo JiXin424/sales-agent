@@ -11,6 +11,7 @@ export const queryKeys = {
 
   // Admin
   conversations: (tid: string, filters?: Record<string, unknown>) => ['conversations', tid, filters] as const,
+  messageCount: (tid: string) => ['messageCount', tid] as const,
   conversation: (tid: string, id: string) => ['conversation', tid, id] as const,
   runDetail: (tid: string, runId: string) => ['runDetail', tid, runId] as const,
   runSteps: (tid: string, runId: string) => ['runSteps', tid, runId] as const,
@@ -29,6 +30,10 @@ export const queryKeys = {
   // Knowledge
   ingestionJobs: (tid: string, filters?: Record<string, unknown>) => ['ingestionJobs', tid, filters] as const,
   ingestionJob: (tid: string, jobId: string) => ['ingestionJob', tid, jobId] as const,
+
+  // Ontology Explorer（本体探索器）
+  ontologyStatus: (agentId: string) => ['ontology-status', agentId] as const,
+  ontologyStats: (agentId: string) => ['ontology-stats', agentId] as const,
 
   // Feedback
   feedback: (tid: string, filters?: Record<string, unknown>) => ['feedback', tid, filters] as const,

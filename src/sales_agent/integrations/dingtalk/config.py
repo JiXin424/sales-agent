@@ -16,7 +16,7 @@ class DingTalkConfig(BaseModel):
 
     凭证通过环境变量注入，不在 YAML 中存储：
     DINGTALK_MESSAGE_MODE, DINGTALK_CORP_ID, DINGTALK_APP_KEY, DINGTALK_APP_SECRET,
-    DINGTALK_ROBOT_CODE, DINGTALK_ENCRYPT_TOKEN, DINGTALK_AES_KEY
+    DINGTALK_ROBOT_CODE, DINGTALK_ENCRYPT_TOKEN, DINGTALK_AES_KEY, DINGTALK_AGENT_ID
 
     Stream 模式（默认）：常驻 WebSocket 连接，不需要公网回调 URL。
     HTTP 模式：钉钉推送事件到 callback_path。
@@ -29,6 +29,7 @@ class DingTalkConfig(BaseModel):
     app_key: str = ""
     app_secret: str = ""
     robot_code: str = ""
+    agent_id: str = ""  # 应用 agentId，PC 端 dd.config 鉴权必需
     encrypt_token: str = ""
     aes_key: str = ""
     callback_path: str = "/integrations/dingtalk/events"

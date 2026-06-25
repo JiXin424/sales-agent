@@ -97,6 +97,24 @@ class LoggingConfig(BaseModel):
     redact_sensitive_text: bool = False
 
 
+class OntologyConfig(BaseModel):
+    """Ontology knowledge engine config."""
+
+    knowledge_engine: str = "legacy_rag"  # legacy_rag | ontology_neo4j
+    vector_fallback: str = "conservative"
+
+
+class Neo4jConfig(BaseModel):
+    """Neo4j connection and visualization config."""
+
+    uri: str = ""
+    user: str = ""
+    password: str = ""
+    database: str = "neo4j"
+    visual_url: str = ""
+    connection_timeout_seconds: float = 5.0
+
+
 class AppConfig(BaseModel):
     """应用全局配置。"""
 
@@ -106,6 +124,8 @@ class AppConfig(BaseModel):
     # 前端静态文件目录（打进镜像时为 /app/console/dist）。
     # 为空字符串时不托管前端（dev 模式由 vite 自行服务）。
     console_dist_dir: str = ""
+    # 数据文件存储目录（上传文件、临时文件等）。为空时使用代码仓库下的 data/。
+    data_dir: str = ""
 
     VALID_ROLES: ClassVar[tuple[str, ...]] = ("all", "api", "stream", "worker")
 
@@ -133,6 +153,8 @@ class Settings(BaseModel):
     logging: LoggingConfig = LoggingConfig()
     latency: LatencyConfig = LatencyConfig()
     path_router: PathRouterConfig = PathRouterConfig()
+    ontology: OntologyConfig = OntologyConfig()
+    neo4j: Neo4jConfig = Neo4jConfig()
 
     # 延迟导入避免循环依赖
     @property
@@ -205,6 +227,7 @@ class Settings(BaseModel):
             "app_key": os.getenv("DINGTALK_APP_KEY"),
             "app_secret": os.getenv("DINGTALK_APP_SECRET"),
             "robot_code": os.getenv("DINGTALK_ROBOT_CODE"),
+            "agent_id": os.getenv("DINGTALK_AGENT_ID"),
             "encrypt_token": os.getenv("DINGTALK_ENCRYPT_TOKEN"),
             "aes_key": os.getenv("DINGTALK_AES_KEY"),
             "card_template_id": os.getenv("DINGTALK_CARD_TEMPLATE_ID"),
@@ -242,6 +265,27 @@ class Settings(BaseModel):
             val = raw.get("dingtalk", {}).get(int_key)
             if isinstance(val, str):
                 raw.setdefault("dingtalk", {})[int_key] = int(val)
+
+        # 环境变量覆盖 ontology 配置
+        knowledge_engine = os.getenv("KNOWLEDGE_ENGINE")
+        if knowledge_engine:
+            raw.setdefault("ontology", {})["knowledge_engine"] = knowledge_engine
+
+        ontology_vector_fallback = os.getenv("ONTOLOGY_VECTOR_FALLBACK")
+        if ontology_vector_fallback:
+            raw.setdefault("ontology", {})["vector_fallback"] = ontology_vector_fallback
+
+        # 环境变量覆盖 neo4j 配置
+        neo4j_env = {
+            "uri": os.getenv("NEO4J_URI"),
+            "user": os.getenv("NEO4J_USER"),
+            "password": os.getenv("NEO4J_PASSWORD"),
+            "database": os.getenv("NEO4J_DATABASE"),
+            "visual_url": os.getenv("NEO4J_VISUAL_URL"),
+        }
+        neo4j_overrides = {k: v for k, v in neo4j_env.items() if v}
+        if neo4j_overrides:
+            raw.setdefault("neo4j", {}).update(neo4j_overrides)
 
         instance = cls(**raw)
         # 构造 DingTalkConfig 并设置到 instance

@@ -52,6 +52,92 @@
 
 ---
 
+## PC 端成功方案（2026-06-17，OAuth2 网页免登）— sales-agent / qiyelongxia
+
+> 本节为 **sales-agent** 项目（域名 `qiyelongxia.com.cn`、机器人 `dingwfixvrzcdnaekder`、模块 `src/sales_agent/integrations/dingtalk/`）。手机端仍走上方「最终成功方案」的 JSAPI `requestAuthCode`，本节专门解决 **PC 端**。
+
+### 背景：为什么 PC 不能复用 JSAPI
+
+PC 钉钉点机器人快捷入口**强制跳系统浏览器**（Chrome/Edge）打开 H5，浏览器里没有钉钉 JSAPI 桥（console 报 `[DINGTALK-JSAPI] ERROR 4040 notInDingTalk` + `5010 JsBridge initialization failed`，且出现 Vue devtools 的 `installHook.js` 即铁证在普通浏览器里），`dd.config`/`requestAuthCode` 全部不可用。试过的无效方案：
+
+- `dd.config` 鉴权 → 浏览器里 JSAPI 桥根本不存在，`dd.config` 直接炸（不是签名/域名问题）。
+- pcUrl 用 `dingtalk://dingtalkclient/page/link?url=...` 想强制侧边栏内嵌 → 钉钉 API 接受（`plugins/set` 返 true）但 **PC 客户端不认，照样跳浏览器**。
+
+→ 浏览器里识别用户**只能走 OAuth2 网页扫码登录**。
+
+### 完整链路
+
+```
+PC 钉钉点「教练模式」快捷入口
+  → 钉钉跳系统浏览器打开 cocah.html
+  → 点「访前准备教练」→ JS 检测 UA 非 DingTalk
+  → 跳转 https://login.dingtalk.com/oauth2/auth
+       ?redirect_uri=https://qiyelongxia.com.cn/integrations/dingtalk/oauth2-callback
+       &client_id=<AppKey>  &response_type=code  &scope=openid  &prompt=consent
+       &state=pre_visit_prepare:taishan
+  → 用户扫码/登录（已登录钉钉网页则自动）
+  → 钉钉回跳 GET /integrations/dingtalk/oauth2-callback?authCode=xxx&state=pre_visit_prepare:taishan
+  → 后端 get_userid_by_oauth2_code(authCode):
+       1. authCode    → userAccessToken  POST  api.dingtalk.com/v1.0/oauth2/userAccessToken   {clientId,clientSecret,code,grantType=authorization_code}
+       2. userAccessToken → unionId       GET   api.dingtalk.com/v1.0/contact/users/me         Header: x-acs-dingtalk-access-token=<userAccessToken>
+       3. unionId     → staffId userId   POST  oapi.dingtalk.com/topapi/user/getbyunionid     {unionid}   （用「应用级」access_token）
+  → _fulfill_quick_action(userId) → send_text(普通入口) / start_session(多轮入口)
+  → 机器人向用户单聊发消息
+  → 浏览器返回极简 ✅ 页，加载即 `window.close()` + 跳 `dingtalk://dingtalkclient` 弹回钉钉
+```
+
+> **成功页 UX（实测）**：`dingtalk://dingtalkclient`（**不带外链 url**）能可靠置前钉钉客户端。⚠️ 切勿用 `dingtalk://dingtalkclient/page/link?url=<https外链>`——钉钉会把那个 url 当外链甩到**系统浏览器新开标签**。`window.close()` 在 Chrome 里关不掉"非脚本打开"的标签（钉钉拉起的 Chrome 标签关不掉），故 ✅ 页标签会留存、需手动关；失败时仍返回带错误信息的页面供排查。
+
+### 权限点（两个，缺一不可，且是不同权限）
+
+| 步骤 | 接口 | token 类型 | 所需权限点 | 缺时报错 |
+|------|------|-----------|-----------|---------|
+| 2 | `contact/users/me` | **用户级** userAccessToken | **`Contact.User.Read`**（通讯录个人信息读）| `403 Forbidden.AccessDenied.AccessTokenPermissionDenied`，body 里 `requiredScopes:["Contact.User.Read"]` |
+| 3 | `topapi/user/getbyunionid` | **应用级** access_token | `qyapi_get_member`（成员信息读）| `errcode 88 / subcode 60011` |
+
+> **关键认知**：用户级 token 和应用级 token 的权限是**两套**。`contact/users/me` 用用户级 token 调、认 `Contact.User.Read`；`getbyunionid` 用应用级 token 调、认 `qyapi_get_member`。只开一个会分别 403 / 60011。
+> **排查技巧**：`contact/users/me` 403 时务必把响应体完整抛出，`accessdenieddetail.requiredScopes` 会直接点名缺哪个 scope，不用猜。
+
+### 关键配置
+
+| 配置项 | 位置 | 值 |
+|--------|------|-----|
+| 权限 `qyapi_get_member` | 开发者后台 → 应用 → 权限管理 → 通讯录管理 | 成员信息读（应用级 token 用）|
+| 权限 `Contact.User.Read` | 同上 | 通讯录个人信息读（用户级 token 用）|
+| OAuth2 回调域名 | 开发者后台 → 应用 → 登录配置 → 重定向 URL | `https://qiyelongxia.com.cn/integrations/dingtalk/oauth2-callback` |
+| env | `secrets/taishan.env` | `DINGTALK_APP_KEY/SECRET`（=OAuth2 的 client_id/client_secret）|
+
+### 涉及的文件（sales-agent）
+
+| 文件 | 作用 |
+|------|------|
+| `src/sales_agent/integrations/dingtalk/quick_entry.py` | `GET /oauth2-callback`（authCode→发消息，返回 HTML 结果页）+ `_fulfill_quick_action`（whoami 与 oauth2-callback 共用收尾）+ `_parse_oauth_state`/`_oauth_result_page`；`/quick` 渲染时下发 `__APP_KEY__`（=client_id，AppKey 非机密）|
+| `src/sales_agent/integrations/dingtalk/message_sender.py` | `DingTalkMessageSender.get_userid_by_oauth2_code(authCode)`：上面三步换出 staffId userId，每步错误都把钉钉响应体带进异常 |
+| `static/cocah.html`、`static/quick_trigger.html` | UA 检测分流：非 DingTalk → `redirectToOAuth2`；DingTalk → JSAPI 流程 |
+| `tests/unit/dingtalk/test_quick_entry_oauth2.py` | `_parse_oauth_state` / `_oauth_result_page` 单测（7 例）|
+
+### 前端 UA 分流（手机/PC 共用一份 H5）
+
+```js
+// 点击时
+if (!/DingTalk/i.test(navigator.userAgent)) {
+  redirectToOAuth2(action);   // PC 浏览器 → 跳 login.dingtalk.com
+  return;
+}
+// 钉钉容器（手机端 webview）→ JSAPI requestAuthCode 流程（不变）
+```
+
+### 部署
+
+改 `quick_entry.py` / `message_sender.py` / 两个 HTML 后：
+```
+docker build -t sales-agent:latest .
+docker compose --profile taishan-split up -d --force-recreate taishan-api
+```
+（HTML 与 `/oauth2-callback` 端点都由 `taishan-api` 提供，`taishan-stream` 不涉及。容器代码是 COPY 进镜像、非挂载，只 restart 不生效。）
+
+---
+
 ## 走过的弯路
 
 ### 弯路 1：Cool App vs Quick Entry 混淆
@@ -88,6 +174,13 @@
 | `oapi/asyncsend_v2` | `Invalid arguments:agent_id` — agent_id 获取困难 |
 
 **结论**：OAuth2 无法获得旧版 userId，这条路彻底不通。
+
+> **❌ 2026-06-17 纠正：这个结论是错的，OAuth2 能走通。** 当时是三重误判叠加：
+> 1. **端点名拼错**：试的是 `topapi/v2/user/getbyunionid`（多了 `/v2/`）、`user/getbyunionid`（缺 `/topapi/`）、`getuseridbyunionid`（旧名）——**正确端点是 `topapi/user/getbyunionid`（无 `/v2/`）**，errcode=0、往返一致（已实测）。
+> 2. **缺权限**：`contact/users/me`（OAuth2 拿 unionId 那步）要的是 `Contact.User.Read`（用户级 token），不是 `qyapi_get_member`（应用级 token），当时两个都没开。
+> 3. 把"端点名错 + 缺权限"导致的报错误判成了"接口废弃"。
+>
+> 正确的 PC 端 OAuth2 完整链路见上方「**PC 端成功方案（2026-06-17）**」，已实测跑通。
 
 ### 弯路 4：JSAPI 最初不工作
 

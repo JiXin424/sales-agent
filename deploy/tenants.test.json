@@ -9,6 +9,11 @@
     "password": "sales_agent_dev",
     "expose_host_port": false
   },
+  "neo4j": {
+    "enabled": true,
+    "image": "registry.internal:5000/neo4j:5",
+    "expose_ports": false
+  },
   "traefik": { "enabled": false },
   "output": { "compose_file": "docker-compose.generated.yml" },
   "tenants": [

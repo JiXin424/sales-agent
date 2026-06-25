@@ -140,3 +140,23 @@ class TestIngestionJob:
         result = await db_session.execute(stmt)
         found = result.scalar_one()
         assert found.id == job.id
+
+
+def test_ingestion_job_accepts_ontology_metadata():
+    from sales_agent.models.ingestion import IngestionJob
+
+    job = IngestionJob(
+        tenant_id="t1",
+        agent_id="a1",
+        engine="ontology_neo4j",
+        stage="extracting_entities",
+        entities_created=2,
+        facts_created=3,
+        conflicts_created=1,
+    )
+    assert job.agent_id == "a1"
+    assert job.engine == "ontology_neo4j"
+    assert job.stage == "extracting_entities"
+    assert job.entities_created == 2
+    assert job.facts_created == 3
+    assert job.conflicts_created == 1

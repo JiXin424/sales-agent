@@ -38,6 +38,20 @@ async def lifespan(app: FastAPI):
     # 初始化数据库
     await init_db()
 
+    # Bootstrap Neo4j ontology schema (constraints + vector index) when enabled.
+    # 仅在启用 ontology_neo4j 引擎且配置了 Neo4j 时执行；失败仅告警，不阻断启动。
+    if _settings.ontology.knowledge_engine == "ontology_neo4j" and _settings.neo4j.uri:
+        from sales_agent.ontology.neo4j_client import Neo4jClient
+        from sales_agent.ontology.schema import ensure_ontology_schema
+        neo_client = Neo4jClient(_settings.neo4j)
+        try:
+            await ensure_ontology_schema(neo_client)
+            logger.info("Neo4j ontology schema ensured")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Neo4j ontology schema bootstrap failed: %s", exc)
+        finally:
+            await neo_client.close()
+
     # 加载 TenantRuntime 并做启动校验
     runtime = get_tenant_runtime()
     errors = runtime.validate_startup()

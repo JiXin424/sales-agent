@@ -20,7 +20,7 @@ ONTOLOGY_VECTOR_FALLBACK=conservative
 
 | 变量 | 说明 |
 |------|------|
-| `KNOWLEDGE_ENGINE` | 知识引擎类型，`legacy`（默认 chunk RAG）或 `ontology_neo4j` |
+| `KNOWLEDGE_ENGINE` | 知识引擎类型，`legacy_rag`（默认 chunk RAG）或 `ontology_neo4j` |
 | `NEO4J_URI` | Neo4j Bolt 连接地址 |
 | `NEO4J_USER` / `NEO4J_PASSWORD` | Neo4j 认证 |
 | `NEO4J_DATABASE` | Neo4j 数据库名（默认 `neo4j`） |
@@ -53,4 +53,4 @@ ONTOLOGY_VECTOR_FALLBACK=conservative
 | POST | `/agents/{id}/ontology/ingest` | 启动入库任务 |
 | GET | `/agents/{id}/ontology/jobs` | 入库任务列表与冲突统计 |
 
-`/ready` 在 `ontology_neo4j` 模式下会附带 Neo4j 就绪信息（legacy 模式行为不变）。
+`/ready` 在 `ontology_neo4j` 模式下会附带 Neo4j 就绪信息（`legacy_rag` 模式行为不变）。

@@ -797,8 +797,14 @@ export FRONTEND_IMAGE
 # ──────────────────────────────────────────────
 python3 scripts/render-multitenant-deploy.py "$FILTERED_INVENTORY" --compose-out "$COMPOSE_FILE"
 
+# 若存在共享 Neo4j 凭证文件，注入给 compose 的 ${NEO4J_PASSWORD} 插值。
+ENV_FILE_ARGS=()
+if [ -f "secrets/neo4j.env" ]; then
+  ENV_FILE_ARGS+=(--env-file secrets/neo4j.env)
+fi
+
 echo "Starting services with $COMPOSE_FILE"
-docker compose -f "$COMPOSE_FILE" up -d
+docker compose -f "$COMPOSE_FILE" "${ENV_FILE_ARGS[@]}" up -d
 
 # ──────────────────────────────────────────────
 # 10. Auto-create tenant DB records

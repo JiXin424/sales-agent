@@ -78,9 +78,13 @@ mkdir -p deploy secrets data logs images
 # 2. Discover env files & select tenant(s)
 # ──────────────────────────────────────────────
 discover_env_files() {
-  find secrets/ -maxdepth 1 -name "*.env" -print0 2>/dev/null | sort -z | while IFS= read -r -d '' f; do
-    basename "$f"
-  done
+  # secrets/example.env is the committed (git-tracked) template. It holds no
+  # real credentials and must never be deployed, so it is excluded by its
+  # reserved name. Real tenant files keep the form secrets/<tenant-id>.env.
+  find secrets/ -maxdepth 1 -type f -name "*.env" ! -name "example.env" -print0 2>/dev/null \
+    | sort -z | while IFS= read -r -d '' f; do
+        basename "$f"
+      done
 }
 
 AVAILABLE_ENVS=()
@@ -89,9 +93,10 @@ while IFS= read -r f; do
 done < <(discover_env_files)
 
 if [ ${#AVAILABLE_ENVS[@]} -eq 0 ]; then
-  echo "ERROR: No .env files found in secrets/" >&2
-  echo "Create one from deploy/tenant.env.example:" >&2
-  echo "  cp deploy/tenant.env.example secrets/<tenant-id>.env" >&2
+  echo "ERROR: No tenant .env files found in secrets/" >&2
+  echo "Create one from the committed template (example.env is never deployed):" >&2
+  echo "  cp secrets/example.env secrets/<tenant-id>.env" >&2
+  echo "  chmod 600 secrets/<tenant-id>.env" >&2
   exit 1
 fi
 

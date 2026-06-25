@@ -332,23 +332,30 @@ docker compose up -d postgres
 
 ### 生产部署 — Dedicated Mode（多租户，每租户独立容器）
 
-```bash
-# 1. 为每个租户创建 .env 文件
-cp secrets/taishan.env.example secrets/taishan.env
-# 编辑 secrets/taishan.env 填入密钥和配置
+仓库内置一份**已纳入 git 追踪的模板** `secrets/example.env`（仅此一个文件在 `secrets/` 下被追踪，
+真实租户 env 仍被 `.gitignore` 忽略）。
 
-cp secrets/tenant-b.env.example secrets/tenant-b.env
+```bash
+# 1. 从模板为每个租户创建 .env 文件（example.env 本身永远不会被部署）
+cp secrets/example.env secrets/taishan.env
+# 编辑 secrets/taishan.env 填入密钥和配置（替换所有 <...> 占位符）
+
+cp secrets/example.env secrets/tenant-b.env
 # 编辑 secrets/tenant-b.env
 
 chmod 600 secrets/*.env
 
-# 2. 启动指定租户的 Agent 实例
-docker compose --profile taishan up -d
-docker compose --profile tenant-b up -d
+# 2. 运行部署脚本：自动发现 secrets/*.env，箭头键选择租户（或 --env / --yes）
+scripts/deploy-release.sh
+#    - 交互式菜单自动排除 example.env 模板
+#    - 新租户自动登记到 deploy/tenants.json（确认后），分配空闲端口
+#    - 校验占位符 / 端口冲突 → 渲染 compose → 起服务 → 健康检查
+
+# 单租户免确认：   scripts/deploy-release.sh --env taishan.env
+# CI 全量部署：    scripts/deploy-release.sh --yes
 
 # 3. 检查状态
-curl http://localhost:8101/ready   # 租户 A
-curl http://localhost:8102/ready   # 租户 B
+scripts/check-all-tenants.sh deploy/tenants.json
 ```
 
 ### Key 轮换
@@ -625,5 +632,5 @@ PYTHONPATH=src pytest tests/integration/test_pilot_api.py -v
 
 | 日期 | 摘要 |
 |------|------|
-| [2026-06-25](changelog/2026-06-25.md) | Neo4j 本体知识引擎（ontology_neo4j）：图检索 + 保守向量回退 + 高风险人工复核；双租户 dedicated 部署；前端容器化（每租户 nginx SPA）；4000 运营面板新增「环境配置」卡片（`GET /instance/config`，敏感字段点击揭示+复制）；「本体探索」三栏调试页（检索过程/问答/完整上下文，SSE 流式） |
+| [2026-06-25](changelog/2026-06-25.md) | Neo4j 本体知识引擎（ontology_neo4j）：图检索 + 保守向量回退 + 高风险人工复核；双租户 dedicated 部署；前端容器化（每租户 nginx SPA）；4000 运营面板新增「环境配置」卡片（`GET /instance/config`，敏感字段点击揭示+复制）；「本体探索」三栏调试页（检索过程/问答/完整上下文，SSE 流式）；部署脚本完善：`secrets/example.env` 模板纳入 git 追踪（`.gitignore` 改 `secrets/*` + `!example.env` 反例），`deploy-release.sh` 租户发现自动排除模板、交互式箭头键选择租户 |
 | [2026-06-22](changelog/2026-06-22.md) | Prompt 全层解耦到 DB 版本管理 + 网页端「当前生效」总览直接编辑 |

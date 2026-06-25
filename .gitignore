@@ -1,7 +1,11 @@
-# Secrets — 绝不提交
+# Secrets — 真实租户凭证绝不提交
 .env
 *.env
-secrets/
+# Ignore everything inside secrets/, but keep the committed template.
+# NOTE: must use `secrets/*` (not `secrets/`); a fully-ignored directory
+# cannot have individual files re-included by `!` later.
+secrets/*
+!secrets/example.env
 
 # Python
 __pycache__/

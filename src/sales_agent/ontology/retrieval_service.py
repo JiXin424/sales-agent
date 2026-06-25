@@ -44,7 +44,18 @@ class OntologyRetrievalService:
                 "limit": 5,
             })
             vector_used = True
-            matched_entities.extend([self._node(row.get("e")) for row in vector_rows if row.get("e")])
+            for row in vector_rows:
+                if row.get("e"):
+                    matched_entities.append(self._node(row.get("e")))
+                for f in (row.get("facts") or []):
+                    if f:
+                        facts.append(self._node(f))
+                for ev in (row.get("evidence") or []):
+                    if ev:
+                        evidence.append(self._node(ev))
+                for d in (row.get("documents") or []):
+                    if d:
+                        documents.append(self._node(d))
 
         return GraphEvidence(
             ontology_intent="entity_info",

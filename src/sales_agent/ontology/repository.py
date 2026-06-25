@@ -99,10 +99,19 @@ def vector_query_statement() -> str:
     return """
     CALL db.index.vector.queryNodes('entity_embedding_vector', $limit, $embedding)
     YIELD node, score
-    WHERE node.tenant_id = $tenant_id
-      AND node.status = 'active'
-      AND ($agent_id IS NULL OR node.agent_id IS NULL OR node.agent_id = $agent_id)
-    RETURN node AS e, score
+    WITH node AS e, score
+    WHERE e.tenant_id = $tenant_id
+      AND e.status = 'active'
+      AND ($agent_id IS NULL OR e.agent_id IS NULL OR e.agent_id = $agent_id)
+    OPTIONAL MATCH (e)-[:SUBJECT_OF]->(f:Fact)
+      WHERE f.status = 'active'
+        AND ($agent_id IS NULL OR f.agent_id IS NULL OR f.agent_id = $agent_id)
+    OPTIONAL MATCH (f)-[:SUPPORTED_BY]->(ev:Evidence)-[:FROM]->(d:SourceDocument)
+    WITH e, score,
+         collect(DISTINCT f) AS facts,
+         collect(DISTINCT ev) AS evidence,
+         collect(DISTINCT d) AS documents
+    RETURN e, score, facts, evidence, documents
     ORDER BY score DESC
     """
 

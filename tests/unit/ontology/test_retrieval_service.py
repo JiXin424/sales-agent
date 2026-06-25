@@ -13,7 +13,13 @@ class FakeRepository:
 
     async def query_vector(self, params):
         self.vector_called = True
-        return [{"e": {"id": "vec1", "name": "向量实体", "type": "Product"}, "score": 0.91}]
+        return [{
+            "e": {"id": "vec1", "name": "向量实体", "type": "Product"},
+            "score": 0.91,
+            "facts": [{"id": "f1", "predicate": "description", "value": "员工福利"}],
+            "evidence": [{"excerpt": "原文片段"}],
+            "documents": [{"id": "d1", "title": "sample.md"}],
+        }]
 
 
 class FakeEmbedding:
@@ -37,3 +43,7 @@ async def test_vector_fallback_used_when_graph_empty():
     evidence = await service.retrieve(tenant_id="t1", agent_id="a1", question="福利卡")
     assert evidence.vector_fallback_used is True
     assert repo.vector_called is True
+    # 向量回退也必须带回来源（facts/evidence/documents），不能只返回实体
+    assert len(evidence.matched_entities) == 1
+    assert any(f.get("predicate") == "description" for f in evidence.facts_used)
+    assert evidence.source_documents[0]["title"] == "sample.md"

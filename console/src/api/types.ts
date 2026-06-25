@@ -275,6 +275,40 @@ export interface IngestionJobItem {
   updated_at: string;
 }
 
+// --- Ontology (Neo4j knowledge engine) ---
+
+export interface OntologyStatus {
+  knowledge_engine: string;
+  ontology_status: 'not_configured' | 'ready' | 'degraded' | 'failed';
+  neo4j_configured: boolean;
+  neo4j_ready: boolean;
+  visual_url: string;
+}
+
+export interface OntologyJob {
+  id: string;
+  tenant_id: string;
+  agent_id: string | null;
+  engine: string;
+  status: string;
+  stage: string;
+  documents_seen: number;
+  documents_ingested: number;
+  entities_created: number;
+  entities_merged: number;
+  facts_created: number;
+  facts_active: number;
+  facts_pending_review: number;
+  facts_rejected: number;
+  conflicts_created: number;
+  warnings: string[];
+  errors: Record<string, unknown>[];
+  error_summary: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
 // --- Model Calls ---
 
 export interface ModelCallItem {

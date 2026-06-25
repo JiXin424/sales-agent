@@ -124,6 +124,8 @@ class AppConfig(BaseModel):
     # 前端静态文件目录（打进镜像时为 /app/console/dist）。
     # 为空字符串时不托管前端（dev 模式由 vite 自行服务）。
     console_dist_dir: str = ""
+    # 数据文件存储目录（上传文件、临时文件等）。为空时使用代码仓库下的 data/。
+    data_dir: str = ""
 
     VALID_ROLES: ClassVar[tuple[str, ...]] = ("all", "api", "stream", "worker")
 

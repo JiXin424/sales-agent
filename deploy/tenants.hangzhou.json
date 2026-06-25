@@ -1,0 +1,30 @@
+{
+  "_comment": "杭州 (47.118.16.235) 无源码目标租户清单。CI image-deploy 用。env_file 在目标机本地，主控 render 时用 --skip-validation。",
+  "project_name": "sales-agent",
+  "image": "registry.internal:5000/sales-agent:latest",
+  "postgres_image": "registry.internal:5000/pgvector/pgvector:pg16",
+  "database": {
+    "name": "sales_agent",
+    "user": "sales_agent",
+    "password": "sales_agent_dev",
+    "expose_host_port": false
+  },
+  "neo4j": {
+    "enabled": true,
+    "image": "registry.internal:5000/neo4j:5",
+    "expose_ports": false
+  },
+  "traefik": { "enabled": false },
+  "output": { "compose_file": "docker-compose.generated.yml" },
+  "tenants": [
+    {
+      "id": "fuduoduo",
+      "name": "fuduoduo (杭州)",
+      "api_port": 8103,
+      "env_file": "secrets/fuduoduo.env",
+      "data_dir": "./data/fuduoduo",
+      "logs_dir": "./logs/fuduoduo",
+      "roles": ["api", "stream", "worker"]
+    }
+  ]
+}

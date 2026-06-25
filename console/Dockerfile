@@ -13,6 +13,11 @@ COPY package.json package-lock.json* ./
 RUN npm config set registry https://registry.npmmirror.com \
     && npm ci || npm install
 COPY . ./
+# nginx 独立前端模式：API 走 /api 前缀，由 nginx 代理到后端（见 nginx.conf.template）。
+# .env.production 默认留空（供「后端镜像内嵌 SPA 同源」模式用）；此处用 ENV 覆盖为 /api，
+# dotenv 不会覆盖已存在的 process.env，故该值在 npm run build 时生效。
+ARG VITE_API_BASE_URL=/api
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 RUN npm run build
 
 # Stage 2: nginx serve

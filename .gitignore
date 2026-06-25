@@ -63,6 +63,10 @@ console/tsconfig.tsbuildinfo
 coach_mode.png
 cocah.mp4
 cocah.html
+# src/static/ 下的正式副本是运行时必需资源(register 按钮图标、教练视频页),
+# 必须入仓——裸名会递归排除它们,导致 CI 镜像缺失→register/教练页 500。用 ! 反例放行(同 secrets/example.env)。
+!src/sales_agent/integrations/dingtalk/static/coach_mode.png
+!src/sales_agent/integrations/dingtalk/static/cocah.html
 
 # Traefik 运行时凭证/状态(绝不提交)
 traefik/acme.json

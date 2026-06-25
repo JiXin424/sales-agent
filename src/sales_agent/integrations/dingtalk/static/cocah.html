@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>COCOA H5</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%;
+  background: #000;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.page {
+  position: relative;
+  width: 100%;
+  max-width: 750px;
+  margin: 0 auto;
+}
+
+.page video {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.slice {
+  position: absolute;
+  left: 10%;
+  width: 80%;
+  z-index: 10;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.slice::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0);
+  transition: background 0.15s ease;
+  pointer-events: none;
+}
+
+.slice.flash::after {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.slice-1 {
+  top: calc(1050 / 1920 * 100%);
+  height: calc(400 / 1920 * 100%);
+}
+
+.slice-2 {
+  top: calc(1450 / 1920 * 100%);
+  height: calc(350 / 1920 * 100%);
+}
+
+.overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.6); z-index: 100;
+  justify-content: center; align-items: center;
+}
+.overlay.active { display: flex; }
+.box {
+  background: #fff; color: #333; border-radius: 14px;
+  padding: 24px 28px; max-width: 300px; width: 80%;
+  text-align: center; font-size: 15px; line-height: 1.6;
+}
+.box.ok { color: #52c41a; } .box.err { color: #ff4d4f; }
+</style>
+</head>
+<body>
+
+<div class="page" id="page">
+  <video
+    id="bgVideo"
+    src="static/cocah1.mp4"
+    autoplay
+    muted
+    loop
+    playsinline
+    webkit-playsinline
+    x5-video-player-type="h5"
+    x5-video-player-fullscreen="true"
+    preload="auto"
+  ></video>
+
+  <button class="slice slice-1" data-label="切片1 · 1050-1450" data-index="1"></button>
+  <button class="slice slice-2" data-label="切片2 · 1450-1800" data-index="2"></button>
+</div>
+
+<div class="overlay" id="overlay">
+  <div class="box" id="msg">正在验证身份...</div>
+</div>
+
+<script src="https://g.alicdn.com/dingding/dingtalk-jsapi/3.0.25/dingtalk.open.js"></script>
+<script>
+(function () {
+  var params = new URLSearchParams(location.search);
+  // 路径形如 /integrations/dingtalk/t/{tenant}/quick；提取 base=/integrations/dingtalk/t/{tenant}
+  var pathM = location.pathname.match(/^(\/integrations\/dingtalk\/t\/[^/]+)/);
+  var base = pathM ? pathM[1] : '/integrations/dingtalk';
+  var corpId = '__CORP_ID__';
+
+  var video = document.getElementById('bgVideo');
+  var overlay = document.getElementById('overlay');
+  var msgEl = document.getElementById('msg');
+
+  video.play().catch(function () {
+    document.addEventListener('touchstart', function () { video.play(); }, { once: true });
+  });
+
+  // 切片1 → 访前准备，切片2 → 访后复盘
+  var SLICE_ACTIONS = {
+    '1': { action: 'pre_visit_prepare', label: '访前准备' },
+    '2': { action: 'post_visit_review',  label: '访后复盘' }
+  };
+
+  function show(text, kind) {
+    msgEl.textContent = text;
+    msgEl.className = 'box' + (kind ? ' ' + kind : '');
+    overlay.classList.add('active');
+  }
+
+  function triggerAction(action, label) {
+    show('正在进入' + label + '...', '');
+
+    dd.ready(function () {
+      dd.runtime.permission.requestAuthCode({
+        corpId: corpId,
+        onSuccess: function (result) {
+          var url = base + '/whoami'
+            + '?code=' + encodeURIComponent(result.code)
+            + '&action=' + encodeURIComponent(action);
+          fetch(url)
+            .then(function (resp) { return resp.json(); })
+            .then(function (data) {
+              if (data.status === 'ok') {
+                show(data.message || '已开始', 'ok');
+                setTimeout(function () {
+                  dd.ready(function () { dd.biz.navigation.close(); });
+                }, 1200);
+              } else {
+                show('操作失败：' + (data.detail || JSON.stringify(data)), 'err');
+              }
+            })
+            .catch(function (err) {
+              show('请求失败：' + err.message, 'err');
+            });
+        },
+        onFail: function (err) {
+          show('验证失败：' + (err.errorMessage || JSON.stringify(err)), 'err');
+        }
+      });
+    });
+
+    dd.error(function () {
+      show('请在钉钉客户端中打开此页面', 'err');
+    });
+  }
+
+  document.querySelectorAll('.slice').forEach(function (slice) {
+    slice.addEventListener('click', function () {
+      var idx = this.dataset.index;
+      var cfg = SLICE_ACTIONS[idx];
+      this.classList.add('flash');
+      setTimeout(function () { slice.classList.remove('flash'); }, 200);
+      if (cfg) triggerAction(cfg.action, cfg.label);
+    });
+  });
+})();
+</script>
+
+</body>
+</html>

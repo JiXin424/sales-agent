@@ -1,10 +1,15 @@
 name: deploy
-# 手动触发: Gitea Web UI → Actions → deploy → Run workflow。
-# 不再在 push 时自动触发——用户从 GitHub 拉取到 prod3 后，
-# push 到 Gitea，然后手动在 Web UI 点击触发。
-# runner 跑在主控宿主机(:host),复用主机 docker(已登录 registry.internal)+ 免密 ssh 到各目标。
+# push 到 main 自动触发（仅代码改动；docs/changelog 改动不触发，避免噪音）。
+# 也可 Gitea Web UI → Actions → deploy → Run workflow 手动触发。
+# runner 跑在主控宿主机,复用主机 docker(已登录 registry.internal)+ 免密 ssh 到各目标。
 
 on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'changelog/**'
   workflow_dispatch:
 
 env:

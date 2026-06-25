@@ -30,6 +30,10 @@ export const queryKeys = {
   ingestionJobs: (tid: string, filters?: Record<string, unknown>) => ['ingestionJobs', tid, filters] as const,
   ingestionJob: (tid: string, jobId: string) => ['ingestionJob', tid, jobId] as const,
 
+  // Ontology Explorer（本体探索器）
+  ontologyStatus: (agentId: string) => ['ontology-status', agentId] as const,
+  ontologyStats: (agentId: string) => ['ontology-stats', agentId] as const,
+
   // Feedback
   feedback: (tid: string, filters?: Record<string, unknown>) => ['feedback', tid, filters] as const,
   feedbackDetail: (tid: string, id: string) => ['feedbackDetail', tid, id] as const,

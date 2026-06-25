@@ -57,6 +57,7 @@ v0 是本地可运行原型，支持 **HTTP API** 和 **钉钉单聊** 两种接
 - Neo4j 存储 Entity / Fact / Evidence / SourceDocument 节点，PostgreSQL 仍存储入库任务与聊天日志。
 - 高风险事实进入人工复核（pending review），不进入用户可见回答。
 - Agents 知识页新增入库面板（状态 / 任务 / 冲突可视化 + 启动入库）。
+- 「本体探索」调试页（`/agents/:id/ontology`）：三栏实时可视化检索过程 / 问答 / 喂给大模型的完整上下文（SSE 流式，复用图谱检索+回答引擎）。
 
 详见 [`docs/ontology-neo4j-ops.md`](docs/ontology-neo4j-ops.md)。
 
@@ -624,5 +625,5 @@ PYTHONPATH=src pytest tests/integration/test_pilot_api.py -v
 
 | 日期 | 摘要 |
 |------|------|
-| [2026-06-25](changelog/2026-06-25.md) | Neo4j 本体知识引擎（ontology_neo4j）：图检索 + 保守向量回退 + 高风险人工复核；双租户 dedicated 部署；前端容器化（每租户 nginx SPA）；4000 运营面板新增「环境配置」卡片（`GET /instance/config`，敏感字段点击揭示+复制） |
+| [2026-06-25](changelog/2026-06-25.md) | Neo4j 本体知识引擎（ontology_neo4j）：图检索 + 保守向量回退 + 高风险人工复核；双租户 dedicated 部署；前端容器化（每租户 nginx SPA）；4000 运营面板新增「环境配置」卡片（`GET /instance/config`，敏感字段点击揭示+复制）；「本体探索」三栏调试页（检索过程/问答/完整上下文，SSE 流式） |
 | [2026-06-22](changelog/2026-06-22.md) | Prompt 全层解耦到 DB 版本管理 + 网页端「当前生效」总览直接编辑 |

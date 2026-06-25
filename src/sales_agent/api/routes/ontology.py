@@ -8,19 +8,25 @@ from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from sales_agent.api.deps import DbSession
 from sales_agent.core.config import get_settings
+from sales_agent.core.exceptions import SalesAgentError, TenantNotFoundError
 from sales_agent.models.base import generate_id
 from sales_agent.models.ingestion import IngestionJob
+from sales_agent.ontology.answer_service import OntologyAnswerService, render_response_prompt
 from sales_agent.ontology.neo4j_client import Neo4jClient
 from sales_agent.ontology.progress import progress_bus
+from sales_agent.ontology.repository import OntologyRepository
+from sales_agent.ontology.retrieval_service import OntologyRetrievalService
 from sales_agent.services.agent_service import AgentService, AgentNotFoundError
+from sales_agent.services.tenant_resolver import TenantResolver
 
 router = APIRouter(prefix="/agents", tags=["ontology"])
 
-ALLOWED_EXTENSIONS = {".md", ".txt"}
+ALLOWED_EXTENSIONS = {".md", ".txt", ".docx", ".pdf", ".pptx"}
 
 
 async def _load_agent_or_404(agent_id: str, db: DbSession):
@@ -225,3 +231,158 @@ def _job_to_dict(job: IngestionJob) -> dict:
         "created_at": job.created_at,
         "updated_at": job.updated_at,
     }
+
+
+# ---------------------------------------------------------------------------
+# Ontology Explorer（本体探索器）——查询/调试端点
+# 复用 OntologyRetrievalService + OntologyAnswerService，把 GraphEvidence 与
+# 答案透出给前端三栏调试 UI（检索过程 | 问答 | 完整上下文）。
+# ---------------------------------------------------------------------------
+
+EXPLORER_TASK_TYPE = "ontology_qa"
+
+
+class OntologyQueryRequest(BaseModel):
+    """探索器查询请求。history 当前后端未使用，仅与外部项目接口对齐预留。"""
+
+    query: str = Field(..., min_length=1)
+    history: list[dict[str, Any]] = Field(default_factory=list)
+
+
+async def _build_explorer_services(agent, db: DbSession):
+    """构建探索器检索/回答服务。Neo4j 未启用或不可达时抛 503。
+
+    返回 (client, retrieval_service, answer_service)。调用方负责 `await client.close()`。
+    """
+    settings = get_settings()
+    client = Neo4jClient(settings.neo4j)
+    if not client.enabled:
+        await client.close()
+        raise HTTPException(status_code=503, detail="Neo4j 知识图谱未配置，请在实例配置中启用 ontology_neo4j 引擎。")
+    try:
+        ready, _detail = await client.verify_connectivity()
+        if not ready:
+            raise HTTPException(status_code=503, detail="Neo4j 无法连接，请检查连接配置。")
+        resolver = TenantResolver(db)
+        tenant_info = await resolver.resolve(agent.tenant_id)
+        provider = resolver.get_model_provider(tenant_info)
+    except HTTPException:
+        await client.close()
+        raise
+    except (TenantNotFoundError, SalesAgentError) as exc:
+        await client.close()
+        raise HTTPException(status_code=403, detail=getattr(exc, "user_message", str(exc)))
+
+    repository = OntologyRepository(client)
+    retrieval = OntologyRetrievalService(repository, provider.embedding)
+    answer_service = OntologyAnswerService(retrieval, provider.chat)
+    return client, retrieval, answer_service
+
+
+def _build_full_context(evidence, query: str) -> dict[str, Any]:
+    """组装右栏「完整上下文」：渲染后的 system prompt + 用户问题 + GraphEvidence。"""
+    return {
+        "system_prompt": render_response_prompt(evidence, query, EXPLORER_TASK_TYPE),
+        "user_query": query,
+        **evidence.to_dict(),
+    }
+
+
+def _build_search_process(evidence, query: str) -> dict[str, Any]:
+    """组装左栏「检索过程」摘要。"""
+    return {
+        "query": query,
+        "strategy": evidence.retrieval_strategy,
+        "vector_fallback_used": evidence.vector_fallback_used,
+        "confidence": evidence.confidence,
+        "matched_entities": evidence.matched_entities,
+        "center_entities": evidence.center_entities,
+        "facts_used": evidence.facts_used,
+        "timings_ms": evidence.timings_ms,
+    }
+
+
+@router.get("/{agent_id}/ontology/stats")
+async def ontology_stats(agent_id: str, db: DbSession):
+    """探索器头部徽章：按 Entity.type 分组计数。"""
+    agent = await _load_agent_or_404(agent_id, db)
+    settings = get_settings()
+    client = Neo4jClient(settings.neo4j)
+    if not client.enabled:
+        await client.close()
+        raise HTTPException(status_code=503, detail="Neo4j 知识图谱未配置。")
+    try:
+        counts = await OntologyRepository(client).count_entities_by_type({
+            "tenant_id": agent.tenant_id,
+            "agent_id": agent.id,
+        })
+    finally:
+        await client.close()
+    total = sum(counts.values())
+    return {"stats": {"total_entities": total}, "entity_type_counts": counts}
+
+
+@router.post("/{agent_id}/ontology/query")
+async def ontology_query(agent_id: str, req: OntologyQueryRequest, db: DbSession):
+    """同步本体查询：返回答案 + 检索过程 + 完整上下文。"""
+    agent = await _load_agent_or_404(agent_id, db)
+    client, retrieval, answer_service = await _build_explorer_services(agent, db)
+    try:
+        evidence = await retrieval.retrieve(
+            tenant_id=agent.tenant_id, agent_id=agent.id, question=req.query
+        )
+        result = await answer_service.generate_answer(
+            graph_evidence=evidence, message=req.query, task_type=EXPLORER_TASK_TYPE
+        )
+    finally:
+        await client.close()
+    return {
+        "query": req.query,
+        "answer": result.answer,
+        "sources": result.sources,
+        "search_process": _build_search_process(evidence, req.query),
+        "full_context": _build_full_context(evidence, req.query),
+    }
+
+
+@router.post("/{agent_id}/ontology/query/stream")
+async def ontology_query_stream(agent_id: str, req: OntologyQueryRequest, db: DbSession):
+    """SSE 流式本体查询：step / search_process / result / error 四类事件。
+
+    就绪检查在返回 StreamingResponse 之前完成（503 可正常抛出）；检索/生成阶段
+    的异常转为 `error` 事件。
+    """
+    agent = await _load_agent_or_404(agent_id, db)
+    client, retrieval, answer_service = await _build_explorer_services(agent, db)
+
+    def _sse(payload: dict[str, Any]) -> str:
+        return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    def _step(n: int, message: str, status: str) -> str:
+        return _sse({"type": "step", "step": n, "message": message, "status": status})
+
+    async def _stream():
+        try:
+            yield _step(1, "检索知识图谱…", "processing")
+            evidence = await retrieval.retrieve(
+                tenant_id=agent.tenant_id, agent_id=agent.id, question=req.query
+            )
+            yield _sse({"type": "search_process", "data": _build_search_process(evidence, req.query)})
+            fallback_note = "（向量兜底）" if evidence.vector_fallback_used else ""
+            yield _step(2, f"命中 {len(evidence.matched_entities)} 个实体{fallback_note}", "success")
+            yield _step(3, "生成回答…", "processing")
+            result = await answer_service.generate_answer(
+                graph_evidence=evidence, message=req.query, task_type=EXPLORER_TASK_TYPE
+            )
+            yield _sse({
+                "type": "result",
+                "answer": result.answer,
+                "full_context": _build_full_context(evidence, req.query),
+            })
+            yield _step(4, "AI 回答生成完成", "success")
+        except Exception as exc:
+            yield _sse({"type": "error", "message": str(exc)[:500]})
+        finally:
+            await client.close()
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")

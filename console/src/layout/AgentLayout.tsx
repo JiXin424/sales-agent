@@ -10,8 +10,7 @@ import { Outlet, useNavigate, useLocation, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   AppstoreOutlined, BookOutlined, EditOutlined, MessageOutlined,
-  SettingOutlined, ExperimentOutlined, AlertOutlined, FileTextOutlined,
-  RocketOutlined, CheckCircleOutlined, LikeOutlined, AuditOutlined, TrophyOutlined,
+  NodeIndexOutlined, SettingOutlined, TrophyOutlined,
 } from '@ant-design/icons';
 import { getAgent } from '@/api/agents';
 import { useAgent } from '@/context/AgentContext';
@@ -30,16 +29,10 @@ function agentNavItems(agentId: string) {
   const base = `/agents/${agentId}`;
   return [
     { key: `${base}/overview`, icon: <AppstoreOutlined />, label: '概览' },
-    { key: `${base}/setup`, icon: <CheckCircleOutlined />, label: '就绪/配置' },
     { key: `${base}/knowledge`, icon: <BookOutlined />, label: '知识库' },
+    { key: `${base}/ontology`, icon: <NodeIndexOutlined />, label: '本体探索' },
     { key: `${base}/prompts`, icon: <EditOutlined />, label: 'Prompt' },
-    { key: `${base}/channels`, icon: <MessageOutlined />, label: '渠道' },
     { key: `${base}/conversations`, icon: <MessageOutlined />, label: '对话记录' },
-    { key: `${base}/feedback`, icon: <LikeOutlined />, label: '反馈管理' },
-    { key: `${base}/review`, icon: <AuditOutlined />, label: '质量审查' },
-    { key: `${base}/eval`, icon: <ExperimentOutlined />, label: 'Eval 回归' },
-    { key: `${base}/alerts`, icon: <AlertOutlined />, label: '运维告警' },
-    { key: `${base}/reports`, icon: <FileTextOutlined />, label: '报告' },
     { key: `${base}/coach`, icon: <TrophyOutlined />, label: '教练' },
     { key: `${base}/settings`, icon: <SettingOutlined />, label: '设置' },
   ];

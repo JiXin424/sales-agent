@@ -96,6 +96,16 @@ def retrieval_statement() -> str:
     """
 
 
+def count_entities_by_type_statement() -> str:
+    return """
+    MATCH (e:Entity)
+    WHERE e.tenant_id = $tenant_id
+      AND e.status = 'active'
+      AND ($agent_id IS NULL OR e.agent_id IS NULL OR e.agent_id = $agent_id)
+    RETURN e.type AS type, count(*) AS count
+    """
+
+
 def vector_query_statement() -> str:
     return """
     CALL db.index.vector.queryNodes('entity_embedding_vector', $limit, $embedding)
@@ -144,3 +154,16 @@ class OntologyRepository:
         async with self.client.session() as session:
             result = await session.run(vector_query_statement(), params)
             return [dict(record) async for record in result]
+
+    async def count_entities_by_type(self, params: dict[str, Any]) -> dict[str, int]:
+        """按 Entity.type 分组计数，供探索器头部徽章展示。
+
+        params: {tenant_id, agent_id?}。返回 {type: count, ...}。
+        """
+        async with self.client.session() as session:
+            result = await session.run(count_entities_by_type_statement(), params)
+            counts: dict[str, int] = {}
+            async for record in result:
+                type_name = record["type"] or "unknown"
+                counts[type_name] = int(record["count"])
+            return counts

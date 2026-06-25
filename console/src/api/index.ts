@@ -5,6 +5,7 @@ export * from './tenants';
 export * from './admin';
 export * from './prompts';
 export * from './knowledge';
+export * from './ontology';
 export * from './feedback';
 export * from './agents';
 export * from './instance';

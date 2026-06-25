@@ -108,7 +108,7 @@ export default function AgentKnowledgePage() {
       </Space>
 
       <Dragger
-        accept=".md,.txt" multiple disabled={!engineReady || uploading}
+        accept=".md,.txt,.docx,.pdf,.pptx" multiple disabled={!engineReady || uploading}
         showUploadList={false}
         beforeUpload={(file, fileList) => {
           // 等所有文件收集完后一起处理

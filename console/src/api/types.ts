@@ -321,7 +321,90 @@ export interface JobProgressEvent {
   error_summary?: string;
 }
 
-// --- Model Calls ---
+// --- Ontology Explorer（本体探索器：查询/调试） ---
+
+/** 实体节点（图谱证据里的 entity/fact/evidence/document 通用结构）。 */
+export interface OntologyEntityNode {
+  id?: string;
+  name?: string;
+  type?: string;
+  [key: string]: unknown;
+}
+
+/** 镜像后端 GraphEvidence.to_dict()。 */
+export interface GraphEvidenceLike {
+  ontology_intent?: string;
+  center_entities: OntologyEntityNode[];
+  matched_entities: OntologyEntityNode[];
+  facts_used: OntologyEntityNode[];
+  evidence: OntologyEntityNode[];
+  source_documents: OntologyEntityNode[];
+  retrieval_strategy: 'graph' | 'graph_vector_fallback' | string;
+  vector_fallback_used: boolean;
+  confidence: number;
+  timings_ms: Record<string, number>;
+}
+
+export interface OntologyStats {
+  stats: { total_entities: number };
+  entity_type_counts: Record<string, number>;
+}
+
+export interface OntologyQueryRequest {
+  query: string;
+  history?: Array<{ role: string; content: string }>;
+}
+
+/** 左栏「检索过程」摘要。 */
+export interface OntologySearchProcess {
+  query: string;
+  strategy: string;
+  vector_fallback_used: boolean;
+  confidence: number;
+  matched_entities: OntologyEntityNode[];
+  center_entities: OntologyEntityNode[];
+  facts_used: OntologyEntityNode[];
+  timings_ms: Record<string, number>;
+}
+
+/** 右栏「完整上下文」：渲染后的 system prompt + 用户问题 + GraphEvidence 字段。 */
+export interface OntologyFullContext {
+  system_prompt: string;
+  user_query: string;
+  ontology_intent?: string;
+  center_entities: OntologyEntityNode[];
+  matched_entities: OntologyEntityNode[];
+  facts_used: OntologyEntityNode[];
+  evidence: OntologyEntityNode[];
+  source_documents: OntologyEntityNode[];
+  retrieval_strategy: string;
+  vector_fallback_used: boolean;
+  confidence: number;
+  timings_ms: Record<string, number>;
+}
+
+/** AI 答案（summary + sections）。 */
+export interface OntologyAnswerPayload {
+  summary: string;
+  sections: Array<{ title: string; content: string }>;
+}
+
+export interface OntologyQueryResponse {
+  query: string;
+  answer: OntologyAnswerPayload;
+  sources: Array<Record<string, unknown>>;
+  search_process: OntologySearchProcess;
+  full_context: OntologyFullContext;
+}
+
+/** /query/stream 的 SSE 事件（判别联合）。 */
+export type OntologySSEEvent =
+  | { type: 'step'; step: number; message: string; status: 'processing' | 'success' | 'error' }
+  | { type: 'search_process'; data: OntologySearchProcess }
+  | { type: 'result'; answer: OntologyAnswerPayload; full_context: OntologyFullContext }
+  | { type: 'error'; message: string };
+
+
 
 export interface ModelCallItem {
   id: string;

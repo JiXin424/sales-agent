@@ -14,6 +14,21 @@ from sales_agent.ontology.conflict import classify_fact_risk, merge_status_for_r
 from sales_agent.ontology.schemas import EntityCandidate, FactCandidate, OntologyIngestionStats
 
 
+def _read_content(path: Path) -> str:
+    """Read file content, using docling for binary office formats (.docx/.pdf/.pptx)."""
+    ext = path.suffix.lower()
+    if ext in (".docx", ".pdf", ".pptx"):
+        try:
+            from docling.document_converter import DocumentConverter
+            converter = DocumentConverter()
+            result = converter.convert(str(path))
+            return result.document.export_to_markdown()
+        except Exception:
+            raise RuntimeError(f"docling 转换失败：{path.name}")
+    else:
+        return path.read_text(encoding="utf-8")
+
+
 class ExtractorProtocol(Protocol):
     async def extract_entities(self, content: str) -> list[EntityCandidate]: ...
     async def extract_facts(self, content: str, entities: list[EntityCandidate]) -> list[FactCandidate]: ...
@@ -100,7 +115,7 @@ class OntologyIngestionService:
                 "facts_pending_review": stats.facts_pending_review,
                 "conflicts_created": stats.conflicts_created,
             })
-        content = path.read_text(encoding="utf-8")
+        content = _read_content(path)
         source_document_id = generate_id()
         now = utcnow()
 

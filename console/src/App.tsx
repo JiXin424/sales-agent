@@ -24,6 +24,7 @@ import AgentSettingsPage from './pages/Agents/AgentSettingsPage';
 import AgentCloneWizardPage from './pages/Agents/AgentCloneWizardPage';
 import AgentConversationsPage from './pages/Agents/AgentConversationsPage';
 import AgentKnowledgePage from './pages/Agents/AgentKnowledgePage';
+import OntologyExplorerPage from './pages/Agents/OntologyExplorerPage';
 import AgentFeedbackPage from './pages/Agents/AgentFeedbackPage';
 import CoachDashboardPage from './pages/Coach/CoachDashboardPage';
 import CoachUsersPage from './pages/Coach/CoachUsersPage';
@@ -67,6 +68,7 @@ export default function App() {
         <Route path="setup" element={<AgentSetupPage />} />
         <Route path="clone" element={<AgentCloneWizardPage />} />
         <Route path="knowledge" element={<AgentKnowledgePage />} />
+        <Route path="ontology" element={<OntologyExplorerPage />} />
         <Route path="prompts" element={<AgentPromptsPage />} />
         <Route path="channels" element={<AgentChannelsPage />} />
         <Route path="conversations" element={<AgentConversationsPage />} />

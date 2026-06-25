@@ -112,3 +112,67 @@
 - **验证范式**：`docker inspect <db> --format '{{json .NetworkSettings.Networks}}'` 确认 db 在
   `<project>_default` 且 alias 含 service 名（如 `postgres`）；`docker exec <db> psql ...` 直查
   tenants/agents 表确认数据层按 tenant_id 隔离。
+
+## 10. 反代网关(Traefik)与应用容器跨 Docker network → 容器名解析失败 → 502
+- **场景**：钉钉快捷入口两个 agent 全量 502 Bad Gateway。Traefik access log 显示
+  `... 502 ... "http://sales-agent-taishan-api:8000" 2ms`（1~5ms 即 502 = 网关**连不上 upstream**，
+  非后端慢）。后端直连 `curl 127.0.0.1:8003` 返回 200，应用本身健康。
+- **根因**：在跑的共享网关 `traefik`（compose project `taishanxd`）只挂 `taishan-network`，而
+  sales-agent 所有容器只挂 `sales-agent_default`，**两网无交集** → 网关按容器名
+  `sales-agent-taishan-api` 解析不到（`docker exec traefik getent hosts <name>` 返回空）。
+  `/root/code/traefik/docker-compose.yml` 设计的 `sales-agent-traefik`（挂 `sales-agent_default`）
+  根本没在跑——**设计与运行实例不一致**。
+- **触发**：57 分钟前 `docker compose up -d` 重建了 api 容器；`docker-compose.generated.yml`
+  **未声明任何 `networks:`**，recreate 后容器只落默认 `sales-agent_default`，把此前手动
+  `docker network connect` 到 `taishan-network` 的临时挂载丢了 → 网关随即解析失败。
+- **教训**：
+  1. **手动 `docker network connect` 是一次性的**——只要容器被 recreate（compose up/redeploy）就丢失。
+     凡是跨项目共享网络（反代网关 ↔ 后端），**必须在 compose 里声明 `networks:`（external: true）**，
+     不能靠手动 connect 常驻。
+  2. 排查 502 的第一步：区分「后端挂了」vs「网关连不上」。证据组合 = ①网关日志里 upstream URL +
+     极短耗时(2ms)；②`docker exec <网关> getent hosts <后端容器名>` 是否解析；③宿主直连后端端口是否 200。
+     直连 200 + 网关解析不到 = 网络/路由问题，不是应用问题。
+  3. 多项目共享一台机的反代，**先确认哪个网关容器真正绑了 80/443**（`docker ps` + `docker inspect
+     <gw> --format '{{.Config.Labels "com.docker.compose.project"}}'` + 看其 `NetworkSettings.Networks`），
+     别假定 `/root/code/<proj>/docker-compose.yml` 里那个就是在跑的那个。
+- **持久化（已做）**：把共享网关网络声明进 compose 即可让 recreate 自动保留。
+  在 `scripts/render-multitenant-deploy.py` 读 `traefik.shared_network`（opt-in，本机 `deploy/tenants.json`
+  设 `"taishan-network"`），非空时给每个 `*-api` 服务加 `networks: [default, <net>]` 并在文件尾声明
+  `<net>: external: true`。**关键坑**：给服务显式声明 `networks:` 后它会**退出隐式 default 网络**，
+  所以必须同时写 `default`，否则 api 连不上 postgres/neo4j/前端代理。验证持久化用
+  `docker compose up -d --force-recreate --no-deps <svc>` 看 recreate 后网络是否自动保留。
+  见 changelog 2026-06-25「持久化修复」节。
+
+## 11. `.dockerignore` 裸名匹配是递归的——会误删 src 下的同名正式文件
+- **场景**：prod3/test 的 `/integrations/dingtalk/quick` 返回 **500 `{"detail":"H5 template not found"}`**，
+  直接 curl 后端也 500；而 dev 机同样请求 200。repo 里 `src/sales_agent/integrations/dingtalk/static/cocah.html`
+  明明存在。
+- **根因**：`.dockerignore` 里有裸名 `cocah.html`、`coach_mode.png`、`cocah.mp4`（本意是排除仓库根的游离大文件，
+  根副本后来被删了）。**BuildKit/.dockerignore 的裸名(无前导 /)是递归匹配**——把 `src/.../static/cocah.html`
+  和 `coach_mode.png` 也从构建上下文踢掉 → CI 镜像(`:87836fa`)里没这俩文件 → H5 页 500。dev 机的 `:latest`
+  是更早的本地构建、还带文件，所以 200，造成「dev 好但 prod 坏」的错觉。
+- **教训**：
+  1. `.dockerignore` 要排除「仅仓库根」的文件，**必须用前导 `/` 锚定**（`/cocah.html`），裸名会递归命中任意层级。
+     这点和 `.gitignore` 一致，别凭直觉写裸名。
+  2. 「repo 有、镜像没有」= 先怀疑构建上下文被 ignore。验证：`docker exec <容器> ls <path>` 对比 repo。
+  3. 502/500 先分清层级：网关日志短耗时 + 解析不到容器名 = 网络；后端直连也 500 + JSON detail = 应用/构建。
+- **持久化**：已把三个裸名改成 `/`-锚定（changelog 2026-06-25「.dockerignore 修复」节），CI 重建镜像即恢复。
+
+## 12. 共享域名多租户：Traefik 不能按 query 分流，tenant 标识必须进 path
+- **场景**：钉钉快捷入口两个租户（taishan / taishankaifa2）共用同一 `DINGTALK_PUBLIC_URL`（`aijiaolian.com.cn`），`tenant_id` 只在 URL query 参数里。`render-multitenant-deploy.py` 为每租户生成的 Traefik 路由 rule（`Host + PathPrefix(/integrations/dingtalk/)`）与 priority（210）**完全相同**。结果 Traefik 无法区分，所有钉钉请求只落到一个 api 容器 → 另一租户 whoami 校验报 **403 Tenant mismatch**（钉钉端 H5 显示「操作失败：Tenant mismatch」，用户复述为「操作失误：tenant mismatch」）。
+- **根因**：Traefik（及绝大多数 HTTP 反代）的路由规则只匹配 method/host/path/header，**不能基于 query 参数分流**。多个租户共用 hostname 时，若 path 也完全相同、只靠 query 区分租户，生成的多条路由必然 rule+priority 重复，Traefik 任选其一 → 跨租户串话。
+- **教训**：
+  1. **共享域名下的多租户入口分流，tenant 标识必须进 path 段**（如 `/integrations/dingtalk/t/{tenant_id}/...`），让每租户的 `PathPrefix` 天然不同；不要用 query 参数区分租户再指望反代分流。
+  2. 审查生成的反代配置时，**多条路由的 rule+priority 不能完全相同**——那是未定义行为（Traefik 任选其一），不是「负载均衡」。
+  3. 端点若只在「校验阶段」报错而「页面渲染阶段」不校验（如 `/quick` 渲染 HTML 不校验、`/whoami` 才校验），会让现象看起来像「页面能开但点了报错」，别误判为前端 bug——先确认请求是否落到了**正确的后端实例**（看 Traefik access log 命中的 router/upstream）。
+- **相关**：见 changelog 2026-06-25「钉钉快捷入口 tenant mismatch」节；与 lessons #10 同为 Traefik 路由层问题（#10 是跨 Docker network 解析不到容器 → 502，本条是 rule 冲突 → 落到错容器 → 403）。
+- **已加防御校验**：`render_traefik_routes` 生成配置后断言无重复 `rule:` 行（同 Host+PathPrefix 即 `SystemExit` 拒绝），把冲突挡在部署前。未来任意服务器加租户，只要 tenant_id 唯一（validate_inventory 已保证）就必然安全——这是"多租户也不会复发"的根本保证。
+
+## 13. SSH 远程命令必须用绝对路径，别依赖 `cd`（反复漏 cd 差点误删 /root）
+- **场景**：在 prod2 通过 SSH 操作 prod3/杭州仓库时，多次把命令跑在 `/root`（SSH 默认进 `$HOME`）而非 `/root/code/sales-agent`。最严重一次杭州「瘦身」：命令里写了 `mv src .git scripts ... backup/` 但**漏了 `cd`**，实际在 `/root` 执行——幸好 `/root` 下没有 `src/.git/scripts` 等目录（全被 `2>/dev/null` 忽略），只误建了空 `/root/backup`，**没有数据损失**；但若 `/root` 下碰巧有同名文件就会误删。
+- **根因**：SSH 默认登录到用户 `$HOME`（root → `/root`），不进仓库。心里想着「先 cd」手上却只写了 `pwd && ...` 或直接 git 命令，反复犯同一 slip（诊断阶段也漏过几次，靠 `pwd=/root` 才发现）。
+- **教训**：
+  1. SSH 远程命令**一律用绝对路径**（`ls /root/code/sales-agent/...`、`git -C /root/code/sales-agent ...`），不依赖 `cd`——`cd` 最容易漏写；用变量聚合前缀（`ROOT=/root/code/sales-agent; mv $ROOT/src $ROOT/backup/`）也可。
+  2. 批量 `mv`/`rm` 前**先确认目录**：命令开头 `echo "$(pwd) $(hostname)"` 或先 `ls <绝对路径>` 看一眼再动。
+  3. 危险操作（mv/rm 源码）先 `mv 到 backup/`（可回退），验证 OK 再 `rm`——别一步 `rm -rf`。
+- **验证范式**：瘦身后 `ls /root/code/sales-agent/` 确认只剩预期目录；`docker ps` 确认运行容器不受影响（容器用镜像，mv 主机源码不中断服务）。

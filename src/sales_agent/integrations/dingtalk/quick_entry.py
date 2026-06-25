@@ -3,11 +3,12 @@
 按照 anniu.md 验证通过的方案实现：
   JSAPI requestAuthCode → topapi/v2/user/getuserinfo → batchSend
 
-端点：
-  GET  /integrations/dingtalk/quick              — H5 页面（视频+JSAPI 按钮）
-  GET  /integrations/dingtalk/static/{filename}  — 静态资源（视频/图片/HTML）
-  GET  /integrations/dingtalk/whoami             — authCode 换身份 + 发送引导消息
-  POST /integrations/dingtalk/plugins/register   — 注册钉钉快捷入口按钮
+端点（tenant_id 进 path 段，供共享域名下 Traefik 按 /t/{tenant_id}/ 分流到各租户实例；
+query 参数无法被 Traefik 路由，多租户必须靠 path 段区分）：
+  GET  /integrations/dingtalk/t/{tenant_id}/quick              — H5 页面（视频+JSAPI 按钮）
+  GET  /integrations/dingtalk/t/{tenant_id}/static/{filename}  — 静态资源（视频/图片/HTML）
+  GET  /integrations/dingtalk/t/{tenant_id}/whoami             — authCode 换身份 + 发送引导消息
+  POST /integrations/dingtalk/t/{tenant_id}/plugins/register   — 注册钉钉快捷入口按钮
 
 删除此文件 + 移除 main.py 中的注册即可移除快捷入口功能，
 不影响核心 DingTalk 单聊集成。
@@ -162,12 +163,12 @@ _QUICK_ENTRY_ACTIONS: dict[str, dict[str, str]] = {
 
 
 # ============================================================
-# GET /integrations/dingtalk/static/{filename} — 静态资源
+# GET /integrations/dingtalk/t/{tenant_id}/static/{filename} — 静态资源
 # ============================================================
 
 
-@router.get("/static/{filename}")
-async def serve_static(filename: str):
+@router.get("/t/{tenant_id}/static/{filename}")
+async def serve_static(tenant_id: str, filename: str):
     """提供静态资源（视频、图片等）。"""
     # 安全检查：防止路径遍历
     safe_name = Path(filename).name
@@ -197,14 +198,14 @@ def _guess_content_type(filename: str) -> str:
 
 
 # ============================================================
-# GET /integrations/dingtalk/quick — H5 页面
+# GET /integrations/dingtalk/t/{tenant_id}/quick — H5 页面
 # ============================================================
 
 
-@router.get("/quick", response_class=HTMLResponse)
+@router.get("/t/{tenant_id}/quick", response_class=HTMLResponse)
 async def dingtalk_quick_page(
+    tenant_id: str,
     action: str = Query("all", description="pre_visit_prepare | post_visit_review | all | small_win_appreciation | sales_block_breakthrough"),
-    tenant_id: str = Query("", description="租户 ID"),
 ) -> HTMLResponse:
     """钉钉快捷入口 H5 页面。
 
@@ -283,15 +284,15 @@ async def _fulfill_quick_action(
 
 
 # ============================================================
-# GET /integrations/dingtalk/whoami — authCode 换身份 + 发消息
+# GET /integrations/dingtalk/t/{tenant_id}/whoami — authCode 换身份 + 发消息
 # ============================================================
 
 
-@router.get("/whoami")
+@router.get("/t/{tenant_id}/whoami")
 async def dingtalk_quick_whoami(
+    tenant_id: str,
     code: str = Query(..., description="JSAPI requestAuthCode 返回的 authCode"),
     action: str = Query(..., description="pre_visit_prepare | post_visit_review"),
-    tenant_id: str = Query(..., description="租户 ID"),
 ) -> dict[str, Any]:
     """钉钉快捷入口 — authCode 换取用户身份并发送引导消息。
 
@@ -356,12 +357,13 @@ async def dingtalk_quick_whoami(
 
 
 # ============================================================
-# GET /integrations/dingtalk/jsapi-config — 返回 dd.config 鉴权参数
+# GET /integrations/dingtalk/t/{tenant_id}/jsapi-config — 返回 dd.config 鉴权参数
 # ============================================================
 
 
-@router.get("/jsapi-config")
+@router.get("/t/{tenant_id}/jsapi-config")
 async def dingtalk_jsapi_config(
+    tenant_id: str,
     url: str = Query(..., description="当前网页完整 URL（不含 # 及之后部分），前端用 encodeURIComponent 编码"),
 ) -> dict[str, Any]:
     """返回 PC 端 ``dd.config`` 所需的鉴权参数。
@@ -400,17 +402,21 @@ async def dingtalk_jsapi_config(
 
 
 # ============================================================
-# GET /integrations/dingtalk/oauth2-callback — OAuth2 网页登录回调（PC 浏览器场景）
+# GET /integrations/dingtalk/t/{tenant_id}/oauth2-callback — OAuth2 网页登录回调（PC 浏览器场景）
 # PC 钉钉点机器人快捷入口默认跳系统浏览器，那里没有 JSAPI 桥（notInDingTalk），
 # 只能走 OAuth2 扫码免登识别用户。前端 UA 检测到非钉钉容器时跳 login.dingtalk.com，
 # 用户授权后回跳到本端点，完成 authCode→userId→发消息。
 # ============================================================
 
 
-def _parse_oauth_state(state: str) -> tuple[str, str]:
-    """解析 OAuth2 state（格式 ``action:tenant_id``）。返回 (action, tenant_id)。"""
-    action, _sep, tenant_id = state.partition(":")
-    return action, tenant_id
+def _parse_oauth_action(state: str) -> str:
+    """解析 OAuth2 state，返回 action。
+
+    tenant_id 已在 URL path 段（``/t/{tenant_id}/oauth2-callback``）携带，state 只需传 action。
+    兼容旧的 ``action:tenant_id`` 格式（取冒号前）。
+    """
+    action, _sep, _tenant_id = state.partition(":")
+    return action
 
 
 def _oauth_result_page(ok: bool, message: str) -> HTMLResponse:
@@ -481,11 +487,12 @@ def _oauth_success_page(message: str) -> HTMLResponse:
     return HTMLResponse(content=template.replace("__MESSAGE__", _html_escape(message)))
 
 
-@router.get("/oauth2-callback", response_class=HTMLResponse)
+@router.get("/t/{tenant_id}/oauth2-callback", response_class=HTMLResponse)
 async def dingtalk_oauth2_callback(
+    tenant_id: str,
     authCode: str = Query("", description="OAuth2 回调授权码（login.dingtalk.com 回传）"),
     code: str = Query("", description="个别版本回调用 code"),
-    state: str = Query("", description="action:tenant_id"),
+    state: str = Query("", description="action（tenant_id 在 path 段）"),
 ) -> HTMLResponse:
     """OAuth2 网页登录回调（PC 浏览器场景）。
 
@@ -499,8 +506,8 @@ async def dingtalk_oauth2_callback(
     if not auth_code:
         return _oauth_result_page(False, "缺少授权码（authCode），请重新从钉钉入口进入。")
 
-    action, tenant_id = _parse_oauth_state(state)
-    if not action or not tenant_id:
+    action = _parse_oauth_action(state)
+    if not action:
         return _oauth_result_page(False, f"参数解析失败（state={state or '空'}）。")
 
     action_config = _QUICK_ENTRY_ACTIONS.get(action)
@@ -621,12 +628,15 @@ def _build_quick_entry_plugin_info(
     action: str | None,
     name: str,
 ) -> tuple[dict[str, str], str]:
-    """构建单个钉钉快捷入口 pluginInfo。"""
-    base_url = f"{public_url}/integrations/dingtalk/quick"
-    quick_url = (
-        f"{base_url}?action={action}&tenant_id={tenant_id}"
-        if action else f"{base_url}?tenant_id={tenant_id}"
-    )
+    """构建单个钉钉快捷入口 pluginInfo。
+
+    URL 形如 ``{public_url}/integrations/dingtalk/t/{tenant_id}/quick[?action=...]``：
+    tenant_id 进 path 段，供共享域名下 Traefik 按 ``PathPrefix(`/t/{tenant_id}/`)``
+    分流到各租户实例（query 参数无法被 Traefik 路由，多租户必须靠 path 段区分）；
+    action（教练模式为空）走 query。
+    """
+    base_url = f"{public_url}/integrations/dingtalk/t/{tenant_id}/quick"
+    quick_url = f"{base_url}?action={action}" if action else base_url
     plugin_info = {
         "name": json.dumps({"zh_CN": name}, ensure_ascii=False),
         "icon": icon_media_id,
@@ -636,9 +646,9 @@ def _build_quick_entry_plugin_info(
     return plugin_info, quick_url
 
 
-@router.post("/plugins/register")
+@router.post("/t/{tenant_id}/plugins/register")
 async def register_quick_entry_plugin(
-    tenant_id: str = Query(..., description="租户 ID"),
+    tenant_id: str,
     clear_first: bool = Query(
         True, description="True=先清空全部已有快捷入口再注册（默认）；False=直接全量覆盖",
     ),
@@ -728,8 +738,8 @@ async def register_quick_entry_plugin(
     }
 
 
-@router.post("/plugins/clear")
-async def clear_quick_entry_plugins() -> dict[str, Any]:
+@router.post("/t/{tenant_id}/plugins/clear")
+async def clear_quick_entry_plugins(tenant_id: str) -> dict[str, Any]:
     """清空机器人全部快捷入口（POST /v1.0/robot/plugins/clear）。"""
     config = _get_dingtalk_config()
 
@@ -746,8 +756,8 @@ async def clear_quick_entry_plugins() -> dict[str, Any]:
     return {"status": "ok", "dingtalk_response": result}
 
 
-@router.get("/plugins/query")
-async def query_quick_entry_plugins() -> dict[str, Any]:
+@router.get("/t/{tenant_id}/plugins/query")
+async def query_quick_entry_plugins(tenant_id: str) -> dict[str, Any]:
     """查询机器人当前全部快捷入口。"""
     config = _get_dingtalk_config()
 

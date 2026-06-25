@@ -71,7 +71,8 @@ h1 { font-size: 28px; font-weight: 700; margin-bottom: 12px; letter-spacing: 2px
 (function () {
   var params = new URLSearchParams(location.search);
   var action = 'sales_block_breakthrough';
-  var tenantId = params.get('tenant_id') || '';
+  var pathM = location.pathname.match(/^(\/integrations\/dingtalk\/t\/[^/]+)/);
+  var base = pathM ? pathM[1] : '/integrations/dingtalk';
   var corpId = '__CORP_ID__';
 
   var overlay = document.getElementById('overlay');
@@ -90,10 +91,9 @@ h1 { font-size: 28px; font-weight: 700; margin-bottom: 12px; letter-spacing: 2px
       dd.runtime.permission.requestAuthCode({
         corpId: corpId,
         onSuccess: function (result) {
-          var url = '/integrations/dingtalk/whoami'
+          var url = base + '/whoami'
             + '?code=' + encodeURIComponent(result.code)
-            + '&action=' + encodeURIComponent(action)
-            + '&tenant_id=' + encodeURIComponent(tenantId);
+            + '&action=' + encodeURIComponent(action);
           fetch(url)
             .then(function (resp) { return resp.json(); })
             .then(function (data) {

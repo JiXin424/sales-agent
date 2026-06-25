@@ -65,7 +65,9 @@ h1 { font-size: 27px; font-weight: 700; margin-bottom: 14px; letter-spacing: 1px
 (function () {
   var params = new URLSearchParams(location.search);
   var action = params.get('action') || '';
-  var tenantId = params.get('tenant_id') || '';
+  // 路径形如 /integrations/dingtalk/t/{tenant}/quick；提取 base=/integrations/dingtalk/t/{tenant}
+  var pathM = location.pathname.match(/^(\/integrations\/dingtalk\/t\/[^/]+)/);
+  var base = pathM ? pathM[1] : '/integrations/dingtalk';
   var corpId = '__CORP_ID__';
   var label = '__LABEL__';
 
@@ -81,8 +83,8 @@ h1 { font-size: 27px; font-weight: 700; margin-bottom: 14px; letter-spacing: 1px
   // 浏览器（非钉钉容器，如 PC 快捷入口跳出的 Chrome）里 JSAPI 不可用 → OAuth2 扫码免登。
   function redirectToOAuth2() {
     var clientId = '__APP_KEY__';
-    var redirectUri = encodeURIComponent(window.location.origin + '/integrations/dingtalk/oauth2-callback');
-    var state = action + ':' + tenantId;
+    var redirectUri = encodeURIComponent(window.location.origin + base + '/oauth2-callback');
+    var state = action;
     show('即将跳转钉钉登录…', '');
     window.location.href = 'https://login.dingtalk.com/oauth2/auth'
       + '?redirect_uri=' + redirectUri
@@ -137,10 +139,9 @@ h1 { font-size: 27px; font-weight: 700; margin-bottom: 14px; letter-spacing: 1px
         corpId: corpId,
         onSuccess: function (result) {
           stage = 'whoami';
-          var url = '/integrations/dingtalk/whoami'
+          var url = base + '/whoami'
             + '?code=' + encodeURIComponent(result.code)
-            + '&action=' + encodeURIComponent(action)
-            + '&tenant_id=' + encodeURIComponent(tenantId);
+            + '&action=' + encodeURIComponent(action);
           fetch(url)
             .then(function (resp) { return resp.json(); })
             .then(function (data) {
@@ -166,7 +167,7 @@ h1 { font-size: 27px; font-weight: 700; margin-bottom: 14px; letter-spacing: 1px
     var pageUrl = location.href.split('#')[0];
     stage = 'fetch_config';
     console.log('[quick] pageUrl for signing:', pageUrl);
-    fetch('/integrations/dingtalk/jsapi-config?url=' + encodeURIComponent(pageUrl))
+    fetch(base + '/jsapi-config?url=' + encodeURIComponent(pageUrl))
       .then(function (r) { return r.json(); })
       .then(function (cfg) {
         console.log('[quick] jsapi-config resp:', cfg);

@@ -77,6 +77,13 @@ vim deploy/tenants.json
 - `data_dir`：数据目录，例如 `./data/huadong`。
 - `logs_dir`：日志目录，例如 `./logs/huadong`。
 
+可选：
+
+- `traefik.shared_network`：服务器级 Traefik 所在的 Docker 网络名（如 `taishan-network`）。
+  设置后生成器会把每个实例的 `api` 容器同时挂到 `default` 和该外部网络，让 Traefik 能按容器名
+  解析到 api（钉钉快捷入口等路由才不会 502）。**该挂载写进 compose，recreate 自动保留**；不设则
+  仅用 `default` 网络（适用于本机自带 Traefik 或不经共享网关的部署）。
+
 ### 2. 创建实例配置文件
 
 ```bash
@@ -138,12 +145,12 @@ DEPLOY
 3. 生成 `docker-compose.generated.yml`。
 4. 启动/更新 `api`、`stream`、`worker`、`postgres`、`traefik`。
 5. 对每个实例执行健康检查。
-6. 如果 `DINGTALK_ENABLED=true` 且 `DINGTALK_REGISTER_QUICK_ENTRY` 不是 `false`，调用该实例的 `/integrations/dingtalk/plugins/register` 自动注册钉钉快捷入口。
+6. 如果 `DINGTALK_ENABLED=true` 且 `DINGTALK_REGISTER_QUICK_ENTRY` 不是 `false`，调用该实例的 `/integrations/dingtalk/t/<tenant_id>/plugins/register` 自动注册钉钉快捷入口（tenant_id 进 path 段，供共享域名下 Traefik 按租户分流）。
 
 快捷入口注册链路在容器内完成：
 
 ```text
-部署脚本 -> 本实例 API /integrations/dingtalk/plugins/register
+部署脚本 -> 本实例 API /integrations/dingtalk/t/<tenant_id>/plugins/register
   -> 钉钉 access_token
   -> 上传 coach_mode.png
   -> 官方 plugins/clear
@@ -153,8 +160,8 @@ DEPLOY
 默认会注册三个入口：
 
 - `教练模式`：打开 H5 页面，包含访前准备和访后复盘。
-- `小赢欣赏`：打开触发页，回调 `/integrations/dingtalk/whoami` 后进入单聊多轮流程。
-- `卡点破框`：打开触发页，回调 `/integrations/dingtalk/whoami` 后进入单聊多轮流程。
+- `小赢欣赏`：打开触发页，回调 `/integrations/dingtalk/t/<tenant_id>/whoami` 后进入单聊多轮流程。
+- `卡点破框`：打开触发页，回调 `/integrations/dingtalk/t/<tenant_id>/whoami` 后进入单聊多轮流程。
 
 如果暂时不想自动注册快捷入口，在对应 `secrets/<tenant>.env` 设置：
 
@@ -170,7 +177,7 @@ DINGTALK_REGISTER_QUICK_ENTRY=false
 curl http://localhost:8002/health
 curl http://localhost:8002/ready
 curl http://localhost:8002/instance/agent
-curl http://localhost:8002/integrations/dingtalk/plugins/query
+curl http://localhost:8002/integrations/dingtalk/t/<tenant_id>/plugins/query
 curl http://localhost:8002/ | grep '<title>'
 ```
 

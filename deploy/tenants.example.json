@@ -14,7 +14,8 @@
   },
   "traefik": {
     "enabled": true,
-    "dynamic_output": "/root/code/traefik/dynamic.d/generated-sales-agent.yml"
+    "dynamic_output": "/root/code/traefik/dynamic.d/generated-sales-agent.yml",
+    "shared_network": "taishan-network"
   },
   "output": {
     "compose_file": "docker-compose.generated.yml"

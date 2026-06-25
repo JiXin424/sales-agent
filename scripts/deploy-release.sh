@@ -870,12 +870,12 @@ for tenant in data.get("tenants", []):
         print(f"{tenant['id']}\tSKIP_CONFIG")
         continue
     params = {
-        "tenant_id": tenant["id"],
         "clear_first": values.get("DINGTALK_QUICK_ENTRY_CLEAR_FIRST", "true"),
         "name": values.get("DINGTALK_QUICK_ENTRY_NAME", "教练模式"),
         "entries": values.get("DINGTALK_QUICK_ENTRY_ENTRIES", "coach,small_win_appreciation,sales_block_breakthrough"),
     }
-    url = f"http://127.0.0.1:{tenant['api_port']}/integrations/dingtalk/plugins/register?{urllib.parse.urlencode(params)}"
+    base = f"http://127.0.0.1:{tenant['api_port']}/integrations/dingtalk/t/{tenant['id']}/plugins/register"
+    url = f"{base}?{urllib.parse.urlencode(params)}"
     print(f"{tenant['id']}\t{url}")
 PY
   case "$register_url" in

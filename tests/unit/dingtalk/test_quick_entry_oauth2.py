@@ -2,27 +2,25 @@
 
 from sales_agent.integrations.dingtalk.quick_entry import (
     _oauth_result_page,
-    _parse_oauth_state,
+    _parse_oauth_action,
 )
 from fastapi.responses import HTMLResponse
 
 
-class TestParseOauthState:
-    def test_normal(self):
-        assert _parse_oauth_state("pre_visit_prepare:taishan") == ("pre_visit_prepare", "taishan")
+class TestParseOauthAction:
+    def test_action_only(self):
+        # tenant_id 已在 URL path 段（/t/{tenant}/oauth2-callback），state 只传 action
+        assert _parse_oauth_action("pre_visit_prepare") == "pre_visit_prepare"
 
     def test_sales_block(self):
-        assert _parse_oauth_state("sales_block_breakthrough:taishan") == (
-            "sales_block_breakthrough", "taishan",
-        )
+        assert _parse_oauth_action("sales_block_breakthrough") == "sales_block_breakthrough"
 
-    def test_missing_tenant(self):
-        # 只有 action、无冒号 → tenant 为空，端点会判定失败
-        action, tenant = _parse_oauth_state("pre_visit_prepare")
-        assert action == "pre_visit_prepare" and tenant == ""
+    def test_legacy_state_with_tenant(self):
+        # 兼容旧的 action:tenant_id 格式（取冒号前，tenant 由 path 段携带）
+        assert _parse_oauth_action("pre_visit_prepare:taishan") == "pre_visit_prepare"
 
     def test_empty(self):
-        assert _parse_oauth_state("") == ("", "")
+        assert _parse_oauth_action("") == ""
 
 
 class TestOAuthResultPage:

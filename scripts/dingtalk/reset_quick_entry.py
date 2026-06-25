@@ -38,8 +38,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ENV = REPO_ROOT / "secrets" / "taishan.env"
 DEFAULT_ICON = REPO_ROOT / "src" / "sales_agent" / "integrations" / "dingtalk" / "static" / "coach_mode.png"
 
-# 要注册的快捷入口：(展示名, action)。action=None → 教练模式默认视频页(/quick?tenant_id=)；
-# 其余 → /quick?action=<action>&tenant_id= （触发页）。
+# 要注册的快捷入口：(展示名, action)。action=None → 教练模式默认视频页(/t/{tenant}/quick)；
+# 其余 → /t/{tenant}/quick?action=<action> （触发页）。
 ENTRIES = [
     ("教练模式", None),
     ("小赢欣赏", "small_win_appreciation"),
@@ -155,8 +155,8 @@ async def main(args: argparse.Namespace) -> int:
         print(json.dumps(before, ensure_ascii=False, indent=2))
 
         def _entry_url(zh_name: str, action: str | None) -> str:
-            base = f"{public_url}/integrations/dingtalk/quick"
-            return f"{base}?action={action}&tenant_id={tenant_id}" if action else f"{base}?tenant_id={tenant_id}"
+            base = f"{public_url}/integrations/dingtalk/t/{tenant_id}/quick"
+            return f"{base}?action={action}" if action else base
 
         print("\n[INFO] 计划注册的快捷入口：")
         if args.pc_sidebar:

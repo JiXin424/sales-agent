@@ -35,6 +35,11 @@ _logger = logging.getLogger(__name__)
 # 导致任务静默消失、job 永远卡 running。任务完成后由 done 回调自动移除。
 _running_ingest_tasks: set = set()
 
+# 单个文件入库的总超时（秒）：不管卡在 LLM / embedding / neo4j / 解析哪一步，
+# 超过这个时间就 cancel 并标 job failed，避免永远卡 running。
+# 单文件实体抽取 + 分批事实抽取（多次 LLM）正常 1-3 分钟，5 分钟足够兜底。
+INGEST_JOB_TIMEOUT_SECONDS = 300
+
 
 def _on_ingest_task_done(task: asyncio.Task) -> None:
     """后台任务结束：移除引用 + 记录未捕获异常（避免静默失败）。"""
@@ -148,11 +153,14 @@ async def _run_ingest_background(
 
             settings = get_settings()
             service = build_ingestion_service(bg_db, settings, model_provider)
-            job, stats = await service.ingest_paths(
-                tenant_id=tenant_id,
-                agent_id=agent_id,
-                paths=[path],
-                progress_callback=_on_progress,
+            job, stats = await asyncio.wait_for(
+                service.ingest_paths(
+                    tenant_id=tenant_id,
+                    agent_id=agent_id,
+                    paths=[path],
+                    progress_callback=_on_progress,
+                ),
+                timeout=INGEST_JOB_TIMEOUT_SECONDS,
             )
             await bg_db.commit()
             await progress_bus.publish(job_id, {
@@ -162,6 +170,9 @@ async def _run_ingest_background(
             })
             return  # 成功，直接返回
     except Exception as exc:
+        # 超时给个清楚点的提示（asyncio.TimeoutError 的 str() 是空的）
+        is_timeout = isinstance(exc, asyncio.TimeoutError)
+        err_msg = f"入库超时（>{INGEST_JOB_TIMEOUT_SECONDS}s，可能 LLM/外部服务卡死）" if is_timeout else str(exc)[:500]
         # 用全新 session 标 job failed（原 bg_db 可能已坏或未建立）
         try:
             from sales_agent.core.database import get_session_factory as _gsf
@@ -169,7 +180,7 @@ async def _run_ingest_background(
                 row = (await _db.execute(select(IngestionJob).where(IngestionJob.id == job_id))).scalar_one_or_none()
                 if row:
                     row.status = "failed"
-                    row.error_summary = str(exc)[:500]
+                    row.error_summary = err_msg
                     await _db.commit()
         except Exception:  # noqa: BLE001
             pass

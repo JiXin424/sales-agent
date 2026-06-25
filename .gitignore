@@ -6,6 +6,7 @@
 # cannot have individual files re-included by `!` later.
 secrets/*
 !secrets/example.env
+!secrets/neo4j.env.example
 
 # Python
 __pycache__/

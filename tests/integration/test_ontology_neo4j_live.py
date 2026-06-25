@@ -149,3 +149,65 @@ async def test_live_vector_fallback_when_graph_misses(tmp_path, db_session):
     finally:
         await _cleanup(client, tenant)
         await client.close()
+
+
+LIVE_LLM = os.getenv("ONTOLOGY_LIVE_LLM")
+
+
+@pytest.mark.skipif(not LIVE_LLM, reason="set ONTOLOGY_LIVE_LLM=1 to test real LLM (DeepSeek + dashscope)")
+@pytest.mark.asyncio
+async def test_live_real_llm_ingest_retrieve(tmp_path, db_session):
+    """真实 LLM 抽取 + embedding：验证 DeepSeek JSON 稳定性和 dashscope 1024 维向量。"""
+    tenant = f"livellm_{uuid.uuid4().hex[:8]}"
+    settings = __import__('sales_agent.core.config', fromlist=['get_settings']).get_settings()
+
+    from sales_agent.services.tenant_resolver import TenantResolver
+    from sales_agent.ontology.runner import build_ingestion_service
+    from sales_agent.ontology.retrieval_service import OntologyRetrievalService
+    from sales_agent.ontology.answer_service import OntologyAnswerService
+    from sales_agent.ontology.repository import OntologyRepository
+
+    # 真实 LLM provider — 走 TenantResolver（需要 PG db_session）
+    resolver = TenantResolver(db_session)
+    tenant_info = await resolver.resolve(tenant)
+    provider = resolver.get_model_provider(tenant_info)
+
+    # 验证 embedding 维度 = 1024
+    embeds = await provider.embedding.embed(["测试"])
+    assert len(embeds) == 1
+    assert len(embeds[0]) == 1024, f"embedding dim {len(embeds[0])}, expected 1024"
+
+    neo_client = Neo4jClient(settings.neo4j)
+    try:
+        path = tmp_path / "sample.md"
+        path.write_text(
+            "# 福多多产品线\n"
+            "福多多提供员工福利卡、年节礼包和企业下午茶服务。"
+            "价格方面，福利卡面额100-500元，企业下午茶人均30-80元。",
+            encoding="utf-8",
+        )
+
+        service = build_ingestion_service(db_session, settings, provider)
+        job, stats = await service.ingest_paths(
+            tenant_id=tenant, agent_id="agent1", paths=[path],
+        )
+        assert job.status in ("completed", "completed_with_errors")
+        assert stats.entities_created >= 1, f"LLM should extract >=1 entity; got {stats.entities_created}"
+        assert stats.facts_created >= 1, f"LLM should extract >=1 fact; got {stats.facts_created}"
+
+        # 验证实体和事实能从 neo4j 读出
+        repo = OntologyRepository(neo_client)
+        retrieval = OntologyRetrievalService(repo, provider.embedding)
+        evidence = await retrieval.retrieve(tenant_id=tenant, agent_id="agent1", question="福多多产品")
+        assert len(evidence.matched_entities) >= 1
+
+        # 回答
+        answer_service = OntologyAnswerService(retrieval, provider.chat)
+        answer = await answer_service.answer_for_task(
+            tenant_id=tenant, agent_id="agent1", task_type="knowledge_qa", message="福多多有什么产品"
+        )
+        assert len(answer.answer["summary"]) > 10  # 真实 LLM 回答必须有内容
+    finally:
+        async with neo_client.session() as s:
+            await s.run("MATCH (n) WHERE n.tenant_id = $t DETACH DELETE n", t=tenant)
+        await neo_client.close()

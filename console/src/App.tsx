@@ -40,8 +40,8 @@ import AgentEvalRunsPage from './pages/Agents/AgentEvalRunsPage';
 import AgentReviewQueuePage from './pages/Agents/AgentReviewQueuePage';
 import { useInstanceAgent } from './hooks/useInstanceAgent';
 
-/** 根路径 boot：解析当前实例的唯一 Agent，直进其 overview（单 Agent 模式）。 */
-function InstanceEntry() {
+/** 根路径 boot：解析当前实例的唯一 Agent，重定向到其指定子页（单 Agent 模式）。 */
+function InstanceEntry({ to = 'overview' }: { to?: string }) {
   const { data, isLoading, isError } = useInstanceAgent();
   if (isLoading) return <div style={{ padding: 48, textAlign: 'center' }}>加载实例 Agent…</div>;
   if (isError || !data) {
@@ -51,19 +51,21 @@ function InstanceEntry() {
       </div>
     );
   }
-  return <Navigate to={`/agents/${data.id}/overview`} replace />;
+  return <Navigate to={`/agents/${data.id}/${to}`} replace />;
 }
 
 export default function App() {
   return (
     <Routes>
-      {/* 根 + /dashboard → 综合运营面板（运营指标 + 环境配置）。 */}
-      <Route path="/" element={<DashboardPage />} />
-      <Route path="/dashboard" element={<DashboardPage />} />
+      {/* 根 → 当前实例 Agent 概览（带 AgentLayout 侧边栏）。
+          /dashboard → 同实例的运营面板（同样在 AgentLayout 内，带侧边栏）。 */}
+      <Route path="/" element={<InstanceEntry />} />
+      <Route path="/dashboard" element={<InstanceEntry to="dashboard" />} />
 
       {/* One Agent, one management shell. No list, no switcher. */}
       <Route path="/agents/:agentId" element={<AgentLayout />}>
         <Route index element={<Navigate to="overview" replace />} />
+        <Route path="dashboard" element={<DashboardPage />} />
         <Route path="overview" element={<AgentOverviewPage />} />
         <Route path="setup" element={<AgentSetupPage />} />
         <Route path="clone" element={<AgentCloneWizardPage />} />

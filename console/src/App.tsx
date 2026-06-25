@@ -56,9 +56,9 @@ function InstanceEntry() {
 export default function App() {
   return (
     <Routes>
-      {/* 根 + /dashboard → 当前实例唯一 Agent 的 overview（无列表）。 */}
-      <Route path="/" element={<InstanceEntry />} />
-      <Route path="/dashboard" element={<InstanceEntry />} />
+      {/* 根 + /dashboard → 综合运营面板（运营指标 + 环境配置）。 */}
+      <Route path="/" element={<DashboardPage />} />
+      <Route path="/dashboard" element={<DashboardPage />} />
 
       {/* One Agent, one management shell. No list, no switcher. */}
       <Route path="/agents/:agentId" element={<AgentLayout />}>

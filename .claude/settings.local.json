@@ -47,7 +47,8 @@
       "Bash(echo \"  id: $\\(curl -s --max-time 5 http://100.100.100.200/latest/meta-data/instance-id\\)\")",
       "Bash(curl -s --max-time 5 http://100.100.100.200/latest/meta-data/eipv4)",
       "Bash(curl -s --max-time 5 http://100.100.100.200/latest/meta-data/public-ipv4)",
-      "Bash(dd if=/dev/zero bs=1M count=50)"
+      "Bash(dd if=/dev/zero bs=1M count=50)",
+      "Bash(unzip -l ontology-toolkit.zip)"
     ]
   }
 }

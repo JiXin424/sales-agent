@@ -78,3 +78,6 @@ nginx/certbot-webroot/
 # Docker images — 离线镜像 tar 包,体积大,不进 git
 images/*.tar
 images/
+
+# superpowers / Claude scratch (brainstorm mockups、SDD ledger 等)
+.superpowers/

@@ -230,6 +230,25 @@ def render_tenant_services(tenant: dict[str, Any], image: str, database_url: str
             ]
         )
 
+        # 前端容器（nginx serving SPA + API 代理）
+        frontend_image = os.environ.get("FRONTEND_IMAGE", "sales-agent-frontend:latest")
+        frontend_port = tenant.get("frontend_port", tenant["api_port"] + 3000)
+        lines.extend(
+            [
+                f"  {tenant_id}-frontend:",
+                f"    image: {frontend_image}",
+                f"    container_name: sales-agent-{tenant_id}-frontend",
+                "    restart: unless-stopped",
+                "    environment:",
+                f"      - BACKEND_HOST={tenant_id}-api",
+                "    ports:",
+                f'      - "{frontend_port}:80"',
+                "    depends_on:",
+                f"      - {tenant_id}-api",
+                "",
+            ]
+        )
+
     if "stream" in roles:
         lines.extend(
             [
@@ -316,10 +335,11 @@ def render_traefik_routes(data: dict[str, Any]) -> str:
         tenant_id = tenant["id"]
         domain = tenant.get("domain", "")
         env_path = Path(tenant["env_file"]).resolve()
-        container_name = f"sales-agent-{tenant_id}-api"
+        api_container = f"sales-agent-{tenant_id}-api"
+        frontend_container = f"sales-agent-{tenant_id}-frontend"
 
         if domain:
-            # Host-based route — dedicated domain → entire API
+            # Host-based route — 用户域名 → 前端 nginx 容器（SPA + API 代理）
             router_name = f"sales-agent-{tenant_id}"
             service_name = f"sales-agent-{tenant_id}-backend"
             lines.extend([
@@ -337,7 +357,7 @@ def render_traefik_routes(data: dict[str, Any]) -> str:
                     f"    {service_name}:",
                     "      loadBalancer:",
                     "        servers:",
-                    f'          - url: "http://{container_name}:8000"',
+                    f'          - url: "http://{frontend_container}:80"',
                 ])
 
         # PathPrefix route for DingTalk integration (shared domain)
@@ -363,7 +383,7 @@ def render_traefik_routes(data: dict[str, Any]) -> str:
                         f"    {service_name}:",
                         "      loadBalancer:",
                         "        servers:",
-                        f'          - url: "http://{container_name}:8000"',
+                        f'          - url: "http://{api_container}:8000"',
                     ])
 
     if not service_lines:

@@ -6,11 +6,9 @@
 #
 # 多租户 dedicated mode（单容器模式）：
 #   docker compose --profile taishan up -d
-#   docker compose --profile tenant-b up -d
 #
 # 角色拆分模式（推荐生产部署）：
 #   docker compose --profile taishan-split up -d
-#   docker compose --profile tenant-b-split up -d
 #
 # Traefik 反向代理由共享实例 /root/code/traefik/ 管理，
 # 本项目路由通过 render-multitenant-deploy.py 输出到
@@ -88,26 +86,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-
-  # --- Dedicated mode: 租户 B ---
-  tenant-b-agent:
-    image: sales-agent:latest
-    profiles: ["tenant-b"]
-    container_name: sales-agent-tenant-b
-    restart: unless-stopped
-    env_file:
-      - ./secrets/tenant-b.env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://sales_agent:sales_agent_dev@postgres:5432/sales_agent
-    volumes:
-      - ./data/tenant-b:/data/tenant_b
-      - ./logs/tenant-b:/logs/tenant_b
-    ports:
-      - "8102:8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-
   # ============================================================
   # 角色拆分模式（生产推荐）
   # ============================================================
@@ -174,66 +152,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-
-  # --- 租户 B：API ---
-  tenant-b-api:
-    image: sales-agent:latest
-    profiles: ["tenant-b-split"]
-    container_name: sales-agent-tenant-b-api
-    restart: unless-stopped
-    env_file:
-      - ./secrets/tenant-b.env
-    environment:
-      PROCESS_ROLE: api
-      DATABASE_URL: postgresql+asyncpg://sales_agent:sales_agent_dev@postgres:5432/sales_agent
-    volumes:
-      - ./data/tenant-b:/data/tenant_b
-      - ./logs/tenant-b:/logs/tenant_b
-    ports:
-      - "8102:8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-  # --- 租户 B：DingTalk Stream ---
-  tenant-b-stream:
-    image: sales-agent:latest
-    profiles: ["tenant-b-split"]
-    container_name: sales-agent-tenant-b-stream
-    restart: unless-stopped
-    env_file:
-      - ./secrets/tenant-b.env
-    environment:
-      PROCESS_ROLE: stream
-      DATABASE_URL: postgresql+asyncpg://sales_agent:sales_agent_dev@postgres:5432/sales_agent
-    volumes:
-      - ./logs/tenant-b:/logs/tenant_b
-    depends_on:
-      postgres:
-        condition: service_healthy
-    deploy:
-      replicas: 1
-      restart_policy:
-        condition: on-failure
-
-  # --- 租户 B：后台 Worker ---
-  tenant-b-worker:
-    image: sales-agent:latest
-    profiles: ["tenant-b-split"]
-    container_name: sales-agent-tenant-b-worker
-    restart: unless-stopped
-    env_file:
-      - ./secrets/tenant-b.env
-    environment:
-      PROCESS_ROLE: worker
-      DATABASE_URL: postgresql+asyncpg://sales_agent:sales_agent_dev@postgres:5432/sales_agent
-    volumes:
-      - ./data/tenant-b:/data/tenant_b
-      - ./logs/tenant-b:/logs/tenant_b
-    depends_on:
-      postgres:
-        condition: service_healthy
-
 volumes:
   pgdata:
   neo4jdata:

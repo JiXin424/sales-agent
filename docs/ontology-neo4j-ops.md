@@ -73,7 +73,8 @@ NEO4J_LIVE_TEST=1 .venv/bin/pytest tests/integration/test_ontology_neo4j_live.py
 
 1. 打开 `/agents/{agent_id}/knowledge`。
 2. 确认顶部状态为「ready」（绿色）。
-3. 拖拽或点击选择 `.md` / `.txt` 文件（可多选）。
+3. 拖拽或点击选择文件（可多选）：`.md` / `.txt` / `.docx` / `.pdf` / `.pptx`。
+   - `.md` / `.txt` 直接读取；`.docx` / `.pdf` / `.pptx` 由后端 `python-docx` / `pymupdf` / `python-pptx` 解析为文本。
 4. 每个文件独立入库：6 阶段实时进度（上传/解析/抽实体/抽事实/写图谱/完成）。
 5. 完成行显示入库统计（实体/事实/待复核/冲突），可点击「查看图谱 →」跳转 Neo4j Browser。
 6. 失败行显示错误信息，可重试。

@@ -203,10 +203,12 @@ class FeedbackResponse(BaseModel):
 
 
 class PromptVersionCreate(BaseModel):
-    task_type: str
+    task_type: str = ""  # task 类必填；非 task 类可空（用 prompt_key 定位）
     template_text: str
     description: str = ""
     version: str = ""
+    prompt_category: str = "task"
+    prompt_key: str | None = None
 
 
 class PromptVersionUpdate(BaseModel):
@@ -215,17 +217,23 @@ class PromptVersionUpdate(BaseModel):
 
 
 class PromptPreviewRequest(BaseModel):
-    task_type: str
+    prompt_category: str = "task"
+    prompt_key: str | None = None
+    task_type: str | None = None  # 兼容旧字段：task 类的 prompt_key
     version_id: str | None = None  # None = use current active
-    sample_message: str
+    sample_message: str = ""
     sample_context: dict[str, Any] | None = None
+    sample_variables: dict[str, str] | None = None  # router/risk/coach 的示例变量
     run_generation: bool = False
 
 
 class PromptVersionResponse(BaseModel):
     id: str
     tenant_id: str
-    task_type: str
+    task_type: str | None = None
+    prompt_category: str = "task"
+    prompt_key: str | None = None
+    required_placeholders: list[str] = []
     version: str
     status: str
     template_text: str
@@ -245,7 +253,38 @@ class PromptPreviewResponse(BaseModel):
     rendered_prompt: str
     model_output: str | None = None
     version_id: str | None = None
-    task_type: str
+    prompt_category: str = "task"
+    prompt_key: str | None = None
+    task_type: str | None = None
+
+
+class BuiltinPromptResponse(BaseModel):
+    """内置 prompt 参考（只读，供前端展示默认模板与占位符）。"""
+
+    prompt_category: str
+    prompt_key: str
+    template: str
+    required_placeholders: list[str]
+    description: str = ""
+
+
+class SetPromptBindingRequest(BaseModel):
+    """Agent prompt 绑定请求。version_id 为 None 时解绑。"""
+
+    version_id: str | None = None
+
+
+class EffectivePromptResponse(BaseModel):
+    """某 (category, key) 当前生效的 prompt（DB active 优先，否则内置默认）。"""
+
+    prompt_category: str
+    prompt_key: str
+    template: str
+    required_placeholders: list[str]
+    description: str = ""
+    source: str  # "db_active" | "builtin"
+    version_id: str | None = None
+    version: str = ""
 
 
 # --- 知识上传 & 导入任务 ---

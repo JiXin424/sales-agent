@@ -11,39 +11,16 @@ from typing import Any
 
 from sales_agent.llm.base import ChatModel
 from sales_agent.prompts.system import SYSTEM_CONSTRAINT
-from sales_agent.prompts import (
-    emotional_support,
-    knowledge_qa,
-    script_generation,
-    objection_handling,
-    conversation_review,
-    general_coaching,
-    visit_preparation,
-    follow_up_planning,
-    customer_context_summary,
-    deal_advancement,
-    conversation_scoring,
-    post_visit_review,
-)
+from sales_agent.services.prompt_defaults import BUILTIN_PROMPTS
 from sales_agent.services.retriever import RetrievalResult
 
 logger = logging.getLogger(__name__)
 
-# 任务类型到 prompt 模板的映射
-_TASK_PROMPTS = {
-    "emotional_support": emotional_support.EMOTIONAL_SUPPORT_PROMPT,
-    "knowledge_qa": knowledge_qa.KNOWLEDGE_QA_PROMPT,
-    "script_generation": script_generation.SCRIPT_GENERATION_PROMPT,
-    "objection_handling": objection_handling.OBJECTION_HANDLING_PROMPT,
-    "conversation_review": conversation_review.CONVERSATION_REVIEW_PROMPT,
-    "general_sales_coaching": general_coaching.GENERAL_COACHING_PROMPT,
-    "visit_preparation": visit_preparation.VISIT_PREPARATION_PROMPT,
-    "follow_up_planning": follow_up_planning.FOLLOW_UP_PLANNING_PROMPT,
-    "customer_context_summary": customer_context_summary.CUSTOMER_CONTEXT_SUMMARY_PROMPT,
-    "deal_advancement": deal_advancement.DEAL_ADVANCEMENT_PROMPT,
-    "conversation_scoring": conversation_scoring.CONVERSATION_SCORING_PROMPT,
-    "post_visit_review": post_visit_review.POST_VISIT_REVIEW_PROMPT,
-}
+# task 类默认 prompt，从 prompt_defaults 注册表派生（single source of truth）。
+# 兼容旧代码 ``from agent_executor import _TASK_PROMPTS``。
+_TASK_PROMPTS = {b.key: b.template for b in BUILTIN_PROMPTS if b.category == "task"}
+# task_type 未注册时的兜底 prompt
+_DEFAULT_TASK_PROMPT = _TASK_PROMPTS.get("general_sales_coaching", "")
 
 
 def _build_context_block(context: dict[str, Any] | None) -> str:
@@ -157,6 +134,7 @@ async def execute_agent(
     history_messages: list[dict[str, str]] | None = None,
     tenant_style: dict[str, Any] | None = None,
     prompt_text: str | None = None,
+    system_prompt_text: str | None = None,
 ) -> dict[str, Any]:
     """执行 Agent：构建 prompt，调用模型，返回结构化回答。
 
@@ -183,6 +161,7 @@ async def execute_agent(
         history_messages=history_messages,
         tenant_style=tenant_style,
         prompt_text=prompt_text,
+        system_prompt_text=system_prompt_text,
     )
 
     # 2. 调用模型
@@ -215,13 +194,18 @@ def _build_messages(
     history_messages: list[dict[str, str]] | None = None,
     tenant_style: dict[str, Any] | None = None,
     prompt_text: str | None = None,
+    system_prompt_text: str | None = None,
 ) -> list[dict[str, str]]:
     """构建发送给模型的消息列表。
 
     被 :func:`execute_agent` 和 :func:`stream_execute_agent` 共用。
+
+    Args:
+        prompt_text: 运行时解析的 task prompt 模板；None 时回退到 _TASK_PROMPTS。
+        system_prompt_text: 运行时解析的 system prompt；None 时回退到 SYSTEM_CONSTRAINT。
     """
-    # 1. 获取 prompt 模板：优先使用运行时解析的模板，否则回退到静态映射
-    template = prompt_text or _TASK_PROMPTS.get(task_type, general_coaching.GENERAL_COACHING_PROMPT)
+    # 1. 获取 prompt 模板：优先运行时解析的模板，否则回退到默认映射
+    template = prompt_text or _TASK_PROMPTS.get(task_type, _DEFAULT_TASK_PROMPT)
 
     # 2. 构建上下文块
     context_block = _build_context_block(context)
@@ -243,7 +227,7 @@ def _build_messages(
     )
 
     # 5. 构建消息列表
-    messages = [{"role": "system", "content": SYSTEM_CONSTRAINT}]
+    messages = [{"role": "system", "content": system_prompt_text or SYSTEM_CONSTRAINT}]
 
     # 加入租户风格
     if tenant_style:
@@ -270,6 +254,7 @@ async def stream_execute_agent(
     history_messages: list[dict[str, str]] | None = None,
     tenant_style: dict[str, Any] | None = None,
     prompt_text: str | None = None,
+    system_prompt_text: str | None = None,
 ) -> AsyncIterator[str]:
     """流式执行 Agent：构建 prompt，流式调用模型，yield 原始文本块。
 
@@ -299,6 +284,7 @@ async def stream_execute_agent(
         history_messages=history_messages,
         tenant_style=tenant_style,
         prompt_text=prompt_text,
+        system_prompt_text=system_prompt_text,
     )
 
     start_time = time.time()

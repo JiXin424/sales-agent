@@ -143,7 +143,9 @@ async def _chat(tenant: str, user: str):
 
             try:
                 # 任务路由
-                route_result = await route_task(message, provider.chat)
+                route_result = await route_task(
+                    message, provider.chat, db=db, tenant_id=tenant
+                )
 
                 # RAG 检索
                 retrieval_result = None
@@ -155,6 +157,14 @@ async def _chat(tenant: str, user: str):
                         task_type=route_result.task_type,
                     )
 
+                # Prompt 解析（接入 DB 版本管理）
+                from sales_agent.services.prompt_resolver_helper import (
+                    resolve_execution_prompts,
+                )
+                _task_prompt, _system_prompt = await resolve_execution_prompts(
+                    db, None, tenant, route_result.task_type
+                )
+
                 # Agent 执行
                 answer_dict = await execute_agent(
                     chat_model=provider.chat,
@@ -162,6 +172,8 @@ async def _chat(tenant: str, user: str):
                     message=message,
                     retrieval_result=retrieval_result,
                     tenant_style=tenant_info.get("config", {}),
+                    prompt_text=_task_prompt,
+                    system_prompt_text=_system_prompt,
                 )
 
                 # 风险检查
@@ -265,7 +277,9 @@ async def _eval(tenant: str, file: str):
             typer.echo(f"[{i}/{len(cases)}] {input_msg[:50]}...")
 
             try:
-                route_result = await route_task(input_msg, provider.chat)
+                route_result = await route_task(
+                    input_msg, provider.chat, db=db, tenant_id=tenant
+                )
 
                 retrieval_result = None
                 if route_result.needs_retrieval:
@@ -276,11 +290,21 @@ async def _eval(tenant: str, file: str):
                         task_type=route_result.task_type,
                     )
 
+                # Prompt 解析（接入 DB 版本管理）
+                from sales_agent.services.prompt_resolver_helper import (
+                    resolve_execution_prompts,
+                )
+                _task_prompt, _system_prompt = await resolve_execution_prompts(
+                    db, None, tenant, route_result.task_type
+                )
+
                 answer_dict = await execute_agent(
                     chat_model=provider.chat,
                     task_type=route_result.task_type,
                     message=input_msg,
                     retrieval_result=retrieval_result,
+                    prompt_text=_task_prompt,
+                    system_prompt_text=_system_prompt,
                 )
 
                 answer_text = json.dumps(answer_dict, ensure_ascii=False)

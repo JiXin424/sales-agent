@@ -55,3 +55,27 @@ export const REVIEW_STATUS_OPTIONS = [
   { value: 'reviewed', label: '已处理', color: 'green' },
   { value: 'ignored', label: '忽略', color: 'default' },
 ] as const;
+
+export const PROMPT_CATEGORY_LABELS: Record<string, string> = {
+  task: '任务执行',
+  system: '系统约束',
+  router: '任务路由',
+  risk: '风险检查',
+  coach: '教练辅导',
+};
+
+// 非 task 类的 prompt_key（task 类用 TASK_TYPE_LABELS 的 12 项）
+export const PROMPT_KEYS_BY_CATEGORY: Record<string, { key: string; label: string }[]> = {
+  system: [{ key: 'system_constraint', label: '系统约束（Agent 人设）' }],
+  router: [{ key: 'task_router', label: '任务路由分类器' }],
+  risk: [{ key: 'risk_check', label: '风险合规检查' }],
+  coach: [
+    { key: 'coach_daily_eval', label: '每日能力评估' },
+    { key: 'coach_daily_eval_system', label: '评估 system 消息' },
+    { key: 'coach_sw_system', label: '小赢欣赏人设' },
+    { key: 'coach_sw_card', label: '小赢卡模板' },
+    { key: 'coach_sb_system', label: '卡点破框人设' },
+    { key: 'coach_sb_split', label: '事实/解释拆分' },
+    { key: 'coach_sb_card', label: '破框卡模板' },
+  ],
+};

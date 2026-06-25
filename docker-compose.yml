@@ -11,32 +11,13 @@
 # 角色拆分模式（推荐生产部署）：
 #   docker compose --profile taishan-split up -d
 #   docker compose --profile tenant-b-split up -d
+#
+# Traefik 反向代理由共享实例 /root/code/traefik/ 管理，
+# 本项目路由通过 render-multitenant-deploy.py 输出到
+# /root/code/traefik/dynamic.d/generated-sales-agent.yml
 # ============================================================
 
 services:
-  # ============================================================
-  # Traefik HTTPS 反向代理 + 自动 SSL 证书
-  # ============================================================
-  # 内置 ACME 客户端，自动向 Let's Encrypt 申请和续期证书
-  # 无需手动操作 certbot，证书生命周期全自动管理
-  # ============================================================
-  traefik:
-    image: traefik:v3.3
-    container_name: sales-agent-traefik
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
-      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
-      - ./traefik/certs:/etc/traefik/certs:ro
-    healthcheck:
-      test: ["CMD", "traefik", "healthcheck", "--ping"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
 
   postgres:
     image: docker.1ms.run/pgvector/pgvector:pg16

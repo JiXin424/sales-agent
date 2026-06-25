@@ -205,7 +205,7 @@ class DailyEvaluationService:
 
         # 4. LLM 调用 + 解析
         started = time.time()
-        parsed, error = await self._call_llm(conversation_block)
+        parsed, error = await self._call_llm(conversation_block, tenant_id, agent_id)
         latency_ms = int((time.time() - started) * 1000)
 
         # 5. 校验
@@ -576,12 +576,30 @@ class DailyEvaluationService:
     # LLM 调用 + 解析（重试一次）
     # ------------------------------------------------------------------
 
-    async def _call_llm(self, conversation_block: str) -> tuple[dict | None, str | None]:
+    async def _call_llm(
+        self,
+        conversation_block: str,
+        tenant_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> tuple[dict | None, str | None]:
         chat_model = self._resolve_chat_model()
-        prompt = build_evaluation_prompt(conversation_block)
+        # 解析 prompt（接入 DB 版本管理；无 tenant 或失败时回退内置常量）
+        user_prompt = build_evaluation_prompt(conversation_block)
+        system_msg = "你是销售能力评估引擎，只输出 JSON。"
+        if tenant_id:
+            try:
+                from sales_agent.services.prompt_registry import PromptRegistry
+
+                reg = PromptRegistry(self.db)
+                user_tpl = await reg.resolve_prompt("coach", "coach_daily_eval", tenant_id, agent_id)
+                sys_tpl = await reg.resolve_prompt("coach", "coach_daily_eval_system", tenant_id, agent_id)
+                user_prompt = user_tpl.format(conversation_block=conversation_block)
+                system_msg = sys_tpl
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Coach daily_eval prompt resolve failed, fallback to builtin: %s", e)
         messages = [
-            {"role": "system", "content": "你是销售能力评估引擎，只输出 JSON。"},
-            {"role": "user", "content": prompt},
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_prompt},
         ]
         last_err: str | None = None
         for attempt in range(2):

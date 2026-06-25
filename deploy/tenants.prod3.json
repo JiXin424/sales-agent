@@ -1,0 +1,29 @@
+{
+  "_comment": "prod3 (主控 47.120.55.219) 租户清单。CI deploy-release 使用此文件。",
+  "project_name": "sales-agent",
+  "image": "registry.internal:5000/sales-agent:latest",
+  "postgres_image": "registry.internal:5000/pgvector/pgvector:pg16",
+  "database": {
+    "name": "sales_agent",
+    "user": "sales_agent",
+    "password": "sales_agent_dev",
+    "expose_host_port": false
+  },
+  "traefik": {
+    "enabled": true,
+    "dynamic_output": "/root/code/traefik/dynamic.d/generated-sales-agent.yml"
+  },
+  "output": { "compose_file": "docker-compose.generated.yml" },
+  "tenants": [
+    {
+      "id": "taishan",
+      "name": "Taishan (prod3 生产)",
+      "domain": "qiyelongxia.com.cn",
+      "api_port": 8001,
+      "env_file": "secrets/taishan.env",
+      "data_dir": "./data/taishan",
+      "logs_dir": "./logs/taishan",
+      "roles": ["api", "stream", "worker"]
+    }
+  ]
+}

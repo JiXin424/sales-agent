@@ -272,6 +272,15 @@ async def handle_dingtalk_streaming(
     raw_buffer = ""
     # 三层降级：streaming API → card update → 最终兜底
     use_streaming_api = True
+    # 解析 task + system prompt（接入 DB 版本管理；钉钉链路此前直接用代码常量）
+    from sales_agent.services.prompt_resolver_helper import resolve_execution_prompts
+    try:
+        _task_prompt, _system_prompt = await resolve_execution_prompts(
+            db, agent_id, tenant_id, task_type
+        )
+    except Exception as e:
+        logger.warning("Streaming prompt resolve failed, fallback to builtin: %s", e)
+        _task_prompt, _system_prompt = None, None
     try:
         async for chunk in stream_execute_agent(
             chat_model=model_provider.chat,
@@ -281,6 +290,8 @@ async def handle_dingtalk_streaming(
             retrieval_result=retrieval_result,
             history_messages=history_messages,
             tenant_style=tenant_config if isinstance(tenant_config, dict) else {},
+            prompt_text=_task_prompt,
+            system_prompt_text=_system_prompt,
         ):
             raw_buffer += chunk
             if throttle.should_update(raw_buffer):

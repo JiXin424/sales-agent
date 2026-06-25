@@ -23,6 +23,7 @@ dependencies = [
     "dingtalk-stream>=0.20.0",
     "python-multipart>=0.0.6",
     "alembic>=1.13.0",
+    "neo4j>=5.23.0",
 ]
 
 [project.optional-dependencies]

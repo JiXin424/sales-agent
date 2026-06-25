@@ -103,3 +103,16 @@ dingtalk:
     per_user_per_minute: 20
     per_user_per_day: 500
     per_tenant_per_minute: 200
+
+# --- 知识引擎 / 本体 ---
+ontology:
+  knowledge_engine: legacy_rag
+  vector_fallback: conservative
+
+neo4j:
+  uri: ""
+  user: "neo4j"
+  password: ""
+  database: "neo4j"
+  visual_url: ""
+  connection_timeout_seconds: 5.0

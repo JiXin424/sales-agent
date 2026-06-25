@@ -193,27 +193,27 @@ class TenantRuntime:
         """返回脱敏的日志信息。"""
         return self.get_debug_info()
 
-    # System env vars to exclude from config display (common Linux / Docker / Python noise).
-    _SYSTEM_ENV_KEYS: ClassVar[set[str]] = {
-        "PATH", "HOME", "USER", "HOSTNAME", "PWD", "SHLVL", "TERM",
-        "LANG", "LC_ALL", "TZ", "DEBIAN_FRONTEND",
-        "PYTHONPATH", "PYTHONUNBUFFERED", "PYTHONIOENCODING",
-        "PIP_REQUIRE_VIRTUALENV", "PIP_NO_CACHE_DIR",
-        "VIRTUAL_ENV", "CONDA_PREFIX",
-        "DOCKER_HOST", "DOCKER_CONFIG",
-        "HOSTNAME", "OLDPWD", "LS_COLORS", "which_declare",
-        "_", "BASH_FUNC",
-    }
+    # 允许展示的应用相关 env 变量前缀（白名单）。
+    # 用白名单而非黑名单：黑名单会泄漏整个宿主环境（ANTHROPIC_AUTH_TOKEN、
+    # SSH_*、SHELL、XDG_*、IDE token 等），其中匹配 *_TOKEN 的密钥会被
+    # /instance/config 把完整值发到前端，构成密钥泄漏。白名单只暴露已知应用配置。
+    _APP_ENV_PREFIXES: ClassVar[tuple[str, ...]] = (
+        "DEPLOYMENT_", "TENANT_",
+        "MODEL_", "EMBEDDING_",
+        "VECTOR_", "DATA_DIR", "LOG_DIR",
+        "DINGTALK_", "DINGTALK_",
+        "NEO4J_", "ONTOLOGY_",
+        "COACH_",
+    )
 
     def get_all_env_vars(self) -> dict[str, str]:
-        """返回所有非空的非系统环境变量（用于前端配置展示）。"""
+        """返回所有应用相关的环境变量（白名单过滤，用于前端配置展示）。"""
         result: dict[str, str] = {}
         for key, value in sorted(os.environ.items()):
             if not value:
                 continue
-            if key in self._SYSTEM_ENV_KEYS or key.startswith("BASH_FUNC_"):
-                continue
-            result[key] = value
+            if key.startswith(self._APP_ENV_PREFIXES):
+                result[key] = value
         return result
 
 

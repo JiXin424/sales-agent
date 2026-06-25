@@ -38,7 +38,7 @@ def _neo4j_enabled(data: dict[str, Any]) -> bool:
 _SHARED_TRAEFIK_DIR = Path("/root/code/traefik/dynamic.d")
 
 
-def main() -> int:
+def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "inventory",
@@ -54,11 +54,17 @@ def main() -> int:
         "--traefik-out",
         help="Override generated Traefik dynamic config path",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--skip-validation",
+        action="store_true",
+        help="跳过 validate_inventory（用于无源码目标：env_file 在目标机不在主控）",
+    )
+    args = parser.parse_args(argv)
 
     inventory_path = Path(args.inventory)
     data = load_inventory(inventory_path)
-    validate_inventory(data, inventory_path)
+    if not args.skip_validation:
+        validate_inventory(data, inventory_path)
 
     compose_path = Path(
         args.compose_out
@@ -92,6 +98,11 @@ def load_inventory(path: Path) -> dict[str, Any]:
 
 
 def validate_inventory(data: dict[str, Any], inventory_path: Path) -> None:
+    # 共享反代网关所在网络（external）：设了就把 api 容器同时挂上去，让网关按容器名解析到 api。
+    shared_network = (data.get("traefik") or {}).get("shared_network", "")
+    if shared_network and not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}", shared_network):
+        raise SystemExit(f"invalid traefik.shared_network name: {shared_network!r}")
+
     tenants = data.get("tenants")
     if not isinstance(tenants, list) or not tenants:
         raise SystemExit("inventory must contain a non-empty tenants list")
@@ -205,8 +216,9 @@ def render_compose(data: dict[str, Any]) -> str:
 
     database_url = f"postgresql+asyncpg://{db_user}:{db_password}@postgres:5432/{db_name}"
     neo4j_on = _neo4j_enabled(data)
+    shared_network = (data.get("traefik") or {}).get("shared_network", "")
     for tenant in data["tenants"]:
-        lines.extend(render_tenant_services(tenant, image, database_url, neo4j_on))
+        lines.extend(render_tenant_services(tenant, image, database_url, neo4j_on, shared_network))
 
     if neo4j_on:
         neo4j_cfg = data.get("neo4j") or {}
@@ -241,10 +253,19 @@ def render_compose(data: dict[str, Any]) -> str:
     if neo4j_on:
         lines.append("  neo4jdata:")
     lines.append("")
+    if shared_network:
+        # 声明共享网关网络为 external（由服务器级 Traefik 实例创建，本栈只接入不创建）。
+        lines += [
+            "networks:",
+            "  default:",
+            f"  {shared_network}:",
+            "    external: true",
+            "",
+        ]
     return "\n".join(lines)
 
 
-def render_tenant_services(tenant: dict[str, Any], image: str, database_url: str, neo4j_enabled: bool = False) -> list[str]:
+def render_tenant_services(tenant: dict[str, Any], image: str, database_url: str, neo4j_enabled: bool = False, shared_network: str = "") -> list[str]:
     tenant_id = tenant["id"]
     env_file = tenant["env_file"]
     data_dir = tenant.get("data_dir", f"./data/{tenant_id}")
@@ -287,6 +308,15 @@ def render_tenant_services(tenant: dict[str, Any], image: str, database_url: str
             lines += [
                 "      neo4j:",
                 "        condition: service_healthy",
+            ]
+        # 共享反代网关（如服务器级 Traefik）所在网络：api 同时挂 default（连 postgres/neo4j/
+        # 被前端 nginx 代理）和该外部网络，使网关能按容器名解析到 api。手动 docker network
+        # connect 会在容器 recreate 时丢失，必须在此声明才持久（见 tasks/lessons.md §10）。
+        if shared_network:
+            lines += [
+                "    networks:",
+                "      - default",
+                f"      - {shared_network}",
             ]
         lines.append("")
 

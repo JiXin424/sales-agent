@@ -5,6 +5,8 @@
 import importlib.util
 import pathlib
 
+import json
+
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "render-multitenant-deploy.py"
 
@@ -72,3 +74,24 @@ def test_neo4j_expose_ports_optional(tmp_path):
     out = mod.render_compose(_inventory(tmp_path, {"enabled": True, "expose_ports": True}))
     assert '"7474:7474"' in out
     assert '"7687:7687"' in out
+
+
+def test_skip_validation_renders_without_env_file(tmp_path):
+    """--skip-validation 时 env_file 不存在也能 render（无源码目标：env 在目标机不在主控）。"""
+    mod = _load()
+    inv = tmp_path / "hangzhou.json"
+    inv.write_text(json.dumps({
+        "project_name": "sales-agent",
+        "image": "sales-agent:latest",
+        "traefik": {"enabled": False},
+        "tenants": [{
+            "id": "fuduoduo", "name": "fuduoduo", "api_port": 8103,
+            "env_file": "secrets/fuduoduo.env",   # 不存在
+            "data_dir": "./data/fuduoduo", "logs_dir": "./logs/fuduoduo",
+            "roles": ["api", "stream", "worker"],
+        }],
+    }))
+    out = tmp_path / "compose.yml"
+    rc = mod.main(["--skip-validation", str(inv), "--compose-out", str(out)])
+    assert rc == 0
+    assert "fuduoduo-api" in out.read_text()

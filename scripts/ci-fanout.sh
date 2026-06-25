@@ -6,10 +6,12 @@
 #   deploy-release  标准部署(有源码,git sync → deploy-release.sh)
 #   image-retag     镜像更新(有源码,保留现有 compose)
 #   self-deploy     自部署(无源码,仅 docker login+pull+compose up -d)
+#   image-deploy    无源码:docker run sales-agent-deploy 镜像(内含 compose + deploy-remote.sh)
 #
 # 可选字段:
 #   has_source      bool,默认 true。false 时跳过 git sync
 #   compose_file    仅 self-deploy 使用,默认 docker-compose.yml
+#   env             仅 image-deploy 使用,指定用哪份 compose-<env>.yml(如 hangzhou)
 set -euo pipefail
 IMAGE="${IMAGE:?需要 IMAGE 环境变量}"
 
@@ -30,16 +32,18 @@ for t in d.get("targets", []):
         t.get("name", t["host"]),
         str(t.get("has_source", True)),
         t.get("compose_file", "docker-compose.yml"),
+        t.get("env", ""),
     ]))
 PY
 
-while IFS='|' read -r user host port dir method local name has_source compose_file; do
+while IFS='|' read -r user host port dir method local name has_source compose_file env; do
   [ -z "$host" ] && continue
 
   case "$method" in
     deploy-release) script="${dir}/scripts/deploy-release.sh"; args="--yes" ;;
     image-retag)    script="${dir}/scripts/deploy-image-retag.sh"; args="--yes" ;;
     self-deploy)    script=""; args="" ;;  # 不需要脚本,直接用 docker 命令
+    image-deploy)   script=""; args="" ;;  # 无源码:docker run deploy 镜像
     *) echo "未知 method: $method ($name),跳过" >&2; continue ;;
   esac
 
@@ -62,6 +66,13 @@ while IFS='|' read -r user host port dir method local name has_source compose_fi
       ssh -n -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p "$port" "${user}@${host}" \
         "echo '[self-deploy] pulling ${IMAGE}'; docker pull '${IMAGE}' && docker tag '${IMAGE}' sales-agent:latest && docker compose -f '${dir}/${compose_file}' up -d && echo '[self-deploy] done'" \
         || echo "⚠️  [$name] self-deploy 失败，继续下一台" >&2
+    elif [ "$method" = "image-deploy" ]; then
+      # 无源码目标:docker run deploy 镜像(内含 compose + deploy-remote.sh)
+      DEPLOY_IMG="${REGISTRY_HOST:-registry.internal:5000}/sales-agent-deploy:${IMAGE##*:}"
+      echo "[image-deploy] ${DEPLOY_IMG} env=${env:-?}"
+      ssh -n -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p "$port" "${user}@${host}" \
+        "docker pull '${DEPLOY_IMG}' && docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v '${dir}/secrets:/secrets:ro' -e APP_IMAGE='${IMAGE}' '${DEPLOY_IMG}' '${env}'" \
+        || echo "⚠️  [$name] image-deploy 失败，继续下一台" >&2
     elif [ "$has_source" = "True" ]; then
       # 有源码目标:先 git sync 再执行部署脚本
       ssh -n -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p "$port" "${user}@${host}" \

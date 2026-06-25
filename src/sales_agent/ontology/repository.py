@@ -66,6 +66,7 @@ def create_fact_statement() -> str:
       d.status = 'active',
       d.created_at = $now
     CREATE (ev:Evidence {
+      tenant_id: $tenant_id,
       id: $evidence_id,
       excerpt: $excerpt,
       locator: $locator,

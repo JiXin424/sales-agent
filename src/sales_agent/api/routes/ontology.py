@@ -130,19 +130,18 @@ async def _run_ingest_background(
     agent_id: str,
     path: Path,
 ) -> None:
-    from sales_agent.services.tenant_resolver import TenantResolver
-    from sales_agent.core.database import get_session_factory
-    from sqlalchemy.ext.asyncio import AsyncSession
+    # 整个 body 包进 try：任何阶段（含 session 创建 / TenantResolver / 抽取）失败都把 job 标 failed，
+    # 不再静默死（asyncio.create_task 未捕获的异常会被吞，job 永远卡 running）。
+    try:
+        from sales_agent.services.tenant_resolver import TenantResolver
+        from sales_agent.core.database import get_session_factory
+        from sales_agent.ontology.runner import build_ingestion_service
 
-    # 后台任务需要独立 session（不能使用请求的 db session，请求结束后会被关闭）
-    session_factory = get_session_factory()
-    async with session_factory() as bg_db:
-        try:
+        session_factory = get_session_factory()
+        async with session_factory() as bg_db:
             resolver = TenantResolver(bg_db)
             tenant_info = await resolver.resolve(tenant_id)
             model_provider = resolver.get_model_provider(tenant_info)
-
-            from sales_agent.ontology.runner import build_ingestion_service
 
             async def _on_progress(stage: str, stats: dict):
                 await progress_bus.publish(job_id, {"stage": stage, "status": "running", "stats": stats})
@@ -155,27 +154,31 @@ async def _run_ingest_background(
                 paths=[path],
                 progress_callback=_on_progress,
             )
-            # 更新 job 统计（ingestion_service 已 flush 到 bg_db）
             await bg_db.commit()
             await progress_bus.publish(job_id, {
                 "stage": job.stage,
                 "status": job.status,
                 "stats": stats.to_metadata(),
             })
-        except Exception as exc:
-            # job 行在 bg_db session 里；查出来标 failed
-            row = (await bg_db.execute(select(IngestionJob).where(IngestionJob.id == job_id))).scalar_one_or_none()
-            if row:
-                row.status = "failed"
-                row.error_summary = str(exc)[:500]
-                await bg_db.flush()
-                await bg_db.commit()
-            await progress_bus.publish(job_id, {
-                "stage": "failed",
-                "status": "failed",
-                "error_summary": str(exc)[:500],
-                "stats": {},
-            })
+            return  # 成功，直接返回
+    except Exception as exc:
+        # 用全新 session 标 job failed（原 bg_db 可能已坏或未建立）
+        try:
+            from sales_agent.core.database import get_session_factory as _gsf
+            async with _gsf()() as _db:
+                row = (await _db.execute(select(IngestionJob).where(IngestionJob.id == job_id))).scalar_one_or_none()
+                if row:
+                    row.status = "failed"
+                    row.error_summary = str(exc)[:500]
+                    await _db.commit()
+        except Exception:  # noqa: BLE001
+            pass
+        await progress_bus.publish(job_id, {
+            "stage": "failed",
+            "status": "failed",
+            "error_summary": str(exc)[:500],
+            "stats": {},
+        })
 
 
 @router.get("/{agent_id}/ontology/jobs/{job_id}/events")

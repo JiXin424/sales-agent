@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Card, Collapse, Descriptions, Tag, Typography } from 'antd';
+import { Card, Collapse, Descriptions, Typography } from 'antd';
 import {
   SettingOutlined,
   CloudServerOutlined,

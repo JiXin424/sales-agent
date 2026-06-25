@@ -557,18 +557,19 @@ class ChatPipeline:
                         "suppressed_reason": guidance.suppressed_reason if guidance else "realtime_disabled",
                     }
 
-                    # 记录实时观察（无论是否应用）
-                    self.db.add(CoachRealtimeObservation(
-                        tenant_id=tenant_id, agent_id=resolved_agent_id, user_id=user_id,
-                        conversation_id=conversation_id, scene_hint=obs.scene_hint,
-                        confidence=obs.confidence,
-                        observed_signals_json=json.dumps(obs.observed_signals, ensure_ascii=False),
-                        dimension_focus=(guidance.dimension_focus if guidance else None),
-                        guidance_level=(guidance.guidance_level if guidance else "suppressed"),
-                        guidance_text=coach_guidance_text,
-                        applied_to_reply=applied,
-                        suppressed_reason=(guidance.suppressed_reason if guidance else "realtime_disabled"),
-                    ))
+                    # 记录实时观察（无论是否应用；agent_id 缺失时跳过）
+                    if resolved_agent_id:
+                        self.db.add(CoachRealtimeObservation(
+                            tenant_id=tenant_id, agent_id=resolved_agent_id, user_id=user_id,
+                            conversation_id=conversation_id, scene_hint=obs.scene_hint,
+                            confidence=obs.confidence,
+                            observed_signals_json=json.dumps(obs.observed_signals, ensure_ascii=False),
+                            dimension_focus=(guidance.dimension_focus if guidance else None),
+                            guidance_level=(guidance.guidance_level if guidance else "suppressed"),
+                            guidance_text=coach_guidance_text,
+                            applied_to_reply=applied,
+                            suppressed_reason=(guidance.suppressed_reason if guidance else "realtime_disabled"),
+                        ))
                 except Exception as e:
                     logger.warning("Realtime coach guidance failed (non-fatal): %s", e)
                     coach_guidance_text = ""

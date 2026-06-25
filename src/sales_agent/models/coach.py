@@ -206,7 +206,7 @@ class CoachRealtimeObservation(TimestampMixin, Base):
 
     id: Mapped[str] = mapped_column(Text, primary_key=True, default=generate_id)
     tenant_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
-    agent_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    agent_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
     user_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
     conversation_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
     scene_hint: Mapped[str | None] = mapped_column(Text, nullable=True)

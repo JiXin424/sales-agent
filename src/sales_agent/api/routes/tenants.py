@@ -82,6 +82,12 @@ async def create_or_update_tenant(
         )
         db.add(tenant)
         await db.flush()
+        # 为新租户创建默认 Agent（init_db 启动时 tenant 还不存在会错过）
+        try:
+            from sales_agent.services.agent_migration import ensure_default_agent_for_tenant
+            await ensure_default_agent_for_tenant(db, tenant.id, tenant.name)
+        except Exception:
+            pass  # 不影响租户创建
 
     return TenantResponse(
         tenant_id=tenant.id,

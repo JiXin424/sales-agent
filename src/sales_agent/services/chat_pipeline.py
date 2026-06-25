@@ -39,8 +39,24 @@ from sales_agent.services.response_formatter import build_chat_response
 from sales_agent.services.latency_stats import get_latency_stats_collector
 from sales_agent.services.prompt_registry import PromptRegistry
 from sales_agent.services.run_tracer import RunTracer
+from sales_agent.ontology.answer_service import OntologyAnswerService
+from sales_agent.ontology.neo4j_client import Neo4jClient
+from sales_agent.ontology.repository import OntologyRepository
+from sales_agent.ontology.retrieval_service import OntologyRetrievalService
 
 logger = logging.getLogger(__name__)
+
+
+def _build_ontology_answer_service(settings: "Settings", model_provider) -> OntologyAnswerService:
+    """构建 OntologyAnswerService（Neo4j 知识图谱回答）。
+
+    在 settings.ontology.knowledge_engine == "ontology_neo4j" 时由管道检索分支调用。
+    引用模块全局 `OntologyAnswerService`，便于测试 monkeypatch 替换。
+    """
+    client = Neo4jClient(settings.neo4j)
+    repository = OntologyRepository(client)
+    retrieval = OntologyRetrievalService(repository, model_provider.embedding)
+    return OntologyAnswerService(retrieval, model_provider.chat)
 
 # --- 快速命令集 ---
 _HELP_COMMANDS = {"帮助", "help", "？", "?"}
@@ -400,8 +416,34 @@ class ChatPipeline:
                 sources: list[dict] = []
                 retrieval_result = None
                 retrieval_info: dict[str, Any] = {}
+                skip_generation = False
 
-                if path_result.needs_retrieval:
+                if path_result.needs_retrieval and self.settings.ontology.knowledge_engine == "ontology_neo4j":
+                    # 知识图谱路径：路由到 OntologyAnswerService，跳过后续 agent 生成
+                    timings.start("ontology_answer")
+                    ontology_answer_service = _build_ontology_answer_service(self.settings, model_provider)
+                    ontology_result = await ontology_answer_service.answer_for_task(
+                        tenant_id=tenant_id,
+                        agent_id=resolved_agent_id,
+                        task_type=task_type,
+                        message=message,
+                    )
+                    answer_dict = ontology_result.answer
+                    sources = ontology_result.sources
+                    retrieval_info = {
+                        "called": True,
+                        "provider": "ontology_neo4j",
+                        "graph_evidence": ontology_result.graph_evidence.to_dict(),
+                    }
+                    timings.end("ontology_answer")
+                    await tracer.record_step(
+                        "ontology_answer",
+                        latency_ms=int(timings.stages.get("ontology_answer", 0)),
+                        metadata=retrieval_info,
+                    )
+                    retrieval_result = None
+                    skip_generation = True
+                elif path_result.needs_retrieval:
                     timings.start("retrieval")
                     retriever = Retriever(self.db, model_provider.embedding)
                     retrieval_result = await retriever.retrieve_for_task(
@@ -532,34 +574,36 @@ class ChatPipeline:
                     coach_guidance_text = ""
 
                 # =============================================
-                # 10. Agent 执行
+                # 10. Agent 执行（知识图谱路径已在检索阶段预计算 answer_dict，
+                #     通过 skip_generation 跳过 agent LLM 生成，保留图谱答案）
                 # =============================================
-                timings.start("generation")
                 context_dict = context or {}
-                tenant_style = tenant_config if isinstance(tenant_config, dict) else {}
+                if not skip_generation:
+                    timings.start("generation")
+                    tenant_style = tenant_config if isinstance(tenant_config, dict) else {}
 
-                # 把实时教练引导注入 execute_agent 上下文（仅在有引导文本时）
-                exec_context = dict(context_dict)
-                if coach_guidance_text:
-                    exec_context["coach_guidance"] = coach_guidance_text
+                    # 把实时教练引导注入 execute_agent 上下文（仅在有引导文本时）
+                    exec_context = dict(context_dict)
+                    if coach_guidance_text:
+                        exec_context["coach_guidance"] = coach_guidance_text
 
-                answer_dict = await execute_agent(
-                    chat_model=model_provider.chat,
-                    task_type=task_type,
-                    message=message,
-                    context=exec_context,
-                    retrieval_result=retrieval_result,
-                    history_messages=history_messages,
-                    tenant_style=tenant_style,
-                    prompt_text=prompt_text,
-                    system_prompt_text=system_prompt_text,
-                )
+                    answer_dict = await execute_agent(
+                        chat_model=model_provider.chat,
+                        task_type=task_type,
+                        message=message,
+                        context=exec_context,
+                        retrieval_result=retrieval_result,
+                        history_messages=history_messages,
+                        tenant_style=tenant_style,
+                        prompt_text=prompt_text,
+                        system_prompt_text=system_prompt_text,
+                    )
 
-                # 标准化卡片类任务输出（访前作战卡、访后机会推进卡）
-                from sales_agent.services.output_normalizer import normalize_answer
-                answer_dict = normalize_answer(task_type, answer_dict)
-                timings.end("generation")
-                await tracer.record_step("generation", latency_ms=int(timings.stages.get("generation", 0)))
+                    # 标准化卡片类任务输出（访前作战卡、访后机会推进卡）
+                    from sales_agent.services.output_normalizer import normalize_answer
+                    answer_dict = normalize_answer(task_type, answer_dict)
+                    timings.end("generation")
+                    await tracer.record_step("generation", latency_ms=int(timings.stages.get("generation", 0)))
 
                 # =============================================
                 # 11. 风险检查（分级）

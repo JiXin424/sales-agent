@@ -8,6 +8,9 @@ secrets/*
 !secrets/example.env
 !secrets/neo4j.env.example
 
+# 本地 Claude Code 配置切换工具（含 API token，绝不提交）
+changmodel.sh
+
 # Python
 __pycache__/
 *.pyc

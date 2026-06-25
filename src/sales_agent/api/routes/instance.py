@@ -15,6 +15,9 @@ _SENSITIVE_PATTERNS = [
         r".*_TOKEN$",
         r".*_AES_KEY$",
         r".*_ENCRYPT_TOKEN$",
+        r".*_PASSWORD$",
+        r".*_PWD$",
+        r".*_PASS$",
     ]
 ]
 

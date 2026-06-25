@@ -68,3 +68,14 @@ NEO4J_LIVE_TEST=1 .venv/bin/pytest tests/integration/test_ontology_neo4j_live.py
 ```
 
 覆盖：schema 启动初始化（约束 + 向量索引）、真实 ingest → 检索 → 回答端到端、保守向量回退（图查不到时回退到向量并带回来源）。默认在 CI 跳过（无 Neo4j）。
+
+## 上传入库（Web）
+
+1. 打开 `/agents/{agent_id}/knowledge`。
+2. 确认顶部状态为「ready」（绿色）。
+3. 拖拽或点击选择 `.md` / `.txt` 文件（可多选）。
+4. 每个文件独立入库：6 阶段实时进度（上传/解析/抽实体/抽事实/写图谱/完成）。
+5. 完成行显示入库统计（实体/事实/待复核/冲突），可点击「查看图谱 →」跳转 Neo4j Browser。
+6. 失败行显示错误信息，可重试。
+
+若状态为「not_configured」或「failed」，请先确认 `KNOWLEDGE_ENGINE=ontology_neo4j` 并启动 Neo4j。

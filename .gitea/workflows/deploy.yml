@@ -52,6 +52,13 @@ jobs:
           docker push ${REGISTRY}/${FRONTEND_IMAGE_NAME}:latest
           echo "::notice::pushed frontend ${REGISTRY}/${FRONTEND_IMAGE_NAME}:${SHA}"
 
+      - name: Mirror neo4j image to registry
+        run: |
+          docker pull docker.1ms.run/neo4j:5
+          docker tag  docker.1ms.run/neo4j:5 ${REGISTRY}/neo4j:5
+          docker push ${REGISTRY}/neo4j:5
+          echo "::notice::mirrored ${REGISTRY}/neo4j:5"
+
   deploy-fanout:
     runs-on: ubuntu-latest
     needs: build-and-push

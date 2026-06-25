@@ -9,12 +9,12 @@ import { Layout, Menu, Tag, Typography, Alert, Spin } from 'antd';
 import { Outlet, useNavigate, useLocation, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
-  AppstoreOutlined, BookOutlined, EditOutlined, MessageOutlined,
-  SettingOutlined, ExperimentOutlined, AlertOutlined, FileTextOutlined,
-  RocketOutlined, CheckCircleOutlined, LikeOutlined, AuditOutlined, TrophyOutlined,
+  AppstoreOutlined, BookOutlined, DashboardOutlined, EditOutlined, MessageOutlined,
+  NodeIndexOutlined, SettingOutlined, TrophyOutlined,
 } from '@ant-design/icons';
 import { getAgent } from '@/api/agents';
 import { useAgent } from '@/context/AgentContext';
+import { useTenant } from '@/context/TenantContext';
 import type { AgentInstance, AgentStatus } from '@/api/types';
 
 const { Header, Sider, Content } = Layout;
@@ -29,17 +29,12 @@ const STATUS_COLOR: Record<AgentStatus, string> = {
 function agentNavItems(agentId: string) {
   const base = `/agents/${agentId}`;
   return [
+    { key: `${base}/dashboard`, icon: <DashboardOutlined />, label: '运营面板' },
     { key: `${base}/overview`, icon: <AppstoreOutlined />, label: '概览' },
-    { key: `${base}/setup`, icon: <CheckCircleOutlined />, label: '就绪/配置' },
     { key: `${base}/knowledge`, icon: <BookOutlined />, label: '知识库' },
+    { key: `${base}/ontology`, icon: <NodeIndexOutlined />, label: '本体探索' },
     { key: `${base}/prompts`, icon: <EditOutlined />, label: 'Prompt' },
-    { key: `${base}/channels`, icon: <MessageOutlined />, label: '渠道' },
     { key: `${base}/conversations`, icon: <MessageOutlined />, label: '对话记录' },
-    { key: `${base}/feedback`, icon: <LikeOutlined />, label: '反馈管理' },
-    { key: `${base}/review`, icon: <AuditOutlined />, label: '质量审查' },
-    { key: `${base}/eval`, icon: <ExperimentOutlined />, label: 'Eval 回归' },
-    { key: `${base}/alerts`, icon: <AlertOutlined />, label: '运维告警' },
-    { key: `${base}/reports`, icon: <FileTextOutlined />, label: '报告' },
     { key: `${base}/coach`, icon: <TrophyOutlined />, label: '教练' },
     { key: `${base}/settings`, icon: <SettingOutlined />, label: '设置' },
   ];
@@ -50,6 +45,7 @@ export default function AgentLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { setAgent } = useAgent();
+  const { tenantId, setTenant } = useTenant();
 
   const { data: agent, isLoading, isError } = useQuery({
     queryKey: ['agent', agentId],
@@ -61,6 +57,15 @@ export default function AgentLayout() {
   useEffect(() => {
     if (agent) setAgent(agent as AgentInstance);
   }, [agent, setAgent]);
+
+  // 单 Agent 实例：把 agent 的 tenant 同步进 TenantContext，让运营面板等
+  // 依赖 useTenant() 的页面能加载该租户的指标。仅在 tenant 不一致时同步一次，
+  // 避免与 setTenant 的全量 query invalidate 形成循环。
+  useEffect(() => {
+    if (agent && agent.tenant_id && tenantId !== agent.tenant_id) {
+      setTenant(agent.tenant_id, agent.name);
+    }
+  }, [agent, tenantId, setTenant]);
 
   if (!agentId) return null;
   if (isLoading) {

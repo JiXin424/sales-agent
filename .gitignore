@@ -1,7 +1,12 @@
-# Secrets — 绝不提交
+# Secrets — 真实租户凭证绝不提交
 .env
 *.env
-secrets/
+# Ignore everything inside secrets/, but keep the committed template.
+# NOTE: must use `secrets/*` (not `secrets/`); a fully-ignored directory
+# cannot have individual files re-included by `!` later.
+secrets/*
+!secrets/example.env
+!secrets/neo4j.env.example
 
 # Python
 __pycache__/
@@ -28,6 +33,11 @@ htmlcov/
 # Data
 data/sales-agent/tenants/*/documents/*.pdf
 data/sales-agent/tenants/*/documents/*.docx
+# 本体入库上传的源文件副本(运行时产物,知识正文已入 Neo4j/DB,不进 git)
+data/agents/
+
+# 仓库根游离的 ontology zip 副本(误提交的产物包;正式 toolkit.zip 不匹配此模式)
+*_ontology_*.zip
 
 # Logs
 logs/
@@ -78,3 +88,6 @@ nginx/certbot-webroot/
 # Docker images — 离线镜像 tar 包,体积大,不进 git
 images/*.tar
 images/
+
+# superpowers / Claude scratch (brainstorm mockups、SDD ledger 等)
+.superpowers/

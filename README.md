@@ -47,6 +47,20 @@ v0 是本地可运行原型，支持 **HTTP API** 和 **钉钉单聊** 两种接
 - 跨租户泄漏自动检测和拦截
 - 条件检索：按任务类型和内容决定是否调用 RAG，跳过时记录原因
 
+### Neo4j Ontology Knowledge Engine
+
+应用可将传统 Markdown chunk RAG 替换为 Neo4j 本体知识引擎。设置
+`KNOWLEDGE_ENGINE=ontology_neo4j` 并配置 `NEO4J_*` 环境变量即可启用。首版采用图检索
++ 保守向量回退（`ONTOLOGY_VECTOR_FALLBACK=conservative`），并保持 chat 输出与现有
+`summary` / `sections` 响应格式兼容。
+
+- Neo4j 存储 Entity / Fact / Evidence / SourceDocument 节点，PostgreSQL 仍存储入库任务与聊天日志。
+- 高风险事实进入人工复核（pending review），不进入用户可见回答。
+- Agents 知识页新增入库面板（状态 / 任务 / 冲突可视化 + 启动入库）。
+- 「本体探索」调试页（`/agents/:id/ontology`）：三栏实时可视化检索过程 / 问答 / 喂给大模型的完整上下文（SSE 流式，复用图谱检索+回答引擎）。
+
+详见 [`docs/ontology-neo4j-ops.md`](docs/ontology-neo4j-ops.md)。
+
 ### 风险检查
 
 三阶段检查，9 种风险类型，4 种处置动作，支持规则和 LLM 两级检查：
@@ -318,23 +332,30 @@ docker compose up -d postgres
 
 ### 生产部署 — Dedicated Mode（多租户，每租户独立容器）
 
-```bash
-# 1. 为每个租户创建 .env 文件
-cp secrets/taishan.env.example secrets/taishan.env
-# 编辑 secrets/taishan.env 填入密钥和配置
+仓库内置一份**已纳入 git 追踪的模板** `secrets/example.env`（仅此一个文件在 `secrets/` 下被追踪，
+真实租户 env 仍被 `.gitignore` 忽略）。
 
-cp secrets/tenant-b.env.example secrets/tenant-b.env
+```bash
+# 1. 从模板为每个租户创建 .env 文件（example.env 本身永远不会被部署）
+cp secrets/example.env secrets/taishan.env
+# 编辑 secrets/taishan.env 填入密钥和配置（替换所有 <...> 占位符）
+
+cp secrets/example.env secrets/tenant-b.env
 # 编辑 secrets/tenant-b.env
 
 chmod 600 secrets/*.env
 
-# 2. 启动指定租户的 Agent 实例
-docker compose --profile taishan up -d
-docker compose --profile tenant-b up -d
+# 2. 运行部署脚本：自动发现 secrets/*.env，箭头键选择租户（或 --env / --yes）
+scripts/deploy-release.sh
+#    - 交互式菜单自动排除 example.env 模板
+#    - 新租户自动登记到 deploy/tenants.json（确认后），分配空闲端口
+#    - 校验占位符 / 端口冲突 → 渲染 compose → 起服务 → 健康检查
+
+# 单租户免确认：   scripts/deploy-release.sh --env taishan.env
+# CI 全量部署：    scripts/deploy-release.sh --yes
 
 # 3. 检查状态
-curl http://localhost:8101/ready   # 租户 A
-curl http://localhost:8102/ready   # 租户 B
+scripts/check-all-tenants.sh deploy/tenants.json
 ```
 
 ### Key 轮换
@@ -611,4 +632,5 @@ PYTHONPATH=src pytest tests/integration/test_pilot_api.py -v
 
 | 日期 | 摘要 |
 |------|------|
+| [2026-06-25](changelog/2026-06-25.md) | Neo4j 本体知识引擎（ontology_neo4j）：图检索 + 保守向量回退 + 高风险人工复核；双租户 dedicated 部署；前端容器化（每租户 nginx SPA）；4000 运营面板新增「环境配置」卡片（`GET /instance/config`，敏感字段点击揭示+复制）；「本体探索」三栏调试页（检索过程/问答/完整上下文，SSE 流式）；部署脚本完善：`secrets/example.env` 模板纳入 git 追踪（`.gitignore` 改 `secrets/*` + `!example.env` 反例），`deploy-release.sh` 租户发现自动排除模板、交互式箭头键选择租户；**CI/CD 接入 neo4j**：生成器渲染共享 neo4j 容器 + app `NEO4J_*` env 注入、entrypoint api 角色自动 `alembic upgrade`、`deploy-release.sh` `--env-file secrets/neo4j.env` 注入凭证、CI mirror neo4j 镜像到 registry |
 | [2026-06-22](changelog/2026-06-22.md) | Prompt 全层解耦到 DB 版本管理 + 网页端「当前生效」总览直接编辑 |

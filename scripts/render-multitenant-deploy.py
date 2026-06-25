@@ -21,6 +21,19 @@ from urllib.parse import urlparse
 
 VALID_ROLES = {"api", "stream", "worker"}
 
+
+def _neo4j_enabled(data: dict[str, Any]) -> bool:
+    """inventory 显式开关优先；缺省时扫描租户 env 自动检测。"""
+    cfg = data.get("neo4j") or {}
+    if "enabled" in cfg:
+        return bool(cfg["enabled"])
+    for tenant in data.get("tenants", []):
+        env_path = Path(tenant.get("env_file", "")).resolve()
+        if _env_has(env_path, "KNOWLEDGE_ENGINE", "ontology_neo4j"):
+            return True
+    return False
+
+
 # 共享 Traefik 动态配置目录 — directory provider 会 watch 此目录所有 .yml
 _SHARED_TRAEFIK_DIR = Path("/root/code/traefik/dynamic.d")
 
@@ -191,14 +204,47 @@ def render_compose(data: dict[str, Any]) -> str:
     ]
 
     database_url = f"postgresql+asyncpg://{db_user}:{db_password}@postgres:5432/{db_name}"
+    neo4j_on = _neo4j_enabled(data)
     for tenant in data["tenants"]:
-        lines.extend(render_tenant_services(tenant, image, database_url))
+        lines.extend(render_tenant_services(tenant, image, database_url, neo4j_on))
 
-    lines.extend(["volumes:", "  pgdata:", ""])
+    if neo4j_on:
+        neo4j_cfg = data.get("neo4j") or {}
+        neo4j_image = neo4j_cfg.get("image", "registry.internal:5000/neo4j:5")
+        lines.extend([
+            "  neo4j:",
+            f"    image: {neo4j_image}",
+            f"    container_name: {project_name}-neo4j",
+            "    restart: unless-stopped",
+            "    environment:",
+            "      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD}",
+        ])
+        if neo4j_cfg.get("expose_ports", False):
+            lines += [
+                "    ports:",
+                '      - "7474:7474"',
+                '      - "7687:7687"',
+            ]
+        lines += [
+            "    volumes:",
+            "      - neo4jdata:/data",
+            "    healthcheck:",
+            '      test: ["CMD-SHELL", "cypher-shell -u neo4j -p ${NEO4J_PASSWORD} \'RETURN 1\' || exit 1"]',
+            "      interval: 10s",
+            "      timeout: 5s",
+            "      retries: 12",
+            "      start_period: 30s",
+            "",
+        ]
+
+    lines.extend(["volumes:", "  pgdata:"])
+    if neo4j_on:
+        lines.append("  neo4jdata:")
+    lines.append("")
     return "\n".join(lines)
 
 
-def render_tenant_services(tenant: dict[str, Any], image: str, database_url: str) -> list[str]:
+def render_tenant_services(tenant: dict[str, Any], image: str, database_url: str, neo4j_enabled: bool = False) -> list[str]:
     tenant_id = tenant["id"]
     env_file = tenant["env_file"]
     data_dir = tenant.get("data_dir", f"./data/{tenant_id}")
@@ -218,14 +264,47 @@ def render_tenant_services(tenant: dict[str, Any], image: str, database_url: str
                 "    environment:",
                 "      PROCESS_ROLE: api",
                 f"      DATABASE_URL: {database_url}",
-                "    volumes:",
-                f"      - {data_dir}:/data/{tenant_id}",
-                f"      - {logs_dir}:/logs/{tenant_id}",
-                "    ports:",
-                f'      - "{tenant["api_port"]}:8000"',
-                "    depends_on:",
-                "      postgres:",
+            ]
+        )
+        if neo4j_enabled:
+            lines += [
+                "      NEO4J_URI: bolt://neo4j:7687",
+                "      NEO4J_USER: neo4j",
+                "      NEO4J_PASSWORD: ${NEO4J_PASSWORD}",
+                "      NEO4J_DATABASE: neo4j",
+            ]
+        lines += [
+            "    volumes:",
+            f"      - {data_dir}:/data/{tenant_id}",
+            f"      - {logs_dir}:/logs/{tenant_id}",
+            "    ports:",
+            f'      - "{tenant["api_port"]}:8000"',
+            "    depends_on:",
+            "      postgres:",
+            "        condition: service_healthy",
+        ]
+        if neo4j_enabled:
+            lines += [
+                "      neo4j:",
                 "        condition: service_healthy",
+            ]
+        lines.append("")
+
+        # 前端容器（nginx serving SPA + API 代理）
+        frontend_image = os.environ.get("FRONTEND_IMAGE", "sales-agent-frontend:latest")
+        frontend_port = tenant.get("frontend_port", tenant["api_port"] + 3000)
+        lines.extend(
+            [
+                f"  {tenant_id}-frontend:",
+                f"    image: {frontend_image}",
+                f"    container_name: sales-agent-{tenant_id}-frontend",
+                "    restart: unless-stopped",
+                "    environment:",
+                f"      - BACKEND_HOST={tenant_id}-api",
+                "    ports:",
+                f'      - "{frontend_port}:80"',
+                "    depends_on:",
+                f"      - {tenant_id}-api",
                 "",
             ]
         )
@@ -242,14 +321,28 @@ def render_tenant_services(tenant: dict[str, Any], image: str, database_url: str
                 "    environment:",
                 "      PROCESS_ROLE: stream",
                 f"      DATABASE_URL: {database_url}",
-                "    volumes:",
-                f"      - {logs_dir}:/logs/{tenant_id}",
-                "    depends_on:",
-                "      postgres:",
-                "        condition: service_healthy",
-                "",
             ]
         )
+        if neo4j_enabled:
+            lines += [
+                "      NEO4J_URI: bolt://neo4j:7687",
+                "      NEO4J_USER: neo4j",
+                "      NEO4J_PASSWORD: ${NEO4J_PASSWORD}",
+                "      NEO4J_DATABASE: neo4j",
+            ]
+        lines += [
+            "    volumes:",
+            f"      - {logs_dir}:/logs/{tenant_id}",
+            "    depends_on:",
+            "      postgres:",
+            "        condition: service_healthy",
+        ]
+        if neo4j_enabled:
+            lines += [
+                "      neo4j:",
+                "        condition: service_healthy",
+            ]
+        lines.append("")
 
     if "worker" in roles:
         lines.extend(
@@ -263,15 +356,29 @@ def render_tenant_services(tenant: dict[str, Any], image: str, database_url: str
                 "    environment:",
                 "      PROCESS_ROLE: worker",
                 f"      DATABASE_URL: {database_url}",
-                "    volumes:",
-                f"      - {data_dir}:/data/{tenant_id}",
-                f"      - {logs_dir}:/logs/{tenant_id}",
-                "    depends_on:",
-                "      postgres:",
-                "        condition: service_healthy",
-                "",
             ]
         )
+        if neo4j_enabled:
+            lines += [
+                "      NEO4J_URI: bolt://neo4j:7687",
+                "      NEO4J_USER: neo4j",
+                "      NEO4J_PASSWORD: ${NEO4J_PASSWORD}",
+                "      NEO4J_DATABASE: neo4j",
+            ]
+        lines += [
+            "    volumes:",
+            f"      - {data_dir}:/data/{tenant_id}",
+            f"      - {logs_dir}:/logs/{tenant_id}",
+            "    depends_on:",
+            "      postgres:",
+            "        condition: service_healthy",
+        ]
+        if neo4j_enabled:
+            lines += [
+                "      neo4j:",
+                "        condition: service_healthy",
+            ]
+        lines.append("")
 
     return lines
 
@@ -316,10 +423,11 @@ def render_traefik_routes(data: dict[str, Any]) -> str:
         tenant_id = tenant["id"]
         domain = tenant.get("domain", "")
         env_path = Path(tenant["env_file"]).resolve()
-        container_name = f"sales-agent-{tenant_id}-api"
+        api_container = f"sales-agent-{tenant_id}-api"
+        frontend_container = f"sales-agent-{tenant_id}-frontend"
 
         if domain:
-            # Host-based route — dedicated domain → entire API
+            # Host-based route — 用户域名 → 前端 nginx 容器（SPA + API 代理）
             router_name = f"sales-agent-{tenant_id}"
             service_name = f"sales-agent-{tenant_id}-backend"
             lines.extend([
@@ -337,7 +445,7 @@ def render_traefik_routes(data: dict[str, Any]) -> str:
                     f"    {service_name}:",
                     "      loadBalancer:",
                     "        servers:",
-                    f'          - url: "http://{container_name}:8000"',
+                    f'          - url: "http://{frontend_container}:80"',
                 ])
 
         # PathPrefix route for DingTalk integration (shared domain)
@@ -363,7 +471,7 @@ def render_traefik_routes(data: dict[str, Any]) -> str:
                         f"    {service_name}:",
                         "      loadBalancer:",
                         "        servers:",
-                        f'          - url: "http://{container_name}:8000"',
+                        f'          - url: "http://{api_container}:8000"',
                     ])
 
     if not service_lines:

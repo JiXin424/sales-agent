@@ -193,6 +193,14 @@ export interface FeedbackSummary {
   total: number;
 }
 
+/** 会话消息总数（按 role 分）。与 conversation 线程数区分。 */
+export interface MessageCount {
+  total: number;
+  user: number;
+  assistant: number;
+  system: number;
+}
+
 // --- Prompts ---
 
 export type PromptCategory = 'task' | 'system' | 'router' | 'risk' | 'coach';
@@ -275,7 +283,136 @@ export interface IngestionJobItem {
   updated_at: string;
 }
 
-// --- Model Calls ---
+// --- Ontology (Neo4j knowledge engine) ---
+
+export interface OntologyStatus {
+  knowledge_engine: string;
+  ontology_status: 'not_configured' | 'ready' | 'degraded' | 'failed';
+  neo4j_configured: boolean;
+  neo4j_ready: boolean;
+  visual_url: string;
+}
+
+export interface OntologyJob {
+  id: string;
+  tenant_id: string;
+  agent_id: string | null;
+  engine: string;
+  status: string;
+  stage: string;
+  documents_seen: number;
+  documents_ingested: number;
+  entities_created: number;
+  entities_merged: number;
+  facts_created: number;
+  facts_active: number;
+  facts_pending_review: number;
+  facts_rejected: number;
+  conflicts_created: number;
+  warnings: string[];
+  errors: Record<string, unknown>[];
+  error_summary: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IngestStartResponse {
+  job_id: string;
+  filename: string;
+}
+
+export interface JobProgressEvent {
+  stage: string;
+  status: 'running' | 'completed' | 'completed_with_errors' | 'failed';
+  stats?: Record<string, number>;
+  error_summary?: string;
+}
+
+// --- Ontology Explorer（本体探索器：查询/调试） ---
+
+/** 实体节点（图谱证据里的 entity/fact/evidence/document 通用结构）。 */
+export interface OntologyEntityNode {
+  id?: string;
+  name?: string;
+  type?: string;
+  [key: string]: unknown;
+}
+
+/** 镜像后端 GraphEvidence.to_dict()。 */
+export interface GraphEvidenceLike {
+  ontology_intent?: string;
+  center_entities: OntologyEntityNode[];
+  matched_entities: OntologyEntityNode[];
+  facts_used: OntologyEntityNode[];
+  evidence: OntologyEntityNode[];
+  source_documents: OntologyEntityNode[];
+  retrieval_strategy: 'graph' | 'graph_vector_fallback' | string;
+  vector_fallback_used: boolean;
+  confidence: number;
+  timings_ms: Record<string, number>;
+}
+
+export interface OntologyStats {
+  stats: { total_entities: number };
+  entity_type_counts: Record<string, number>;
+}
+
+export interface OntologyQueryRequest {
+  query: string;
+  history?: Array<{ role: string; content: string }>;
+}
+
+/** 左栏「检索过程」摘要。 */
+export interface OntologySearchProcess {
+  query: string;
+  strategy: string;
+  vector_fallback_used: boolean;
+  confidence: number;
+  matched_entities: OntologyEntityNode[];
+  center_entities: OntologyEntityNode[];
+  facts_used: OntologyEntityNode[];
+  timings_ms: Record<string, number>;
+}
+
+/** 右栏「完整上下文」：渲染后的 system prompt + 用户问题 + GraphEvidence 字段。 */
+export interface OntologyFullContext {
+  system_prompt: string;
+  user_query: string;
+  ontology_intent?: string;
+  center_entities: OntologyEntityNode[];
+  matched_entities: OntologyEntityNode[];
+  facts_used: OntologyEntityNode[];
+  evidence: OntologyEntityNode[];
+  source_documents: OntologyEntityNode[];
+  retrieval_strategy: string;
+  vector_fallback_used: boolean;
+  confidence: number;
+  timings_ms: Record<string, number>;
+}
+
+/** AI 答案（summary + sections）。 */
+export interface OntologyAnswerPayload {
+  summary: string;
+  sections: Array<{ title: string; content: string }>;
+}
+
+export interface OntologyQueryResponse {
+  query: string;
+  answer: OntologyAnswerPayload;
+  sources: Array<Record<string, unknown>>;
+  search_process: OntologySearchProcess;
+  full_context: OntologyFullContext;
+}
+
+/** /query/stream 的 SSE 事件（判别联合）。 */
+export type OntologySSEEvent =
+  | { type: 'step'; step: number; message: string; status: 'processing' | 'success' | 'error' }
+  | { type: 'search_process'; data: OntologySearchProcess }
+  | { type: 'result'; answer: OntologyAnswerPayload; full_context: OntologyFullContext }
+  | { type: 'error'; message: string };
+
+
 
 export interface ModelCallItem {
   id: string;
@@ -666,4 +803,20 @@ export interface PilotStatus {
     active_critical_alerts: number;
     recent_error_rate: number;
   };
+}
+
+// --- Instance Config ---
+
+export interface SensitiveValue {
+  value: string;     // full plaintext (revealed on click)
+  sensitive: true;
+  masked: string;    // truncated preview (e.g. "sk-2e2a...2242a")
+}
+
+export type ConfigValue = string | SensitiveValue;
+
+export type InstanceConfigGroup = Record<string, ConfigValue>;
+
+export interface InstanceConfigResponse {
+  groups: Record<string, InstanceConfigGroup>;
 }

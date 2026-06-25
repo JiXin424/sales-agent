@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 from sales_agent.core.secret_resolver import resolve_secret, key_fingerprint, SecretResolutionError
 from sales_agent.llm import ModelProvider, OpenAICompatibleChat, OpenAICompatibleEmbedding
@@ -192,6 +192,29 @@ class TenantRuntime:
     def get_log_info(self) -> dict[str, Any]:
         """返回脱敏的日志信息。"""
         return self.get_debug_info()
+
+    # 允许展示的应用相关 env 变量前缀（白名单）。
+    # 用白名单而非黑名单：黑名单会泄漏整个宿主环境（ANTHROPIC_AUTH_TOKEN、
+    # SSH_*、SHELL、XDG_*、IDE token 等），其中匹配 *_TOKEN 的密钥会被
+    # /instance/config 把完整值发到前端，构成密钥泄漏。白名单只暴露已知应用配置。
+    _APP_ENV_PREFIXES: ClassVar[tuple[str, ...]] = (
+        "DEPLOYMENT_", "TENANT_",
+        "MODEL_", "EMBEDDING_",
+        "VECTOR_", "DATA_DIR", "LOG_DIR",
+        "DINGTALK_", "DINGTALK_",
+        "NEO4J_", "ONTOLOGY_",
+        "COACH_",
+    )
+
+    def get_all_env_vars(self) -> dict[str, str]:
+        """返回所有应用相关的环境变量（白名单过滤，用于前端配置展示）。"""
+        result: dict[str, str] = {}
+        for key, value in sorted(os.environ.items()):
+            if not value:
+                continue
+            if key.startswith(self._APP_ENV_PREFIXES):
+                result[key] = value
+        return result
 
 
 # 全局单例

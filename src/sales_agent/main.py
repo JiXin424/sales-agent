@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from sales_agent.api.routes import agent, conversations, documents, feedback, health, tenants, prompts, uploads, admin, pilot, agents, coach
+from sales_agent.api.routes import agent, conversations, documents, feedback, health, tenants, prompts, uploads, admin, pilot, agents, coach, ontology, instance
 from sales_agent.core.config import get_settings
 from sales_agent.core.exceptions import TenantMismatchError, DingTalkTenantMismatchError
 
@@ -37,6 +37,40 @@ async def lifespan(app: FastAPI):
 
     # 初始化数据库
     await init_db()
+
+    # Bootstrap Neo4j ontology schema (constraints + vector index) when enabled.
+    # 仅在启用 ontology_neo4j 引擎且配置了 Neo4j 时执行；失败仅告警，不阻断启动。
+    if _settings.ontology.knowledge_engine == "ontology_neo4j" and _settings.neo4j.uri:
+        from sales_agent.ontology.neo4j_client import Neo4jClient
+        from sales_agent.ontology.schema import ensure_ontology_schema
+        neo_client = Neo4jClient(_settings.neo4j)
+        try:
+            await ensure_ontology_schema(neo_client)
+            logger.info("Neo4j ontology schema ensured")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Neo4j ontology schema bootstrap failed: %s", exc)
+        finally:
+            await neo_client.close()
+
+    # 清理上次进程残留的 running 状态 ontology job。
+    # asyncio.create_task 不持久，进程重启后这些 job 永远卡在 running（前端会一直显示"入库中"）。
+    # 启动时把它们标 failed，让前端能正确显示终态。
+    try:
+        from sales_agent.core.database import get_session_factory
+        from sales_agent.models.ingestion import IngestionJob
+        from sqlalchemy import update
+        _sf = get_session_factory()
+        async with _sf() as _sweep_db:
+            result = await _sweep_db.execute(
+                update(IngestionJob)
+                .where(IngestionJob.engine == "ontology_neo4j", IngestionJob.status == "running")
+                .values(status="failed", error_summary="进程重启，任务中断")
+            )
+            await _sweep_db.commit()
+            if result.rowcount:
+                logger.info("Swept %d stale running ontology job(s) to failed", result.rowcount)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Ontology stale-job sweep failed: %s", exc)
 
     # 加载 TenantRuntime 并做启动校验
     runtime = get_tenant_runtime()
@@ -169,6 +203,8 @@ app.include_router(admin.router)
 app.include_router(pilot.router)
 app.include_router(agents.router)
 app.include_router(coach.router)
+app.include_router(ontology.router)
+app.include_router(instance.router)
 
 # 注册钉钉集成路由
 from sales_agent.integrations.dingtalk.routes import router as dingtalk_router

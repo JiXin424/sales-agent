@@ -712,3 +712,43 @@ class ReadinessResponse(BaseModel):
 
 class AgentStatusAction(BaseModel):
     waiver_reasons: dict[str, str] | None = None  # 激活时可选的豁免理由
+
+
+# --- Ontology ---
+
+
+class OntologyIngestRequest(BaseModel):
+    path: str
+    rebuild: bool = False
+
+
+class OntologyJobResponse(BaseModel):
+    id: str
+    tenant_id: str
+    agent_id: str | None = None
+    engine: str = "ontology_neo4j"
+    status: str
+    stage: str
+    documents_seen: int = 0
+    documents_ingested: int = 0
+    entities_created: int = 0
+    entities_merged: int = 0
+    facts_created: int = 0
+    facts_active: int = 0
+    facts_pending_review: int = 0
+    facts_rejected: int = 0
+    conflicts_created: int = 0
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[dict[str, Any]] = Field(default_factory=list)
+    error_summary: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class OntologyStatusResponse(BaseModel):
+    knowledge_engine: str
+    ontology_status: str
+    neo4j_configured: bool
+    neo4j_ready: bool
+    visual_url: str = ""

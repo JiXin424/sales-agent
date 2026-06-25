@@ -11,6 +11,7 @@ import type {
   DocumentItem,
   SourceFileItem,
   FeedbackSummary,
+  MessageCount,
   ModelCallItem,
   ModelCallSummary,
   WorkflowMetrics,
@@ -22,6 +23,11 @@ const BASE = (tid: string) => `/tenants/${tid}/admin`;
 
 export function listConversations(tenantId: string, filters?: ConversationFilters) {
   return apiGet<PaginatedResponse<ConversationItem>>(`${BASE(tenantId)}/conversations`, filters as Record<string, string | number | undefined>);
+}
+
+/** 会话消息总数（按 role 分）。 */
+export function getMessageCount(tenantId: string) {
+  return apiGet<MessageCount>(`${BASE(tenantId)}/messages/count`);
 }
 
 export function getConversationDetail(tenantId: string, conversationId: string) {

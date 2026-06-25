@@ -18,8 +18,10 @@ Deploy a Sales Agent release bundle on this server.
 Options:
   --env FILE     Deploy only the tenant using this env file (under secrets/).
                  Can be repeated to deploy multiple tenants.
-                 Without --env or --yes, you'll be prompted interactively.
+                 If the env has no inventory entry, you'll be prompted to
+                 auto-register one (confirmation required).
   --yes          Skip all prompts; deploy every tenant whose env file exists.
+                 New tenants are auto-registered without prompting.
   -h, --help     Show this help.
 
 Environment overrides:
@@ -76,9 +78,13 @@ mkdir -p deploy secrets data logs images
 # 2. Discover env files & select tenant(s)
 # ──────────────────────────────────────────────
 discover_env_files() {
-  find secrets/ -maxdepth 1 -name "*.env" -print0 2>/dev/null | sort -z | while IFS= read -r -d '' f; do
-    basename "$f"
-  done
+  # secrets/example.env is the committed (git-tracked) template. It holds no
+  # real credentials and must never be deployed, so it is excluded by its
+  # reserved name. Real tenant files keep the form secrets/<tenant-id>.env.
+  find secrets/ -maxdepth 1 -type f -name "*.env" ! -name "example.env" -print0 2>/dev/null \
+    | sort -z | while IFS= read -r -d '' f; do
+        basename "$f"
+      done
 }
 
 AVAILABLE_ENVS=()
@@ -87,9 +93,10 @@ while IFS= read -r f; do
 done < <(discover_env_files)
 
 if [ ${#AVAILABLE_ENVS[@]} -eq 0 ]; then
-  echo "ERROR: No .env files found in secrets/" >&2
-  echo "Create one from deploy/tenant.env.example:" >&2
-  echo "  cp deploy/tenant.env.example secrets/<tenant-id>.env" >&2
+  echo "ERROR: No tenant .env files found in secrets/" >&2
+  echo "Create one from the committed template (example.env is never deployed):" >&2
+  echo "  cp secrets/example.env secrets/<tenant-id>.env" >&2
+  echo "  chmod 600 secrets/<tenant-id>.env" >&2
   exit 1
 fi
 
@@ -167,7 +174,14 @@ else
 
   # Read arrow keys
   while true; do
-    IFS= read -rsn1 key
+    # `read` returns non-zero on EOF (Ctrl-D / closed stdin); under `set -e`
+    # that would abort the script, so abort cleanly and restore the cursor.
+    IFS= read -rsn1 key || {
+      printf '%s' "$CURSOR_SHOW"
+      echo
+      echo "Aborted."
+      exit 0
+    }
     if [ "$key" = $'\x1b' ]; then
       # Escape sequence — read next two chars
       read -rsn2 -t 0.01 rest || true
@@ -177,13 +191,13 @@ else
     case "$key" in
       $'\x1b[A') # Up
         if [ "$selected" -gt 0 ]; then
-          ((selected--))
+          selected=$((selected - 1))
         fi
         draw_menu "$total"
         ;;
       $'\x1b[B') # Down
         if [ "$selected" -lt $((total - 1)) ]; then
-          ((selected++))
+          selected=$((selected + 1))
         fi
         draw_menu "$total"
         ;;
@@ -229,6 +243,245 @@ if [ ! -f "$INVENTORY" ]; then
   cp deploy/tenants.example.json "$INVENTORY"
   echo "Created $INVENTORY from deploy/tenants.example.json"
 fi
+
+# ──────────────────────────────────────────────
+# 3.5 Auto-register new tenants in inventory
+# ──────────────────────────────────────────────
+echo
+echo "Checking for unregistered tenants in inventory..."
+
+_AUTO_REG_ARGS=("$INVENTORY")
+if [ "$ASSUME_YES" -eq 1 ]; then
+  _AUTO_REG_ARGS+=("--auto-register")
+fi
+_AUTO_REG_ARGS+=("${SELECTED_ENVS[@]}")
+
+python3 - "${_AUTO_REG_ARGS[@]}" <<'PY'
+import json, pathlib, re, shutil, socket, sys
+from datetime import datetime
+
+inventory_path = pathlib.Path(sys.argv[1]).resolve()
+remaining = sys.argv[2:]
+
+auto_register = False
+if "--auto-register" in remaining:
+    auto_register = True
+    remaining.remove("--auto-register")
+
+selected = set(remaining)
+ROOT_DIR = pathlib.Path.cwd()
+
+# ── helpers (reused from step 5 & 6) ──
+
+def parse_env(env_path: pathlib.Path) -> dict[str, str]:
+    values = {}
+    for raw in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def port_in_use(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        try:
+            s.bind(("0.0.0.0", port))
+            return False
+        except OSError:
+            return True
+
+
+ID_RE = re.compile(r"[a-z0-9][a-z0-9_-]{1,62}")
+
+
+def open_tty():
+    try:
+        return open("/dev/tty", "r")
+    except OSError:
+        print("Cannot open terminal for confirmation. Use --yes for automated "
+              "registration.", file=sys.stderr)
+        sys.exit(1)
+
+
+# ── load inventory ──
+try:
+    data = json.loads(inventory_path.read_text(encoding="utf-8"))
+except (FileNotFoundError, json.JSONDecodeError) as exc:
+    print(f"ERROR: cannot read inventory {inventory_path}: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+tenants = data.get("tenants", [])
+if not isinstance(tenants, list):
+    print("ERROR: inventory 'tenants' field must be a list", file=sys.stderr)
+    sys.exit(1)
+
+existing_by_basename: dict[str, dict] = {}
+existing_by_id: dict[str, dict] = {}
+existing_ports: set[int] = set()
+for t in tenants:
+    basename = pathlib.Path(t.get("env_file", "")).name
+    existing_by_basename[basename] = t
+    existing_by_id[t.get("id", "")] = t
+    p = t.get("api_port")
+    if isinstance(p, int):
+        existing_ports.add(p)
+
+# ── scan each selected env ──
+new_entries: list[dict] = []
+conflict_entries: list[tuple[str, dict]] = []
+
+for env_basename in sorted(selected):
+    if env_basename in existing_by_basename:
+        print(f"  SKIP  {env_basename}: already registered in inventory")
+        continue
+
+    env_path = ROOT_DIR / "secrets" / env_basename
+    if not env_path.exists():
+        print(f"  WARN  {env_basename}: env file not found, skipping", file=sys.stderr)
+        continue
+
+    env_values = parse_env(env_path)
+    tenant_id = env_values.get("TENANT_ID", "").strip()
+
+    if not tenant_id:
+        print(f"  ERROR {env_basename}: TENANT_ID missing in env file, skipping",
+              file=sys.stderr)
+        continue
+
+    if not ID_RE.fullmatch(tenant_id):
+        print(f"  ERROR {env_basename}: TENANT_ID {tenant_id!r} invalid "
+              f"(must match [a-z0-9][a-z0-9_-]{{1,62}}), skipping", file=sys.stderr)
+        continue
+
+    # TENANT_ID collides with an existing entry under a different env_file
+    if tenant_id in existing_by_id:
+        et = existing_by_id[tenant_id]
+        conflict_bn = pathlib.Path(et.get("env_file", "")).name
+        if conflict_bn != env_basename:
+            print(f"  CONFLICT  {env_basename}: TENANT_ID {tenant_id!r} already used "
+                  f"by entry env_file={et['env_file']}")
+            conflict_entries.append((env_basename, et))
+            continue
+
+    tenant_name = env_values.get("TENANT_NAME", "").strip() or tenant_id
+
+    # ── allocate a free port ──
+    start = max(existing_ports) + 1 if existing_ports else 8001
+    assigned_this_run = {e["api_port"] for e in new_entries}
+    candidate = start
+    attempts = 0
+    max_attempts = 200
+    while (candidate in existing_ports
+           or candidate in assigned_this_run
+           or port_in_use(candidate)):
+        candidate += 1
+        attempts += 1
+        if attempts > max_attempts:
+            print(f"  FATAL  {env_basename}: no free port after {max_attempts} attempts",
+                  file=sys.stderr)
+            sys.exit(1)
+    existing_ports.add(candidate)
+    assigned_this_run.add(candidate)
+
+    entry = {
+        "id": tenant_id,
+        "name": tenant_name,
+        "api_port": candidate,
+        "env_file": f"secrets/{env_basename}",
+        "data_dir": f"./data/{tenant_id}",
+        "logs_dir": f"./logs/{tenant_id}",
+        "roles": ["api", "stream", "worker"],
+    }
+    new_entries.append(entry)
+
+# ── nothing to do? ──
+if not new_entries and not conflict_entries:
+    print("All selected tenants are already registered in inventory.")
+    sys.exit(0)
+
+# ── report what was found ──
+if new_entries:
+    print(f"\n  New tenant(s) to register in {inventory_path.name}:")
+    for e in new_entries:
+        print(f"    {e['id']}  ({e['name']})")
+        print(f"      port: {e['api_port']}  env: {e['env_file']}")
+        print(f"      data: {e['data_dir']}  logs: {e['logs_dir']}")
+        print(f"      roles: {' '.join(e['roles'])}")
+        print()
+
+if conflict_entries:
+    print("  TENANT_ID conflict(s):")
+    for env_bn, existing in conflict_entries:
+        print(f"    secrets/{env_bn}: TENANT_ID={existing['id']!r} already points to "
+              f"env_file={existing['env_file']}")
+    print()
+
+# ── confirmation ──
+entries_to_add = list(new_entries)
+overwritten: list[dict] = []
+
+if auto_register:
+    entries_to_add = new_entries
+    # Never auto-overwrite existing entries — too dangerous.
+    # If a selected env has a TENANT_ID conflict, skip and warn.
+    for env_bn, existing in conflict_entries:
+        print(f"  WARN   {env_bn}: TENANT_ID conflict with existing entry "
+              f"id={existing['id']!r} — skipped (resolve manually)", file=sys.stderr)
+else:
+    tty = open_tty()
+    try:
+        if entries_to_add:
+            tty.write(f"\n  Add {len(entries_to_add)} new tenant(s) "
+                      f"to inventory? [Y/n] ")
+            tty.flush()
+            ans = tty.readline().strip().lower()
+            if ans not in ("", "y", "yes"):
+                print("  User declined new tenant registration.")
+                entries_to_add = []
+
+        for env_bn, existing in conflict_entries:
+            tty.write(f"  Update existing entry (id={existing['id']}) "
+                      f"to use secrets/{env_bn}? [y/N] ")
+            tty.flush()
+            ans = tty.readline().strip().lower()
+            if ans in ("y", "yes"):
+                existing["env_file"] = f"secrets/{env_bn}"
+                existing["data_dir"] = f"./data/{existing['id']}"
+                existing["logs_dir"] = f"./logs/{existing['id']}"
+                overwritten.append(existing)
+                print(f"  Updated entry for {existing['id']}")
+            else:
+                print(f"  Skipped conflict for {env_bn}")
+    finally:
+        tty.close()
+
+# ── write ──
+if not entries_to_add and not overwritten:
+    print("No changes to inventory.")
+    sys.exit(0)
+
+ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+backup = inventory_path.with_name(f"tenants.json.bak.{ts}")
+shutil.copy2(inventory_path, backup)
+print(f"\n  Backup saved to {backup}")
+
+if entries_to_add:
+    data["tenants"].extend(entries_to_add)
+    print(f"  Added {len(entries_to_add)} new tenant(s) to inventory.")
+
+if overwritten:
+    print(f"  Updated {len(overwritten)} existing tenant(s) in inventory.")
+
+inventory_path.write_text(
+    json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+    encoding="utf-8",
+)
+print(f"  Inventory written to {inventory_path}")
+PY
+echo
 
 # ──────────────────────────────────────────────
 # 4. Filter inventory to only selected env files
@@ -403,17 +656,46 @@ PY
 # 6. Port conflict detection
 # ──────────────────────────────────────────────
 python3 - "$FILTERED_INVENTORY" <<'PY'
-import json, pathlib, socket, sys
+import json, pathlib, socket, subprocess, sys
+
+PROJECT_CONTAINER_PREFIX = "sales-agent-"
+
+def _docker_port_holder(port: int):
+    """发布该宿主机端口的 docker 容器名；无或查询失败均为 None。"""
+    try:
+        out = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}\t{{.Ports}}"],
+            capture_output=True, text=True, timeout=5, check=False,
+        ).stdout
+    except Exception:
+        return None
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        name, ports = parts[0], parts[1]
+        # 形如 0.0.0.0:8003->8000/tcp
+        if f":{port}->" in ports:
+            return name
+    return None
 
 def port_in_use(port: int) -> bool:
-    """Check if a TCP port is already bound on this host."""
+    """端口是否被「外部进程」占用（真冲突）。
+
+    被本项目自身容器（sales-agent-*）占用的端口不算冲突——那正是本次
+    `docker compose up` 即将重建的容器，重新部署时应原地复用，不要往上顶。
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.5)
         try:
             s.bind(("0.0.0.0", port))
-            return False
+            return False  # 没人占用 → 空闲
         except OSError:
-            return True
+            pass  # 有东西占用，继续判断是谁
+    holder = _docker_port_holder(port)
+    if holder is not None and holder.startswith(PROJECT_CONTAINER_PREFIX):
+        return False  # 本项目自身容器（重新部署目标）→ 非冲突
+    return True  # 外部进程 / 未知占用者 → 当作冲突，保守顶端口
 
 data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 ports_seen: set[int] = set()
@@ -494,12 +776,35 @@ else
 fi
 
 # ──────────────────────────────────────────────
+# 8b. Load frontend image (nginx SPA 容器，每租户一个)
+# ──────────────────────────────────────────────
+if [ -n "${FRONTEND_IMAGE:-}" ]; then
+  REG_HOST="${REGISTRY_HOST:-172.25.186.210:5000}"
+  echo "Pulling frontend image: ${FRONTEND_IMAGE}"
+  docker pull "${FRONTEND_IMAGE}"
+elif [ -f console/Dockerfile ] && command -v npm >/dev/null 2>&1; then
+  echo "Building frontend image from console/Dockerfile..."
+  docker build -t sales-agent-frontend:latest -f console/Dockerfile console/
+  FRONTEND_IMAGE=sales-agent-frontend:latest
+else
+  echo "No FRONTEND_IMAGE and cannot build (missing console/Dockerfile or npm); using default tag."
+  FRONTEND_IMAGE="${FRONTEND_IMAGE:-sales-agent-frontend:latest}"
+fi
+export FRONTEND_IMAGE
+
+# ──────────────────────────────────────────────
 # 9. Render compose & start services
 # ──────────────────────────────────────────────
 python3 scripts/render-multitenant-deploy.py "$FILTERED_INVENTORY" --compose-out "$COMPOSE_FILE"
 
+# 若存在共享 Neo4j 凭证文件，注入给 compose 的 ${NEO4J_PASSWORD} 插值。
+ENV_FILE_ARGS=()
+if [ -f "secrets/neo4j.env" ]; then
+  ENV_FILE_ARGS+=(--env-file secrets/neo4j.env)
+fi
+
 echo "Starting services with $COMPOSE_FILE"
-docker compose -f "$COMPOSE_FILE" up -d
+docker compose -f "$COMPOSE_FILE" "${ENV_FILE_ARGS[@]}" up -d
 
 # ──────────────────────────────────────────────
 # 10. Auto-create tenant DB records

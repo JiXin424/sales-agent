@@ -85,6 +85,7 @@ async def start_ontology_ingest(
             status="running",
             stage="uploaded",
             documents_seen=1,
+            metadata_json=json.dumps({"filename": f.filename}, ensure_ascii=False),
         )
         db.add(job)
         await db.flush()

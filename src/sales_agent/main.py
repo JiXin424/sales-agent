@@ -52,6 +52,26 @@ async def lifespan(app: FastAPI):
         finally:
             await neo_client.close()
 
+    # 清理上次进程残留的 running 状态 ontology job。
+    # asyncio.create_task 不持久，进程重启后这些 job 永远卡在 running（前端会一直显示"入库中"）。
+    # 启动时把它们标 failed，让前端能正确显示终态。
+    try:
+        from sales_agent.core.database import get_session_factory
+        from sales_agent.models.ingestion import IngestionJob
+        from sqlalchemy import update
+        _sf = get_session_factory()
+        async with _sf() as _sweep_db:
+            result = await _sweep_db.execute(
+                update(IngestionJob)
+                .where(IngestionJob.engine == "ontology_neo4j", IngestionJob.status == "running")
+                .values(status="failed", error_summary="进程重启，任务中断")
+            )
+            await _sweep_db.commit()
+            if result.rowcount:
+                logger.info("Swept %d stale running ontology job(s) to failed", result.rowcount)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Ontology stale-job sweep failed: %s", exc)
+
     # 加载 TenantRuntime 并做启动校验
     runtime = get_tenant_runtime()
     errors = runtime.validate_startup()

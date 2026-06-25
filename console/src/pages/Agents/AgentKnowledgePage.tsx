@@ -5,8 +5,8 @@ import { InboxOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { message } from 'antd';
-import { getOntologyStatus, startOntologyIngest, subscribeJobEvents } from '@/api/knowledge';
-import type { IngestStartResponse, JobProgressEvent } from '@/api/types';
+import { getOntologyStatus, startOntologyIngest, subscribeJobEvents, listOntologyJobs } from '@/api/knowledge';
+import type { IngestStartResponse, JobProgressEvent, OntologyJob } from '@/api/types';
 import PageHeader from '@/components/PageHeader';
 import LoadingState from '@/components/LoadingState';
 
@@ -44,6 +44,53 @@ export default function AgentKnowledgePage() {
   const [uploading, setUploading] = useState(false);
   const eventSourcesRef = useRef<Map<string, EventSource>>(new Map());
 
+  // (re)subscribe SSE for one job; idempotent（已订阅则跳过）
+  const subscribeJob = useCallback((jobId: string) => {
+    if (!agentId || eventSourcesRef.current.has(jobId)) return;
+    const es = subscribeJobEvents(agentId, jobId);
+    eventSourcesRef.current.set(jobId, es);
+    es.onmessage = (evt) => {
+      try {
+        const data: JobProgressEvent = JSON.parse(evt.data);
+        setFileJobs(prev => prev.map(fj =>
+          fj.jobId === jobId
+            ? { ...fj, stage: data.stage, status: data.status, stats: data.stats || fj.stats, errorSummary: data.error_summary }
+            : fj
+        ));
+        if (DONE_STATES.has(data.status)) { es.close(); eventSourcesRef.current.delete(jobId); }
+      } catch { /* ignore */ }
+    };
+    es.onerror = () => { es.close(); eventSourcesRef.current.delete(jobId); };
+  }, [agentId]);
+
+  // 进页面 / 切 tab 回来：从后端拉最近 job 重建列表（state 不再丢失），仍在 running 的重新订阅
+  useEffect(() => {
+    if (!agentId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await listOntologyJobs(agentId, 20, 0);
+        if (cancelled) return;
+        const jobs: FileJob[] = resp.items.map((j: OntologyJob) => ({
+          filename: (j.metadata as Record<string, unknown>)?.filename as string || j.id,
+          jobId: j.id,
+          stage: j.stage || 'uploaded',
+          status: j.status,
+          stats: {
+            entities_created: j.entities_created,
+            facts_created: j.facts_created,
+            facts_pending_review: j.facts_pending_review,
+            conflicts_created: j.conflicts_created,
+          },
+          errorSummary: j.error_summary || undefined,
+        }));
+        setFileJobs(jobs);
+        jobs.filter(j => !DONE_STATES.has(j.status)).forEach(j => subscribeJob(j.jobId));
+      } catch { /* 引擎未就绪等，忽略 */ }
+    })();
+    return () => { cancelled = true; };
+  }, [agentId, subscribeJob]);
+
   // process raw files from Upload component
   const handleFiles = useCallback(async (rawFiles: File[]) => {
     if (!agentId || !engineReady) return;
@@ -54,29 +101,13 @@ export default function AgentKnowledgePage() {
         filename: r.filename, jobId: r.job_id, stage: 'uploaded', status: 'running',
       }));
       setFileJobs(prev => [...prev, ...newJobs]);
-
-      newJobs.forEach(job => {
-        const es = subscribeJobEvents(agentId, job.jobId);
-        eventSourcesRef.current.set(job.jobId, es);
-        es.onmessage = (evt) => {
-          try {
-            const data: JobProgressEvent = JSON.parse(evt.data);
-            setFileJobs(prev => prev.map(fj =>
-              fj.jobId === job.jobId
-                ? { ...fj, stage: data.stage, status: data.status, stats: data.stats || fj.stats, errorSummary: data.error_summary }
-                : fj
-            ));
-            if (DONE_STATES.has(data.status)) { es.close(); eventSourcesRef.current.delete(job.jobId); }
-          } catch { /* ignore */ }
-        };
-        es.onerror = () => { es.close(); eventSourcesRef.current.delete(job.jobId); };
-      });
+      newJobs.forEach(job => subscribeJob(job.jobId));
     } catch (e: any) {
       message.error(`上传失败：${e?.message || e}`);
     } finally {
       setUploading(false);
     }
-  }, [agentId, engineReady]);
+  }, [agentId, engineReady, subscribeJob]);
 
   // all done?
   useEffect(() => {

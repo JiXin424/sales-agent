@@ -18,7 +18,18 @@ def _extract_json(raw: str) -> dict[str, Any]:
     except json.JSONDecodeError:
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if match:
-            return json.loads(match.group(0))
+            try:
+                return json.loads(match.group(0))
+            except json.JSONDecodeError:
+                pass
+        # 最后兜底：用 json-repair 修复 LLM 常见 JSON 瑕疵（缺逗号、尾逗号、未闭合引号等）
+        try:
+            from json_repair import repair_json
+            repaired = repair_json(text, return_objects=True)
+            if isinstance(repaired, dict):
+                return repaired
+        except Exception:  # noqa: BLE001
+            pass
         raise
 
 
@@ -95,23 +106,33 @@ async def extract_entities(chat_model: ChatModel, content: str) -> list[EntityCa
     raw = await chat_model.generate(
         messages=[{"role": "user", "content": ENTITY_EXTRACTION_PROMPT.format(content=content[:6000])}],
         temperature=0.1,
-        max_tokens=3000,
+        max_tokens=5000,
     )
     return parse_entities_json(raw)
+
+
+# 每批实体数：控制单次 LLM 输出大小，降低长 JSON 漏逗号/截断的概率。
+FACT_BATCH_SIZE = 8
 
 
 async def extract_facts(
     chat_model: ChatModel,
     content: str,
     entities: list[EntityCandidate],
+    batch_size: int = FACT_BATCH_SIZE,
 ) -> list[FactCandidate]:
-    entities_json = json.dumps(
-        [{"type": e.type, "name": e.name, "aliases": e.aliases, "properties": e.properties} for e in entities],
-        ensure_ascii=False,
-    )
-    raw = await chat_model.generate(
-        messages=[{"role": "user", "content": FACT_EXTRACTION_PROMPT.format(content=content[:6000], entities_json=entities_json)}],
-        temperature=0.1,
-        max_tokens=4000,
-    )
-    return parse_facts_json(raw)
+    # 按实体分批抽取事实：每批一个小 JSON，比一次性全量更稳定。
+    all_facts: list[FactCandidate] = []
+    for i in range(0, len(entities), batch_size):
+        batch = entities[i:i + batch_size]
+        entities_json = json.dumps(
+            [{"type": e.type, "name": e.name, "aliases": e.aliases, "properties": e.properties} for e in batch],
+            ensure_ascii=False,
+        )
+        raw = await chat_model.generate(
+            messages=[{"role": "user", "content": FACT_EXTRACTION_PROMPT.format(content=content[:6000], entities_json=entities_json)}],
+            temperature=0.1,
+            max_tokens=6000,
+        )
+        all_facts.extend(parse_facts_json(raw))
+    return all_facts

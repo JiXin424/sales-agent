@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import shutil
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,22 @@ from sales_agent.services.tenant_resolver import TenantResolver
 router = APIRouter(prefix="/agents", tags=["ontology"])
 
 ALLOWED_EXTENSIONS = {".md", ".txt", ".docx", ".pdf", ".pptx"}
+
+_logger = logging.getLogger(__name__)
+
+# 后台入库任务的强引用集合：asyncio.create_task 返回的 Task 若不保留引用会被 GC 回收，
+# 导致任务静默消失、job 永远卡 running。任务完成后由 done 回调自动移除。
+_running_ingest_tasks: set = set()
+
+
+def _on_ingest_task_done(task: asyncio.Task) -> None:
+    """后台任务结束：移除引用 + 记录未捕获异常（避免静默失败）。"""
+    _running_ingest_tasks.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc:
+        _logger.error("后台入库任务未捕获异常: %s", exc, exc_info=exc)
 
 
 async def _load_agent_or_404(agent_id: str, db: DbSession):
@@ -90,7 +107,9 @@ async def start_ontology_ingest(
         db.add(job)
         await db.flush()
 
-        asyncio.create_task(
+        # 保留 Task 强引用，避免被 GC 回收（asyncio.create_task 不保留引用会被回收，
+        # 导致后台入库任务静默消失、job 永远卡 running）。任务完成后自动从集合移除。
+        task = asyncio.create_task(
             _run_ingest_background(
                 job_id=job.id,
                 tenant_id=agent.tenant_id,
@@ -98,6 +117,8 @@ async def start_ontology_ingest(
                 path=dest_path,
             )
         )
+        _running_ingest_tasks.add(task)
+        task.add_done_callback(_on_ingest_task_done)
         results.append({"job_id": job.id, "filename": f.filename})
 
     return results

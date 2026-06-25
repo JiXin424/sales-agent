@@ -168,3 +168,15 @@ ontology_neo4j 引擎依赖 Neo4j。CI 部署链路已自动接入：
   2. 租户 `secrets/taishan.env` 设 `KNOWLEDGE_ENGINE=ontology_neo4j`（否则 neo4j 起但 app 走 legacy_rag）。
 - **回退**：租户 env `KNOWLEDGE_ENGINE=legacy_rag` 即禁用引擎，neo4j 容器仍起但不被使用。
 - **验证**：`docker inspect sales-agent-neo4j` healthy；app `/ready` 返回 ontology 就绪；`ingestion_jobs` 含 0003 新增列。
+
+## 13. 无源码目标机部署（2026-06-25）
+
+杭州及未来不给源码的目标机用 **deploy 镜像** 部署（不 git sync、不放源码）：
+
+- **deploy 镜像**（`registry.internal:5000/sales-agent-deploy:<sha>`）：CI `build-and-push` 末尾 render 各无源码目标的 `compose-<env>.yml`（`render-multitenant-deploy.py --skip-validation`），和 `deploy-remote.sh` 一起打进镜像推 registry。compose 内 image = `registry.internal:5000/sales-agent:latest`（retag 自精确 sha）。
+- **fan-out `image-deploy` method**：`ci-fanout.sh` SSH 目标机执行
+  `docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v <dir>/secrets:/secrets:ro -e APP_IMAGE=... sales-agent-deploy:<sha> <env>`。
+- **deploy 镜像内**：pull app 镜像 → retag → `compose up`（`--env-file /secrets/neo4j.env`）→ 等 api running。migration 仍由 app 镜像 entrypoint 跑。
+- **目标机要求**：只有 docker + compose、registry 登录、CA、`secrets/`。无 src/scripts/.git。初始化见 [`sourceless-target-setup.md`](sourceless-target-setup.md)。
+- **与有源码 `deploy-release` 区别**：有源码目标 fan-out 时 git sync + 现场 render compose；无源码目标用 CI 预 render 进 deploy 镜像。
+- **杭州**：`deploy-targets.json` method=`image-deploy` env=`hangzhou`；`tenants.hangzhou.json` 含 fuduoduo（8103）。

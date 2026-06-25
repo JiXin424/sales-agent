@@ -713,3 +713,19 @@ export interface PilotStatus {
     recent_error_rate: number;
   };
 }
+
+// --- Instance Config ---
+
+export interface SensitiveValue {
+  value: string;     // full plaintext (revealed on click)
+  sensitive: true;
+  masked: string;    // truncated preview (e.g. "sk-2e2a...2242a")
+}
+
+export type ConfigValue = string | SensitiveValue;
+
+export type InstanceConfigGroup = Record<string, ConfigValue>;
+
+export interface InstanceConfigResponse {
+  groups: Record<string, InstanceConfigGroup>;
+}

@@ -7,4 +7,5 @@ export * from './prompts';
 export * from './knowledge';
 export * from './feedback';
 export * from './agents';
+export * from './instance';
 export { ApiError } from './client';

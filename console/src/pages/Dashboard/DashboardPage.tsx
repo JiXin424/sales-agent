@@ -16,6 +16,7 @@ import LoadingState from '@/components/LoadingState';
 import ErrorState from '@/components/ErrorState';
 import EmptyState from '@/components/EmptyState';
 import { CountUp, SpotlightCard } from '@/components/react-bits';
+import ConfigCard from '@/components/ConfigCard';
 
 const { Text } = Typography;
 
@@ -50,6 +51,12 @@ export default function DashboardPage() {
     queryKey: queryKeys.conversations(tenantId!, { limit: 10 }),
     queryFn: () => api.listConversations(tenantId!, { limit: 10 }),
     enabled: !!tenantId,
+  });
+
+  // 环境配置独立加载，不阻塞运营指标展示
+  const configQuery = useQuery({
+    queryKey: ['instance-config'],
+    queryFn: () => api.getInstanceConfig(),
   });
 
   const isLoading =
@@ -312,6 +319,14 @@ export default function DashboardPage() {
           </Card>
         </Col>
       </Row>
+
+      {/* Section 3: 环境配置（运行时 secrets/*.env 配置展示） */}
+      <ConfigCard
+        data={configQuery.data}
+        loading={configQuery.isLoading}
+        error={configQuery.isError}
+        onRetry={() => configQuery.refetch()}
+      />
     </>
   );
 }

@@ -1,7 +1,7 @@
 /** Agent-scoped ontology knowledge ingestion page — upload + SSE progress. */
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Upload, Steps, Tag, Button, Alert, Typography, Space } from 'antd';
-import { InboxOutlined } from '@ant-design/icons';
+import { Upload, Steps, Tag, Button, Alert, Typography, Space, Spin } from 'antd';
+import { InboxOutlined, LoadingOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { message } from 'antd';
@@ -122,6 +122,8 @@ export default function AgentKnowledgePage() {
   // cleanup
   useEffect(() => () => { eventSourcesRef.current.forEach(es => es.close()); }, []);
 
+  const hasRunning = fileJobs.some(fj => !DONE_STATES.has(fj.status));
+
   if (statusQuery.isLoading) return <LoadingState />;
 
   return (
@@ -154,33 +156,51 @@ export default function AgentKnowledgePage() {
         <p className="ant-upload-hint">支持 .md / .txt / .docx / .pdf / .pptx，可多选（每文件独立入库）</p>
       </Dragger>
 
+      {(uploading || hasRunning) && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, color: '#1677ff' }}>
+          <Spin size="small" />
+          <span>
+            {uploading
+              ? '上传中…'
+              : `正在处理 ${fileJobs.filter(fj => !DONE_STATES.has(fj.status)).length} 个文件，请稍候…`}
+          </span>
+        </div>
+      )}
+
       {fileJobs.length > 0 && (
         <div style={{ marginTop: 20 }}>
           {fileJobs.map(fj => {
             const isDone = fj.status === 'completed';
+            const isWarn = fj.status === 'completed_with_errors';
             const isFailed = fj.status === 'failed';
+            const isRunning = !isDone && !isWarn && !isFailed;
             const stepIdx = STAGE_IDX[fj.stage] ?? 0;
+            const border = isFailed ? '#ff4d4f' : isDone ? '#b7eb8f' : isWarn ? '#ffe58f' : '#d9d9d9';
+            const bg = isFailed ? '#fff2f0' : isDone ? '#f6ffed' : isWarn ? '#fffbe6' : '#fafafa';
             return (
               <div key={fj.jobId} style={{
-                border: `1px solid ${isFailed ? '#ff4d4f' : isDone ? '#b7eb8f' : '#d9d9d9'}`,
-                borderRadius: 8, padding: '12px 16px', marginBottom: 10,
-                background: isFailed ? '#fff2f0' : isDone ? '#f6ffed' : '#fafafa',
+                border: `1px solid ${border}`, borderRadius: 8, padding: '12px 16px', marginBottom: 10, background: bg,
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <Text strong delete={isFailed}>{fj.filename}</Text>
                   <Space size={8}>
                     {isFailed && <Tag color="red">失败</Tag>}
                     {isDone && <Tag color="green">完成</Tag>}
-                    {!isFailed && !isDone && <Tag color="processing">入库中</Tag>}
+                    {isWarn && <Tag color="gold">完成（部分错误）</Tag>}
+                    {isRunning && <Tag color="processing">入库中</Tag>}
                   </Space>
                 </div>
 
-                {!isDone && !isFailed && (
+                {isRunning && (
                   <Steps size="small" current={stepIdx} style={{ marginTop: 8 }}
-                    items={STAGES.map((s, i) => ({ title: i === stepIdx ? s : '' }))} />
+                    items={STAGES.map((s, i) => ({
+                      title: i === stepIdx ? s : '',
+                      status: i < stepIdx ? 'finish' : i === stepIdx ? 'process' : 'wait',
+                      icon: i === stepIdx ? <LoadingOutlined /> : undefined,
+                    }))} />
                 )}
 
-                {isDone && fj.stats && (
+                {(isDone || isWarn) && fj.stats && (
                   <div style={{ marginTop: 6 }}>
                     <Text>{fj.stats.entities_created || 0} 实体 · {fj.stats.facts_created || 0} 事实
                       {fj.stats.facts_pending_review ? ` · ${fj.stats.facts_pending_review} 待复核` : ''}

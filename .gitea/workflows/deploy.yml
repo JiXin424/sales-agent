@@ -64,6 +64,21 @@ jobs:
           docker push ${REGISTRY}/neo4j:5
           echo "::notice::mirrored ${REGISTRY}/neo4j:5"
 
+      - name: Render per-env composes + build deploy image
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          mkdir -p deploy
+          for env in hangzhou; do
+            OVERRIDE_IMAGE="${REGISTRY}/${IMAGE_NAME}:${SHA}" \
+              python3 scripts/render-multitenant-deploy.py "deploy/tenants.${env}.json" \
+              --skip-validation --compose-out "deploy/compose-${env}.yml" --traefik-out /dev/null
+          done
+          docker build -t ${REGISTRY}/sales-agent-deploy:${SHA} -t ${REGISTRY}/sales-agent-deploy:latest \
+            -f deploy/Dockerfile deploy/
+          docker push ${REGISTRY}/sales-agent-deploy:${SHA}
+          docker push ${REGISTRY}/sales-agent-deploy:latest
+          echo "::notice::pushed deploy image ${REGISTRY}/sales-agent-deploy:${SHA}"
+
   deploy-fanout:
     runs-on: ubuntu-latest
     needs: build-and-push

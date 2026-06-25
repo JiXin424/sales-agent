@@ -120,7 +120,7 @@ export default function AgentKnowledgePage() {
       >
         <p className="ant-upload-drag-icon"><InboxOutlined /></p>
         <p className="ant-upload-text">拖拽文件到此处，或点击选择</p>
-        <p className="ant-upload-hint">支持 .md / .txt，可多选（每文件独立入库）</p>
+        <p className="ant-upload-hint">支持 .md / .txt / .docx / .pdf / .pptx，可多选（每文件独立入库）</p>
       </Dragger>
 
       {fileJobs.length > 0 && (

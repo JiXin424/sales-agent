@@ -20,6 +20,7 @@ from sales_agent.api.schemas import (
     AgentStatusAction,
     AgentUpdateRequest,
     CloneOptions,
+    SetPromptBindingRequest,
 )
 from sales_agent.core.tenant_runtime import get_tenant_runtime
 from sales_agent.models.agent import Agent
@@ -309,7 +310,9 @@ async def list_agent_prompts(
         .limit(limit).offset(offset)
     )).scalars().all()
     items = [{
-        "id": r.id, "task_type": r.task_type, "version": r.version, "status": r.status,
+        "id": r.id, "task_type": r.task_type,
+        "prompt_category": r.prompt_category, "prompt_key": r.prompt_key,
+        "version": r.version, "status": r.status,
         "description": r.description, "agent_scoped": r.agent_id == agent.id,
         "created_at": r.created_at, "updated_at": r.updated_at,
     } for r in rows]
@@ -320,6 +323,71 @@ async def list_agent_prompts(
     mapping = json.loads(ps.task_prompt_versions_json or "{}") if ps else {}
     return {"items": items, "total": total, "limit": limit, "offset": offset,
             "prompt_set_mapping": mapping}
+
+
+async def _ensure_agent_prompt_set(db: AsyncSession, agent: Agent):
+    """获取或创建 Agent 的 prompt_set（无则新建并绑定）。"""
+    from sales_agent.models.agent_prompt_set import AgentPromptSet
+
+    if agent.prompt_set_id:
+        ps = (await db.execute(
+            select(AgentPromptSet).where(AgentPromptSet.id == agent.prompt_set_id)
+        )).scalar_one_or_none()
+        if ps is not None:
+            return ps
+    ps = AgentPromptSet(
+        agent_id=agent.id,
+        tenant_id=agent.tenant_id,
+        task_prompt_versions_json="{}",
+    )
+    db.add(ps)
+    await db.flush()
+    agent.prompt_set_id = ps.id
+    await db.flush()
+    return ps
+
+
+@router.put("/{agent_id}/prompts/bindings/{category}/{key}")
+async def set_agent_prompt_binding(
+    agent_id: str,
+    category: str,
+    key: str,
+    req: SetPromptBindingRequest,
+    db: DbSession,
+):
+    """绑定/解绑 Agent 的某 (category, key) prompt 版本。
+
+    body version_id 为 None 时解绑（回退 tenant active / 内置默认）。
+    """
+    agent = await _load_agent(db, agent_id)
+    ps = await _ensure_agent_prompt_set(db, agent)
+    try:
+        mapping = json.loads(ps.task_prompt_versions_json or "{}")
+    except (ValueError, TypeError):
+        mapping = {}
+    if not isinstance(mapping, dict):
+        mapping = {}
+    cat_map = mapping.setdefault(category, {})
+    if not isinstance(cat_map, dict):
+        cat_map = {}
+        mapping[category] = cat_map
+
+    if req.version_id is None:
+        cat_map.pop(key, None)
+    else:
+        pv = (await db.execute(
+            select(PromptVersion).where(
+                PromptVersion.id == req.version_id,
+                PromptVersion.tenant_id == agent.tenant_id,
+            )
+        )).scalar_one_or_none()
+        if pv is None:
+            raise HTTPException(status_code=404, detail="Prompt version not found")
+        cat_map[key] = req.version_id
+
+    ps.task_prompt_versions_json = json.dumps(mapping, ensure_ascii=False)
+    await db.flush()
+    return {"ok": True, "prompt_set_mapping": mapping}
 
 
 @router.get("/{agent_id}/channels")

@@ -1,6 +1,6 @@
 /** Agent Instance API wrappers — one-to-one Agent management + clone. */
 
-import { apiGet, apiPost, apiPatch } from './client';
+import { apiGet, apiPost, apiPatch, apiPut } from './client';
 import type {
   AgentInstance,
   AgentCreateRequest,
@@ -87,11 +87,24 @@ export function listAgentDocuments(agentId: string, limit = 50, offset = 0) {
 }
 
 export interface AgentPromptsResponse extends PaginatedResponse<unknown> {
-  prompt_set_mapping?: Record<string, string>;
+  prompt_set_mapping?: Record<string, unknown>;
 }
 
 export function listAgentPrompts(agentId: string, limit = 100, offset = 0) {
   return apiGet<AgentPromptsResponse>(`/agents/${agentId}/prompts`, { limit, offset });
+}
+
+/** 绑定/解绑 Agent 的某 prompt 版本（versionId 为 null 时解绑）。 */
+export function setAgentPromptBinding(
+  agentId: string,
+  category: string,
+  key: string,
+  versionId: string | null,
+) {
+  return apiPut<{ ok: boolean; prompt_set_mapping: Record<string, unknown> }>(
+    `/agents/${agentId}/prompts/bindings/${category}/${key}`,
+    { version_id: versionId },
+  );
 }
 
 export function listAgentChannels(agentId: string) {

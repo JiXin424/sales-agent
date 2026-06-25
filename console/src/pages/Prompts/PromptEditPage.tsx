@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Form,
   Input,
@@ -10,6 +10,7 @@ import {
   message,
   Typography,
   Divider,
+  Tag,
 } from 'antd';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTenant } from '@/context/TenantContext';
@@ -20,15 +21,27 @@ import {
   updatePromptVersion,
   activatePromptVersion,
   previewPrompt,
+  listBuiltinPrompts,
 } from '@/api/prompts';
+import type { PromptCategory, PromptPreviewRequest } from '@/api/types';
 import { queryKeys } from '@/utils/queryKeys';
-import { TASK_TYPE_LABELS } from '@/utils/constants';
+import {
+  TASK_TYPE_LABELS,
+  PROMPT_CATEGORY_LABELS,
+  PROMPT_KEYS_BY_CATEGORY,
+} from '@/utils/constants';
 import PageHeader from '@/components/PageHeader';
 import LoadingState from '@/components/LoadingState';
 import ErrorState from '@/components/ErrorState';
 
 const { TextArea } = Input;
 const { Text } = Typography;
+
+const CATEGORY_OPTIONS = Object.entries(PROMPT_CATEGORY_LABELS).map(([value, label]) => ({
+  value,
+  label,
+}));
+const TASK_OPTIONS = Object.entries(TASK_TYPE_LABELS).map(([value, label]) => ({ value, label }));
 
 export default function PromptEditPage() {
   const { tenantId } = useTenant();
@@ -42,18 +55,27 @@ export default function PromptEditPage() {
   const [previewMessage, setPreviewMessage] = useState('');
   const [previewResult, setPreviewResult] = useState<string | null>(null);
 
-  // ---- Load existing prompt ----
+  const promptCategory: string = Form.useWatch('prompt_category', form) ?? 'task';
+
   const promptQuery = useQuery({
     queryKey: queryKeys.prompt(tenantId!, id!),
     queryFn: () => getPromptVersion(tenantId!, id!),
     enabled: isEditing && !!tenantId,
   });
 
-  // Populate form when data loads
+  // 内置 prompt（供占位符提示）
+  const builtinQuery = useQuery({
+    queryKey: ['builtin-prompts', tenantId],
+    queryFn: () => listBuiltinPrompts(tenantId!),
+    enabled: !!tenantId,
+  });
+
   useEffect(() => {
     if (promptQuery.data) {
       form.setFieldsValue({
-        task_type: promptQuery.data.task_type,
+        prompt_category: promptQuery.data.prompt_category ?? 'task',
+        task_type: promptQuery.data.task_type ?? undefined,
+        prompt_key: promptQuery.data.prompt_key ?? undefined,
         version: promptQuery.data.version,
         description: promptQuery.data.description,
         template_text: promptQuery.data.template_text,
@@ -61,10 +83,24 @@ export default function PromptEditPage() {
     }
   }, [promptQuery.data, form]);
 
-  // ---- Mutations ----
+  // 当前 (category, key) 的必须占位符
+  const placeholders = useMemo(() => {
+    const key = form.getFieldValue('task_type') || form.getFieldValue('prompt_key');
+    const found = builtinQuery.data?.find(
+      (b) => b.prompt_category === promptCategory && b.prompt_key === key,
+    );
+    return found?.required_placeholders ?? [];
+  }, [promptCategory, builtinQuery.data, form]);
+
   const createMutation = useMutation({
-    mutationFn: (data: { task_type: string; template_text: string; description?: string; version?: string }) =>
-      createPromptVersion(tenantId!, data),
+    mutationFn: (data: {
+      task_type?: string;
+      template_text: string;
+      description?: string;
+      version?: string;
+      prompt_category?: string;
+      prompt_key?: string | null;
+    }) => createPromptVersion(tenantId!, data),
     onSuccess: (data) => {
       message.success('草稿已保存');
       setSavedId(data.id);
@@ -95,17 +131,11 @@ export default function PromptEditPage() {
   });
 
   const previewMutation = useMutation({
-    mutationFn: (req: { task_type: string; version_id?: string | null; sample_message: string }) =>
-      previewPrompt(tenantId!, req),
-    onSuccess: (data) => {
-      setPreviewResult(data.rendered_prompt);
-    },
-    onError: () => {
-      message.error('预览失败');
-    },
+    mutationFn: (req: PromptPreviewRequest) => previewPrompt(tenantId!, req),
+    onSuccess: (data) => setPreviewResult(data.rendered_prompt),
+    onError: () => message.error('预览失败'),
   });
 
-  // ---- Handlers ----
   const handleSaveDraft = async () => {
     try {
       const values = await form.validateFields();
@@ -115,7 +145,15 @@ export default function PromptEditPage() {
           description: values.description,
         });
       } else {
-        createMutation.mutate(values);
+        const category = values.prompt_category ?? 'task';
+        createMutation.mutate({
+          template_text: values.template_text,
+          description: values.description,
+          version: values.version,
+          prompt_category: category,
+          task_type: category === 'task' ? values.task_type : '',
+          prompt_key: category === 'task' ? values.task_type : values.prompt_key,
+        });
       }
     } catch {
       // validation failed
@@ -123,20 +161,22 @@ export default function PromptEditPage() {
   };
 
   const handlePreview = async () => {
-    try {
-      const values = await form.validateFields(['task_type']);
-      if (!previewMessage.trim()) {
-        message.warning('请输入示例消息');
-        return;
-      }
-      previewMutation.mutate({
-        task_type: values.task_type,
-        version_id: savedId,
-        sample_message: previewMessage,
-      });
-    } catch {
-      // validation failed
+    if (!previewMessage.trim()) {
+      message.warning('请输入示例消息');
+      return;
     }
+    const category = ((form.getFieldValue('prompt_category') as string) ?? 'task') as PromptCategory;
+    const key =
+      category === 'task'
+        ? form.getFieldValue('task_type')
+        : form.getFieldValue('prompt_key');
+    previewMutation.mutate({
+      prompt_category: category,
+      prompt_key: key,
+      task_type: category === 'task' ? (key as string) : null,
+      version_id: savedId,
+      sample_message: previewMessage,
+    });
   };
 
   const handleActivate = () => {
@@ -147,15 +187,8 @@ export default function PromptEditPage() {
     });
   };
 
-  // ---- Task type options ----
-  const taskTypeOptions = Object.entries(TASK_TYPE_LABELS).map(([value, label]) => ({
-    value,
-    label,
-  }));
-
   const currentStatus = promptQuery.data?.status;
 
-  // ---- Loading / Error ----
   if (isEditing && promptQuery.isLoading) {
     return (
       <>
@@ -164,28 +197,23 @@ export default function PromptEditPage() {
       </>
     );
   }
-
   if (isEditing && promptQuery.isError) {
     return (
       <>
         <PageHeader title="编辑提示词" />
-        <ErrorState
-          message="加载提示词详情失败"
-          onRetry={() => promptQuery.refetch()}
-        />
+        <ErrorState message="加载提示词详情失败" onRetry={() => promptQuery.refetch()} />
       </>
     );
   }
 
   const isSaving = createMutation.isPending || updateMutation.isPending;
+  const nonTaskKeyOptions = PROMPT_KEYS_BY_CATEGORY[promptCategory] ?? [];
 
   return (
     <>
       <PageHeader
         title={isEditing ? '编辑提示词' : '新建提示词'}
-        actions={
-          <Button onClick={() => navigate('/prompts')}>返回列表</Button>
-        }
+        actions={<Button onClick={() => navigate('/prompts')}>返回列表</Button>}
       />
 
       <div style={{ display: 'flex', gap: 24 }}>
@@ -195,23 +223,40 @@ export default function PromptEditPage() {
             form={form}
             layout="vertical"
             initialValues={{
-              task_type: undefined,
+              prompt_category: 'task',
               version: '',
               description: '',
               template_text: '',
             }}
           >
             <Form.Item
-              name="task_type"
-              label="任务类型"
-              rules={[{ required: true, message: '请选择任务类型' }]}
+              name="prompt_category"
+              label="Prompt 类别"
+              rules={[{ required: true }]}
             >
-              <Select
-                placeholder="选择任务类型"
-                options={taskTypeOptions}
-                disabled={isEditing}
-              />
+              <Select options={CATEGORY_OPTIONS} disabled={isEditing} />
             </Form.Item>
+
+            {promptCategory === 'task' ? (
+              <Form.Item
+                name="task_type"
+                label="任务类型"
+                rules={[{ required: true, message: '请选择任务类型' }]}
+              >
+                <Select options={TASK_OPTIONS} disabled={isEditing} />
+              </Form.Item>
+            ) : (
+              <Form.Item
+                name="prompt_key"
+                label="Prompt 标识"
+                rules={[{ required: true, message: '请选择标识' }]}
+              >
+                <Select
+                  options={nonTaskKeyOptions.map((k) => ({ value: k.key, label: k.label }))}
+                  disabled={isEditing}
+                />
+              </Form.Item>
+            )}
 
             <Form.Item name="version" label="版本">
               <Input placeholder="如 v1.0" disabled={isEditing} />
@@ -220,6 +265,20 @@ export default function PromptEditPage() {
             <Form.Item name="description" label="描述">
               <TextArea rows={2} placeholder="描述该版本的变更" />
             </Form.Item>
+
+            {placeholders.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  必须占位符：
+                </Text>{' '}
+                {placeholders.map((p) => (
+                  <Tag key={p}>{`{${p}}`}</Tag>
+                ))}
+                {promptCategory === 'task' && (
+                  <Tag>context_block / retrieval_block / retrieval_content（可选）</Tag>
+                )}
+              </div>
+            )}
 
             <Form.Item
               name="template_text"
@@ -235,18 +294,11 @@ export default function PromptEditPage() {
           </Form>
 
           <Space>
-            <Button
-              type="primary"
-              onClick={handleSaveDraft}
-              loading={isSaving}
-            >
+            <Button type="primary" onClick={handleSaveDraft} loading={isSaving}>
               保存草稿
             </Button>
             {savedId && currentStatus === 'draft' && (
-              <Button
-                onClick={handleActivate}
-                loading={activateMutation.isPending}
-              >
+              <Button onClick={handleActivate} loading={activateMutation.isPending}>
                 激活
               </Button>
             )}

@@ -1,16 +1,10 @@
 name: deploy
-# 主控上的 CI:push main → build → 推 registry.internal → fan-out 部署到 deploy/deploy-targets.json 各目标。
+# 手动触发: Gitea Web UI → Actions → deploy → Run workflow。
+# 不再在 push 时自动触发——用户从 GitHub 拉取到 prod3 后，
+# push 到 Gitea，然后手动在 Web UI 点击触发。
 # runner 跑在主控宿主机(:host),复用主机 docker(已登录 registry.internal)+ 免密 ssh 到各目标。
-# 不用 actions/checkout(国内拉 github 失败),直接从本地 Gitea(127.0.0.1:3002)git fetch 精确 SHA。
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - "docs/**"
-      - "**/*.md"
-      - "deploy/*.example.json"
-      - "deploy/*.example"
   workflow_dispatch:
 
 env:
@@ -78,3 +72,29 @@ jobs:
           git checkout FETCH_HEAD
       - name: Sync code to source-mirror servers
         run: scripts/sync-code.sh
+
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git init .
+          git remote add origin "http://oauth2:${TOKEN}@127.0.0.1:3002/${GITHUB_REPOSITORY}.git"
+          git fetch --depth 1 origin "${GITHUB_SHA}"
+          git checkout FETCH_HEAD
+      - name: diagnostic
+        run: |
+          echo "PWD: $(pwd)"
+          echo "SHA: $(git rev-parse --short HEAD)"
+          ls deploy/deploy-targets.json && echo "TARGETS_OK"
+          ls scripts/ci-fanout.sh && echo "FANOUT_OK"
+          # Test SSH to all deploy targets
+          for host in root@47.118.16.235; do
+            echo "--- SSH $host ---"
+            ssh -n -o BatchMode=yes -o ConnectTimeout=5 $host 'echo OK_$(hostname)' 2>&1 || echo "SSH_FAILED"
+          done
+          # Test the deploy command on test remote
+          echo "--- Test deploy cmd ---"
+          ssh -n -o BatchMode=yes root@47.118.16.235 'REGISTRY_IMAGE=registry.internal:5000/sales-agent:latest bash /root/code/sales-agent/scripts/deploy-release.sh --yes 2>&1' | tail -5 2>&1 || echo "DEPLOY_FAILED"

@@ -339,6 +339,9 @@ class ChatPipeline:
             route_result = await route_task(
                 message=message,
                 chat_model=model_provider.chat,
+                db=self.db,
+                tenant_id=tenant_id,
+                agent_id=resolved_agent_id,
             )
             task_type = route_result.task_type
             needs_retrieval = route_result.needs_retrieval
@@ -354,11 +357,13 @@ class ChatPipeline:
             )
 
             # =============================================
-            # 6b. Prompt 解析（Agent 作用域优先，回退 tenant/默认）
+            # 6b. Prompt 解析（task + system，均经 registry 三级回退）
             # =============================================
-            prompt_registry = PromptRegistry(self.db)
-            prompt_text = await prompt_registry.resolve_for_agent(
-                resolved_agent_id, tenant_id, task_type
+            from sales_agent.services.prompt_resolver_helper import (
+                resolve_execution_prompts,
+            )
+            prompt_text, system_prompt_text = await resolve_execution_prompts(
+                self.db, resolved_agent_id, tenant_id, task_type
             )
 
             # =============================================
@@ -547,6 +552,7 @@ class ChatPipeline:
                     history_messages=history_messages,
                     tenant_style=tenant_style,
                     prompt_text=prompt_text,
+                    system_prompt_text=system_prompt_text,
                 )
 
                 # 标准化卡片类任务输出（访前作战卡、访后机会推进卡）
@@ -582,10 +588,17 @@ class ChatPipeline:
                 # LLM 风险检查（条件化）
                 if path_result.needs_llm_risk_check and risk_result.action != "block":
                     try:
+                        from sales_agent.services.prompt_resolver_helper import (
+                            resolve_risk_prompt,
+                        )
+                        risk_prompt = await resolve_risk_prompt(
+                            self.db, tenant_id, resolved_agent_id
+                        )
                         llm_risk = await rule_checker.check_llm_risk(
                             message=message,
                             answer_text=answer_text,
                             chat_model=model_provider.chat,
+                            risk_prompt=risk_prompt,
                         )
                         risk_result = _merge_risk_results(risk_result, llm_risk)
                     except Exception as e:

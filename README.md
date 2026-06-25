@@ -593,3 +593,22 @@ PYTHONPATH=src pytest tests/integration/test_pilot_api.py -v
 | Pilot 就绪 | `/readiness` | 上线就绪检查 |
 
 > **粗体** 标注为 Phase D 新增页面。
+
+### Prompt 全层解耦（2026-06-22）
+
+所有层 prompt（task / system / router / risk / coach）已统一纳入 DB 版本管理：
+
+- 运营在后台改任意层 prompt **即时生效**（主链路 + 钉钉 + CLI），无需改代码重部署。此前仅主 Web 链路接 DB，钉钉（主要生产渠道）和 CLI 直接用代码常量。
+- **Agent 级 Prompt 绑定 UI**（`/agents/:id/prompts`）从只读改为可编辑：为每个 Agent 切换/解绑各层 prompt 版本（后端 `PUT /agents/{id}/prompts/bindings/{category}/{key}`）。
+- `PromptEditPage` 支持创建 system/router/risk/coach 类 prompt + 占位符提示。
+- 内置 prompt 清单经 `GET /tenants/{id}/prompts/builtin` 暴露。
+- 引入 Alembic 管理 DB schema 变更（`alembic upgrade head`）。
+- 详见 [`changelog/2026-06-22.md`](changelog/2026-06-22.md)。
+
+## 更新日志
+
+本项目的功能升级记录在 `changelog/` 目录（按日期）：
+
+| 日期 | 摘要 |
+|------|------|
+| [2026-06-22](changelog/2026-06-22.md) | Prompt 全层解耦到 DB 版本管理 + 网页端「当前生效」总览直接编辑 |

@@ -52,7 +52,7 @@ CONFIG_TWO='{
 
 CONFIG_THREE='{
   "env": {
-    "ANTHROPIC_AUTH_TOKEN": "01fcfa565c1f487eaf55fc3fa282b3b1.rIp3vBoTJzqREZzf",
+    "ANTHROPIC_AUTH_TOKEN": "6510fa427ac84bf79b15643fa5d9ec2e.L6bLaTpp7Jcwz9HQ",
     "ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
     "API_TIMEOUT_MS": "3000000",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": 1,
@@ -93,8 +93,9 @@ echo "============================================"
 echo ""
 echo "  1) glm(泰山-new)"
 echo "  2) 火山引擎(gtj)"
-echo "  3) glm(泰山)"
+echo "  3) glm(泰山-团队)"
 echo "  4) deepseek(gtj)"
+
 echo "  5) glm(刘英文)"
 echo ""
 echo "============================================"
@@ -103,7 +104,7 @@ read -p "请选择 [1-5]: " choice
 case $choice in
     1) apply_config "glm(泰山-new)" "$CONFIG_ONE" ;;
     2) apply_config "火山引擎(gtj)" "$CONFIG_TWO" ;;
-    3) apply_config "glm(泰山)" "$CONFIG_THREE" ;;
+    3) apply_config "glm(泰山-团队)" "$CONFIG_THREE" ;;
     4) apply_config "deepseek(gtj)" "$CONFIG_FOUR" ;;
     5) apply_config "glm(泰山-new) 百万上下文[1m]" "$CONFIG_FIVE" ;;
     *)

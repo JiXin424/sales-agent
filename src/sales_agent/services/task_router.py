@@ -9,6 +9,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from sales_agent.prompts.task_router_prompt import TASK_ROUTER_PROMPT
+
 # 任务类型常量 — Phase A
 EMOTIONAL_SUPPORT = "emotional_support"
 KNOWLEDGE_QA = "knowledge_qa"
@@ -236,33 +238,24 @@ def _resolve_priority(hits: list[tuple[str, float]], message: str) -> RouteResul
 
 # --- LLM 兜底路由 ---
 
-_LLM_ROUTER_PROMPT = """你是一个销售助手的任务分类器。请根据用户的输入判断任务类型。
-
-任务类型：
-- emotional_support: 销售情绪支持和行动建议（客户不回、焦虑、想放弃等）
-- knowledge_qa: 企业知识库问答（问产品、案例、方案、FAQ、竞品）
-- script_generation: 销售话术生成（要求写话术、回复、跟进文案）
-- objection_handling: 客户异议处理（客户嫌贵、质疑、比竞品、拒绝）
-- conversation_review: 销售沟通复盘（粘贴聊天记录、分析对话、找问题）
-- visit_preparation: 拜访准备（准备拜访客户、拜访提纲、见客户前准备）
-- follow_up_planning: 跟进计划（跟进策略、下一步怎么跟、客户没回复后怎么办）
-- customer_context_summary: 客户上下文整理（整理客户信息、客户画像、梳理客户背景）
-- deal_advancement: 成交推进（怎么推进、逼单、促单、推动签约）
-- conversation_scoring: 对话评分（给对话打分、销售评分、通话评估）
-- post_visit_review: 访后机会推进（刚见完客户、刚聊完客户、沟通结束后梳理下一步行动、访后复盘、机会推进卡）
-- general_sales_coaching: 通用销售训练和建议（无法归类到以上类型）
-
-用户输入：{message}
-
-请以 JSON 格式回复：
-{{"task_type": "类型", "confidence": 0.0-1.0, "needs_retrieval": true/false}}
-"""
+# router prompt 已外移到 prompts/task_router_prompt.py（纳入 DB 版本管理）。
+# 此处仅作为未配置 DB 版本时的回退默认值。
+_DEFAULT_ROUTER_PROMPT = TASK_ROUTER_PROMPT
 
 
-async def _llm_route(message: str, chat_model: Any) -> RouteResult | None:
-    """使用 LLM 分类兜底。"""
+async def _llm_route(
+    message: str,
+    chat_model: Any,
+    router_prompt: str | None = None,
+) -> RouteResult | None:
+    """使用 LLM 分类兜底。
+
+    Args:
+        router_prompt: 调用方经 ``PromptRegistry`` 解析后的 router 模板；
+            为 None 时回退到内置默认。
+    """
     try:
-        prompt = _LLM_ROUTER_PROMPT.format(message=message)
+        prompt = (router_prompt or _DEFAULT_ROUTER_PROMPT).format(message=message)
         response = await chat_model.generate(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
@@ -295,6 +288,10 @@ async def route_task(
     message: str,
     chat_model: Any = None,
     confidence_threshold: float | None = None,
+    db: Any = None,
+    tenant_id: str | None = None,
+    agent_id: str | None = None,
+    router_prompt: str | None = None,
 ) -> RouteResult:
     """路由任务类型。
 
@@ -327,7 +324,18 @@ async def route_task(
 
     # 3. 规则匹配置信度不足或无匹配，尝试 LLM 兜底
     if chat_model is not None:
-        llm_result = await _llm_route(message, chat_model)
+        # 解析 router prompt：优先调用方传入，否则经 registry 解析（DB 版本管理）
+        if router_prompt is None and db is not None and tenant_id:
+            try:
+                from sales_agent.services.prompt_registry import PromptRegistry
+
+                router_prompt = await PromptRegistry(db).resolve_prompt(
+                    "router", "task_router", tenant_id, agent_id
+                )
+            except Exception:
+                logger.debug("router prompt resolve failed, fallback to default")
+                router_prompt = None
+        llm_result = await _llm_route(message, chat_model, router_prompt)
         if llm_result is not None:
             llm_result.router_type = "llm"
             llm_result.llm_router_called = True

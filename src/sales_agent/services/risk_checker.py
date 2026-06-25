@@ -10,6 +10,11 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from sales_agent.prompts.risk_check_prompt import RISK_CHECK_PROMPT
+
+# 默认风险检查 prompt（已外移到 prompts/risk_check_prompt.py，便于 DB 版本管理）。
+_DEFAULT_RISK_PROMPT = RISK_CHECK_PROMPT
+
 logger = logging.getLogger(__name__)
 
 
@@ -226,30 +231,17 @@ class RiskChecker:
         message: str,
         answer_text: str,
         chat_model: Any,
+        risk_prompt: str | None = None,
     ) -> RiskCheckResult:
         """LLM 风险检查：用 LLM 判断输出是否包含风险内容。
 
         仅在规则风险检查为 medium/high 或命中风险关键词时调用。
         对应 spec §7.2。
         """
-        _LLM_RISK_PROMPT = """你是一个销售合规检查员。请判断以下销售回复是否包含不合规内容。
-
-检查要点：
-1. 是否做出未确认的价格承诺或折扣承诺
-2. 是否做出无法保证的交付承诺（如"一周内一定上线"）
-3. 是否包含绝对化表达（如"保证业绩翻倍"、"100%成功"）
-4. 是否恶意攻击竞品
-5. 是否包含操纵性销售技巧
-
-用户请求：{message}
-
-销售回复：{answer}
-
-请以 JSON 格式回复：
-{{"level": "none|low|medium|high", "flags": ["风险类型列表"], "action": "allow|warn|rewrite|block", "notice": "提示信息"}}"""
-
         try:
-            prompt = _LLM_RISK_PROMPT.format(message=message, answer=answer_text[:1000])
+            prompt = (risk_prompt or _DEFAULT_RISK_PROMPT).format(
+                message=message, answer=answer_text[:1000]
+            )
             response = await chat_model.generate(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,

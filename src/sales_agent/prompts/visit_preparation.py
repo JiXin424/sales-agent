@@ -57,9 +57,9 @@ VISIT_PREPARATION_PROMPT = """## 任务：访前准备 — 生成访前作战卡
 
 ## 用户输入
 
-{{message}}
+{message}
 
-{{context_block}}
+{context_block}
 
-{{retrieval_block}}
+{retrieval_block}
 """

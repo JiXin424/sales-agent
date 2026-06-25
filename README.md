@@ -624,5 +624,5 @@ PYTHONPATH=src pytest tests/integration/test_pilot_api.py -v
 
 | 日期 | 摘要 |
 |------|------|
-| [2026-06-25](changelog/2026-06-25.md) | Neo4j 本体知识引擎（ontology_neo4j）：图检索 + 保守向量回退 + 高风险人工复核 |
+| [2026-06-25](changelog/2026-06-25.md) | Neo4j 本体知识引擎（ontology_neo4j）：图检索 + 保守向量回退 + 高风险人工复核；双租户 dedicated 部署；前端容器化（每租户 nginx SPA）；4000 运营面板新增「环境配置」卡片（`GET /instance/config`，敏感字段点击揭示+复制） |
 | [2026-06-22](changelog/2026-06-22.md) | Prompt 全层解耦到 DB 版本管理 + 网页端「当前生效」总览直接编辑 |

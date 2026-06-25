@@ -32,6 +32,11 @@ htmlcov/
 # Data
 data/sales-agent/tenants/*/documents/*.pdf
 data/sales-agent/tenants/*/documents/*.docx
+# 本体入库上传的源文件副本(运行时产物,知识正文已入 Neo4j/DB,不进 git)
+data/agents/
+
+# 仓库根游离的 ontology zip 副本(误提交的产物包;正式 toolkit.zip 不匹配此模式)
+*_ontology_*.zip
 
 # Logs
 logs/

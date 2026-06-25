@@ -1,7 +1,7 @@
 /** Knowledge upload and ingestion API wrappers. */
 
-import { apiGet, apiPost, apiUpload } from './client';
-import type { PaginatedResponse, UploadResponse, IngestionJobItem, IngestionJobFilters, OntologyStatus, OntologyJob } from './types';
+import { apiGet, apiPost, apiUpload, apiUploadFiles } from './client';
+import type { PaginatedResponse, UploadResponse, IngestionJobItem, IngestionJobFilters, OntologyStatus, OntologyJob, IngestStartResponse, JobProgressEvent } from './types';
 
 function base(tid: string) {
   return `/tenants/${tid}/knowledge`;
@@ -36,10 +36,14 @@ export function getOntologyStatus(agentId: string) {
   return apiGet<OntologyStatus>(`/agents/${agentId}/ontology/status`);
 }
 
-export function startOntologyIngest(agentId: string, path: string) {
-  return apiPost<OntologyJob>(`/agents/${agentId}/ontology/ingest`, { path });
+export function startOntologyIngest(agentId: string, files: File[]) {
+  return apiUploadFiles<IngestStartResponse[]>(`/agents/${agentId}/ontology/ingest`, files);
 }
 
 export function listOntologyJobs(agentId: string, limit = 20, offset = 0) {
   return apiGet<PaginatedResponse<OntologyJob>>(`/agents/${agentId}/ontology/jobs`, { limit, offset });
+}
+
+export function subscribeJobEvents(agentId: string, jobId: string): EventSource {
+  return new EventSource(`/api/agents/${agentId}/ontology/jobs/${jobId}/events`);
 }

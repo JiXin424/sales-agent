@@ -1,7 +1,8 @@
 /** Agent-scoped knowledge — documents visible to this Agent + scope mode + Neo4j ontology ingestion. */
 
 import { useState } from 'react';
-import { Table, Tag, Typography, Card, Descriptions, Alert, Input, Button, Space } from 'antd';
+import { Table, Tag, Typography, Card, Descriptions, Alert, Button, Space, Upload } from 'antd';
+import { UploadOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 import { getAgent, listAgentDocuments } from '@/api/agents';
@@ -28,7 +29,7 @@ const SCOPE_LABEL: Record<string, string> = {
 export default function AgentKnowledgePage() {
   const { agentId } = useParams<{ agentId: string }>();
   const queryClient = useQueryClient();
-  const [ingestPath, setIngestPath] = useState('');
+  const [ingestFiles, setIngestFiles] = useState<File[]>([]);
 
   const { data: agent, isLoading: agentLoading } = useQuery({
     queryKey: ['agent', agentId], queryFn: () => getAgent(agentId!), enabled: !!agentId,
@@ -50,8 +51,11 @@ export default function AgentKnowledgePage() {
     enabled: !!agentId,
   });
   const ingestMutation = useMutation({
-    mutationFn: () => startOntologyIngest(agentId!, ingestPath),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['ontology-jobs', agentId] }),
+    mutationFn: () => startOntologyIngest(agentId!, ingestFiles),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['ontology-jobs', agentId] });
+      setIngestFiles([]);
+    },
   });
 
   if (agentLoading || isLoading) return <LoadingState />;
@@ -113,22 +117,29 @@ export default function AgentKnowledgePage() {
           ) : null
         }
       >
-        <Space.Compact style={{ width: '100%', marginBottom: 12 }}>
-          <Input
-            placeholder="待入库文档路径（如 /data/docs/sample.md）"
-            value={ingestPath}
-            onChange={(e) => setIngestPath(e.target.value)}
-            onPressEnter={() => ingestPath && ingestMutation.mutate()}
-          />
+        <Space direction="vertical" style={{ width: '100%' }} size={12}>
+          <Upload
+            multiple
+            beforeUpload={(file) => {
+              setIngestFiles((prev) => [...prev, file]);
+              return false; // prevent auto-upload
+            }}
+            onRemove={(file) => {
+              setIngestFiles((prev) => prev.filter((f) => f.name !== file.name));
+            }}
+            fileList={ingestFiles.map((f) => ({ uid: f.name, name: f.name, status: 'done' as const }))}
+          >
+            <Button icon={<UploadOutlined />}>选择入库文档</Button>
+          </Upload>
           <Button
             type="primary"
             loading={ingestMutation.isPending}
-            disabled={!ingestPath}
+            disabled={ingestFiles.length === 0}
             onClick={() => ingestMutation.mutate()}
           >
-            启动 Neo4j 入库
+            启动 Neo4j 入库 ({ingestFiles.length} 个文件)
           </Button>
-        </Space.Compact>
+        </Space>
         {ingestMutation.isError ? (
           <Alert
             type="error" showIcon style={{ marginBottom: 12 }}

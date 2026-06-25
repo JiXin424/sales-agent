@@ -309,6 +309,18 @@ export interface OntologyJob {
   updated_at: string;
 }
 
+export interface IngestStartResponse {
+  job_id: string;
+  filename: string;
+}
+
+export interface JobProgressEvent {
+  stage: string;
+  status: 'running' | 'completed' | 'completed_with_errors' | 'failed';
+  stats?: Record<string, number>;
+  error_summary?: string;
+}
+
 // --- Model Calls ---
 
 export interface ModelCallItem {

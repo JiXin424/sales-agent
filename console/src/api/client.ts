@@ -47,7 +47,9 @@ async function request<T>(
 
   let fetchOptions: RequestInit = { method };
 
-  if (options?.file) {
+  if (options?.body instanceof FormData) {
+    fetchOptions = { ...fetchOptions, body: options.body };
+  } else if (options?.file) {
     const formData = new FormData();
     formData.append('file', options.file);
     fetchOptions = { ...fetchOptions, body: formData };
@@ -104,6 +106,13 @@ export function apiPatch<T>(path: string, body?: unknown): Promise<T> {
 /** File upload request. */
 export function apiUpload<T>(path: string, file: File): Promise<T> {
   return request<T>('POST', path, { file });
+}
+
+/** Upload multiple files to an agent ontology endpoint (multipart/form-data). */
+export function apiUploadFiles<T>(path: string, files: File[]): Promise<T> {
+  const fd = new FormData();
+  for (const f of files) fd.append('files', f);
+  return request<T>('POST', path, { body: fd });
 }
 
 export { ApiError };

@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { Row, Col, Card, Statistic, Table, Tag, Typography } from 'antd';
 import {
   MessageOutlined,
+  CommentOutlined,
   LikeOutlined,
   ClockCircleOutlined,
   CloudServerOutlined,
@@ -26,6 +27,12 @@ export default function DashboardPage() {
   const conversationsQuery = useQuery({
     queryKey: queryKeys.conversations(tenantId!, { limit: 1 }),
     queryFn: () => api.listConversations(tenantId!, { limit: 1 }),
+    enabled: !!tenantId,
+  });
+
+  const messageCountQuery = useQuery({
+    queryKey: queryKeys.messageCount(tenantId!),
+    queryFn: () => api.getMessageCount(tenantId!),
     enabled: !!tenantId,
   });
 
@@ -74,6 +81,7 @@ export default function DashboardPage() {
   // --- Derived values ---
 
   const conversationTotal = conversationsQuery.data?.total ?? 0;
+  const messageTotal = messageCountQuery.data?.total ?? 0;
 
   const positiveRate = useMemo(() => {
     const data = feedbackQuery.data;
@@ -218,7 +226,7 @@ export default function DashboardPage() {
     <>
       <PageHeader title="运营面板" description="系统运营指标总览" />
 
-      {/* Top row: 4 statistic cards with SpotlightCard glow + CountUp animation */}
+      {/* Top row: statistic cards with SpotlightCard glow + CountUp animation */}
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={24} sm={12} lg={6}>
           <SpotlightCard>
@@ -228,6 +236,18 @@ export default function DashboardPage() {
                 value={conversationTotal}
                 formatter={() => <CountUp to={conversationTotal} duration={2} separator="," />}
                 prefix={<MessageOutlined />}
+              />
+            </Card>
+          </SpotlightCard>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <SpotlightCard>
+            <Card bordered={false}>
+              <Statistic
+                title="消息总数"
+                value={messageTotal}
+                formatter={() => <CountUp to={messageTotal} duration={2} separator="," />}
+                prefix={<CommentOutlined />}
               />
             </Card>
           </SpotlightCard>

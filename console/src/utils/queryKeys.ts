@@ -11,6 +11,7 @@ export const queryKeys = {
 
   // Admin
   conversations: (tid: string, filters?: Record<string, unknown>) => ['conversations', tid, filters] as const,
+  messageCount: (tid: string) => ['messageCount', tid] as const,
   conversation: (tid: string, id: string) => ['conversation', tid, id] as const,
   runDetail: (tid: string, runId: string) => ['runDetail', tid, runId] as const,
   runSteps: (tid: string, runId: string) => ['runSteps', tid, runId] as const,

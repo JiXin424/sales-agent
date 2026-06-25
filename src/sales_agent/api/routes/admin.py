@@ -86,6 +86,27 @@ async def list_conversations(
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
+@router.get("/messages/count")
+async def get_message_count(tenant_id: str, db: DbSession):
+    """统计租户的会话消息总数（按 role 分：user / assistant / system）。
+
+    与「对话总量」(conversation 线程数) 区分：这里数的是所有对话消息条数。
+    """
+    await _verify_tenant(tenant_id, db)
+    rows = (await db.execute(
+        select(ConversationMessage.role, func.count())
+        .where(ConversationMessage.tenant_id == tenant_id)
+        .group_by(ConversationMessage.role)
+    )).all()
+    by_role = {role: cnt for role, cnt in rows}
+    return {
+        "total": sum(by_role.values()),
+        "user": by_role.get("user", 0),
+        "assistant": by_role.get("assistant", 0),
+        "system": by_role.get("system", 0),
+    }
+
+
 @router.get("/conversations/{conversation_id}")
 async def get_conversation_detail(
     tenant_id: str,

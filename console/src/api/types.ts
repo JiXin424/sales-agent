@@ -193,6 +193,14 @@ export interface FeedbackSummary {
   total: number;
 }
 
+/** 会话消息总数（按 role 分）。与 conversation 线程数区分。 */
+export interface MessageCount {
+  total: number;
+  user: number;
+  assistant: number;
+  system: number;
+}
+
 // --- Prompts ---
 
 export type PromptCategory = 'task' | 'system' | 'router' | 'risk' | 'coach';

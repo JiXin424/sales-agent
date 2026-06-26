@@ -95,3 +95,132 @@ def test_skip_validation_renders_without_env_file(tmp_path):
     rc = mod.main(["--skip-validation", str(inv), "--compose-out", str(out)])
     assert rc == 0
     assert "fuduoduo-api" in out.read_text()
+
+
+def _inv_traefik(tmp_path, domain="", backend="", tenant_id="acme", env_text=""):
+    """Build inventory dict for render_traefik_routes tests."""
+    env = tmp_path / f"{tenant_id}.env"
+    env.write_text(env_text)
+    tenant = {
+        "id": tenant_id, "name": "ACME", "api_port": 8101,
+        "env_file": str(env),
+        "data_dir": f"./data/{tenant_id}", "logs_dir": f"./logs/{tenant_id}",
+        "roles": ["api", "stream", "worker"],
+    }
+    if domain:
+        tenant["domain"] = domain
+    if backend:
+        tenant["backend"] = backend
+    return {"project_name": "sales-agent", "tenants": [tenant]}
+
+
+def test_traefik_subdomain_remote_backend(tmp_path):
+    """Tenant with domain + backend → subdomain route with remote URL, no catch-all."""
+    mod = _load()
+    data = _inv_traefik(tmp_path, domain="songbai.aijiaolian.com.cn",
+                        backend="172.25.186.210:8003")
+    out = mod.render_traefik_routes(data)
+
+    # Subdomain dingtalk router exists
+    assert "    sales-agent-songbai-sub-dingtalk:" in out
+    assert 'Host(`songbai.aijiaolian.com.cn`) && PathPrefix(`/integrations/dingtalk/t/songbai/`)' in out
+    assert "priority: 210" in out
+    assert "certResolver: letsencrypt" in out
+
+    # Remote backend URL in service
+    assert "    sales-agent-songbai-sub-dingtalk-svc:" in out
+    assert 'url: "http://172.25.186.210:8003"' in out
+
+    # Catch-all Host→frontend MUST be absent for remote tenant
+    assert "    sales-agent-songbai:\n" not in out
+    assert "sales-agent-songbai-backend" not in out
+
+
+def test_traefik_subdomain_local_no_backend(tmp_path):
+    """Tenant with domain but no backend → catch-all preserved + subdomain route added."""
+    mod = _load()
+    data = _inv_traefik(tmp_path, domain="taishan.aijiaolian.com.cn")
+    out = mod.render_traefik_routes(data)
+
+    # Catch-all Host→frontend STILL exists (existing behavior for local tenant)
+    assert "    sales-agent-taishan:" in out
+    assert 'rule: "Host(`taishan.aijiaolian.com.cn`)"' in out
+    assert "sales-agent-taishan-backend:" in out
+    assert 'url: "http://sales-agent-taishan-frontend:80"' in out
+
+    # Subdomain dingtalk route ALSO exists
+    assert "    sales-agent-taishan-sub-dingtalk:" in out
+    assert 'Host(`taishan.aijiaolian.com.cn`) && PathPrefix(`/integrations/dingtalk/t/taishan/`)' in out
+    assert "priority: 210" in out
+
+    # Local backend (container name) in subdomain service
+    assert "    sales-agent-taishan-sub-dingtalk-svc:" in out
+    assert 'url: "http://sales-agent-taishan-api:8000"' in out
+
+
+def test_traefik_shared_pathprefix_unchanged(tmp_path):
+    """Tenant with DINGTALK_PUBLIC_URL but no domain → shared PathPrefix unchanged."""
+    mod = _load()
+    data = _inv_traefik(tmp_path, env_text="DINGTALK_PUBLIC_URL=https://aijiaolian.com.cn\n")
+    out = mod.render_traefik_routes(data)
+
+    # Shared PathPrefix route exists (existing behavior unchanged)
+    assert "    sales-agent-acme-dingtalk:" in out
+    assert 'Host(`aijiaolian.com.cn`) && PathPrefix(`/integrations/dingtalk/t/acme/`)' in out
+    assert "priority: 210" in out
+
+    # NO subdomain route (no domain set)
+    assert "    sales-agent-acme-sub-dingtalk:" not in out
+
+    # NO catch-all (no domain set)
+    assert "    sales-agent-acme:\n" not in out
+
+
+def test_traefik_no_domain_no_backend(tmp_path):
+    """Tenant with neither domain, backend, nor public_url → empty routes (no crash)."""
+    mod = _load()
+    data = _inv_traefik(tmp_path)
+    out = mod.render_traefik_routes(data)
+
+    # No routers generated at all (no domain, no public_url)
+    assert "    sales-agent-acme-dingtalk:" not in out
+    assert "    sales-agent-acme-sub-dingtalk:" not in out
+    assert "    sales-agent-acme:\n" not in out
+
+
+def test_traefik_two_tenants_with_subdomains(tmp_path):
+    """Two tenants each with distinct domains → both get subdomain routes, no collision."""
+    mod = _load()
+    env1 = tmp_path / "songbai.env"
+    env1.write_text("DINGTALK_PUBLIC_URL=https://songbai.aijiaolian.com.cn\n")
+    env2 = tmp_path / "fuduoduo.env"
+    env2.write_text("DINGTALK_PUBLIC_URL=https://fuduoduo.aijiaolian.com.cn\n")
+    data = {
+        "project_name": "sales-agent",
+        "tenants": [
+            {"id": "songbai", "name": "Songbai", "api_port": 8101,
+             "env_file": str(env1),
+             "domain": "songbai.aijiaolian.com.cn",
+             "backend": "172.25.186.210:8003",
+             "data_dir": "./data/songbai", "logs_dir": "./logs/songbai",
+             "roles": ["api", "stream", "worker"]},
+            {"id": "fuduoduo", "name": "Fuduoduo", "api_port": 8102,
+             "env_file": str(env2),
+             "domain": "fuduoduo.aijiaolian.com.cn",
+             "backend": "47.118.16.235:8103",
+             "data_dir": "./data/fuduoduo", "logs_dir": "./logs/fuduoduo",
+             "roles": ["api", "stream", "worker"]},
+        ],
+    }
+    out = mod.render_traefik_routes(data)
+
+    # Both tenants have sub-dingtalk routers
+    assert "    sales-agent-songbai-sub-dingtalk:" in out
+    assert "    sales-agent-fuduoduo-sub-dingtalk:" in out
+    # Both have correct backend URLs
+    assert 'url: "http://172.25.186.210:8003"' in out
+    assert 'url: "http://47.118.16.235:8103"' in out
+    # No catch-all for either (both are remote)
+    assert "sales-agent-songbai-backend" not in out
+    assert "sales-agent-fuduoduo-backend" not in out
+    # No duplicate rule assertion — different PathPrefix (/t/songbai/ vs /t/fuduoduo/)

@@ -142,21 +142,28 @@
   所以必须同时写 `default`，否则 api 连不上 postgres/neo4j/前端代理。验证持久化用
   `docker compose up -d --force-recreate --no-deps <svc>` 看 recreate 后网络是否自动保留。
   见 changelog 2026-06-25「持久化修复」节。
+- **补充（sourceless 部署不适用）**：上面这套 shared_network 只对「deploy-release + traefik 按容器名 upstream」
+  的模型有效（dev 机那台就是）。杭州机走 image-deploy（源码镜像部署），traefik 路由用 `host.docker.internal:<宿主端口>`
+  （router `qylx-dingtalk`，见 traefik access log 的 upstream 字段），**不依赖容器共享网络**，所以不需要 shared_network
+  ——别给 sourceless 目标误设。排查时也注意：distroless 的 traefik 镜像**没有 `getent`**，`docker exec traefik getent hosts`
+  返回空不代表解析失败，要看 traefik access log 的 upstream + status 才准。
 
-## 11. `.dockerignore` 裸名匹配是递归的——会误删 src 下的同名正式文件
-- **场景**：prod3/test 的 `/integrations/dingtalk/quick` 返回 **500 `{"detail":"H5 template not found"}`**，
-  直接 curl 后端也 500；而 dev 机同样请求 200。repo 里 `src/sales_agent/integrations/dingtalk/static/cocah.html`
-  明明存在。
-- **根因**：`.dockerignore` 里有裸名 `cocah.html`、`coach_mode.png`、`cocah.mp4`（本意是排除仓库根的游离大文件，
-  根副本后来被删了）。**BuildKit/.dockerignore 的裸名(无前导 /)是递归匹配**——把 `src/.../static/cocah.html`
-  和 `coach_mode.png` 也从构建上下文踢掉 → CI 镜像(`:87836fa`)里没这俩文件 → H5 页 500。dev 机的 `:latest`
-  是更早的本地构建、还带文件，所以 200，造成「dev 好但 prod 坏」的错觉。
+## 11. CI 镜像缺文件：先查「有没有提交进 git」，再查 .dockerignore
+- **场景**：prod3/test 的 `/integrations/dingtalk/t/{id}/quick` 返回 **500 `{"detail":"H5 template not found"}`**，
+  直接 curl 后端也 500；dev 机同样请求 200。`src/.../static/cocah.html` 在工作树里明明存在。
+- **真正根因**：`cocah.html`、`coach_mode.png` **从未被 git 跟踪**（漏 `git add`）→ CI 的干净 checkout
+  (`git checkout FETCH_HEAD`) 里根本没有这俩文件 → 镜像里没有 → H5 500。dev 机正常，是因为 dev 镜像从
+  **工作树**（含未跟踪文件）本地构建。`git ls-tree HEAD -- <path>` / `git ls-files <path>` 一查便知（HEAD 里压根没有）。
+- **次要隐患（已一并修，但不是主因）**：`.dockerignore` 里的裸名 `cocah.html`/`coach_mode.png`/`cocah.mp4`
+  是递归匹配，就算这俩文件被 track 也会被 BuildKit 误删；已改成 `/`-锚定（仅排除仓库根）。**但真正卡住 500 的是漏
+  track，不是 .dockerignore**——我最初只改了 .dockerignore 推上去，部署后仍然 500，才回头查出是漏 track。
 - **教训**：
-  1. `.dockerignore` 要排除「仅仓库根」的文件，**必须用前导 `/` 锚定**（`/cocah.html`），裸名会递归命中任意层级。
-     这点和 `.gitignore` 一致，别凭直觉写裸名。
-  2. 「repo 有、镜像没有」= 先怀疑构建上下文被 ignore。验证：`docker exec <容器> ls <path>` 对比 repo。
-  3. 502/500 先分清层级：网关日志短耗时 + 解析不到容器名 = 网络；后端直连也 500 + JSON detail = 应用/构建。
-- **持久化**：已把三个裸名改成 `/`-锚定（changelog 2026-06-25「.dockerignore 修复」节），CI 重建镜像即恢复。
+  1. 「工作树有、CI 镜像没有」= **先 `git ls-tree HEAD -- <path>` 确认是否 track 了**，再查 `.dockerignore`/构建缓存。
+     别一上来就怀疑 .dockerignore（我就这么误判了一圈，改完推了还 500）。
+  2. 本地构建能过、CI 不能过，常见差异：本地用工作树（含未跟踪文件），CI 用干净 checkout（只 tracked 文件）。
+     任何「本地有、线上没有」的资源文件，先确认它进 git 了。
+  3. `.dockerignore` 排除「仅仓库根」的文件仍要用 `/`-锚定（潜在隐患），但优先级低于「先确认 track」。
+- **持久化**：补 `git add` 提交 `cocah.html` + `coach_mode.png`（commit 927bc7a），CI 重建即恢复。
 
 ## 12. 共享域名多租户：Traefik 不能按 query 分流，tenant 标识必须进 path
 - **场景**：钉钉快捷入口两个租户（taishan / taishankaifa2）共用同一 `DINGTALK_PUBLIC_URL`（`aijiaolian.com.cn`），`tenant_id` 只在 URL query 参数里。`render-multitenant-deploy.py` 为每租户生成的 Traefik 路由 rule（`Host + PathPrefix(/integrations/dingtalk/)`）与 priority（210）**完全相同**。结果 Traefik 无法区分，所有钉钉请求只落到一个 api 容器 → 另一租户 whoami 校验报 **403 Tenant mismatch**（钉钉端 H5 显示「操作失败：Tenant mismatch」，用户复述为「操作失误：tenant mismatch」）。
@@ -176,3 +183,10 @@
   2. 批量 `mv`/`rm` 前**先确认目录**：命令开头 `echo "$(pwd) $(hostname)"` 或先 `ls <绝对路径>` 看一眼再动。
   3. 危险操作（mv/rm 源码）先 `mv 到 backup/`（可回退），验证 OK 再 `rm`——别一步 `rm -rf`。
 - **验证范式**：瘦身后 `ls /root/code/sales-agent/` 确认只剩预期目录；`docker ps` 确认运行容器不受影响（容器用镜像，mv 主机源码不中断服务）。
+
+## 14. `.gitignore` 裸名排除运行时资源 → CI 镜像缺失 → register/页面 500
+- **场景**：CI 镜像（杭州/prod3）register 钉钉按钮报 500 `coach_mode.png not found in static/`，教练视频页也缺 `cocah.html`。本机 prod2 正常（本地 build 时工作区有这俩物理文件）。
+- **根因**：`.gitignore` 用裸名 `coach_mode.png` / `cocah.html` 排除「仓库根游离副本」，注释假设「正式副本在 src/static/ 下会进镜像」——但 `.gitignore` 裸名是**递归匹配**，连 `src/sales_agent/.../static/coach_mode.png` + `cocah.html` 一起排除 → 不进 git → CI clone 没有 → build 进镜像也没有。与 lessons #11（`.dockerignore` 裸名）同款，但 #11 只修了 `.dockerignore`，`.gitignore` 漏了。
+- **教训**：`.gitignore` 裸名同样递归匹配。**运行时必需资源**（register 上传的图标、H5 模板）必须入仓，否则 CI 镜像缺失、本地却正常（本地有物理文件），形成「本地好、CI 坏」的错觉。用 `!` 反例放行 src 下正式副本（同 `secrets/example.env` 处理）。
+- **验证范式**：`git ls-files | grep coach_mode.png` 确认入仓；`git check-ignore <path>` 确认不再忽略；CI 重建后 `docker exec <api> ls /app/src/.../static/` 确认镜像含。
+- **相关**：lessons #11（`.dockerignore` 同款坑）；本次临时用 `docker cp` 补图标让 register 先跑通，持久化靠 `.gitignore` `!` 反例放行 + push。

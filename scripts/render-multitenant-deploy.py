@@ -268,6 +268,7 @@ def render_compose(data: dict[str, Any]) -> str:
 def render_tenant_services(tenant: dict[str, Any], image: str, database_url: str, neo4j_enabled: bool = False, shared_network: str = "") -> list[str]:
     tenant_id = tenant["id"]
     env_file = tenant["env_file"]
+    domain = tenant.get("domain", "")
     data_dir = tenant.get("data_dir", f"./data/{tenant_id}")
     logs_dir = tenant.get("logs_dir", f"./logs/{tenant_id}")
     roles = set(tenant["roles"])
@@ -287,6 +288,8 @@ def render_tenant_services(tenant: dict[str, Any], image: str, database_url: str
                 f"      DATABASE_URL: {database_url}",
             ]
         )
+        if domain:
+            lines.append(f"      DINGTALK_PUBLIC_URL: https://{domain}")
         if neo4j_enabled:
             lines += [
                 "      NEO4J_URI: bolt://neo4j:7687",
@@ -353,6 +356,8 @@ def render_tenant_services(tenant: dict[str, Any], image: str, database_url: str
                 f"      DATABASE_URL: {database_url}",
             ]
         )
+        if domain:
+            lines.append(f"      DINGTALK_PUBLIC_URL: https://{domain}")
         if neo4j_enabled:
             lines += [
                 "      NEO4J_URI: bolt://neo4j:7687",
@@ -388,6 +393,8 @@ def render_tenant_services(tenant: dict[str, Any], image: str, database_url: str
                 f"      DATABASE_URL: {database_url}",
             ]
         )
+        if domain:
+            lines.append(f"      DINGTALK_PUBLIC_URL: https://{domain}")
         if neo4j_enabled:
             lines += [
                 "      NEO4J_URI: bolt://neo4j:7687",

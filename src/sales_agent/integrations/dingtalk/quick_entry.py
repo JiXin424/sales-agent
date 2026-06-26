@@ -1,6 +1,6 @@
 """钉钉快捷入口 — 独立模块，与核心消息路由解耦。
 
-按照 anniu.md 验证通过的方案实现：
+按照 docs/dingtalk/anniu.md 验证通过的方案实现：
   JSAPI requestAuthCode → topapi/v2/user/getuserinfo → batchSend
 
 端点（tenant_id 进 path 段，供共享域名下 Traefik 按 /t/{tenant_id}/ 分流到各租户实例；
@@ -40,7 +40,7 @@ router = APIRouter(prefix="/integrations/dingtalk", tags=["dingtalk-quick-entry"
 # 静态资源目录
 _STATIC_DIR = Path(__file__).parent / "static"
 
-# 钉钉单聊机器人快捷入口服务端 API（anniu.md 验证通过的方案）
+# 钉钉单聊机器人快捷入口服务端 API（docs/dingtalk/anniu.md 验证通过的方案）
 _DINGTALK_PLUGIN_SET_URL = "https://api.dingtalk.com/v1.0/robot/plugins/set"
 _DINGTALK_PLUGIN_CLEAR_URL = "https://api.dingtalk.com/v1.0/robot/plugins/clear"
 _DINGTALK_PLUGIN_QUERY_URL = "https://api.dingtalk.com/v1.0/robot/plugins/query"
@@ -296,7 +296,7 @@ async def dingtalk_quick_whoami(
 ) -> dict[str, Any]:
     """钉钉快捷入口 — authCode 换取用户身份并发送引导消息。
 
-    完整链路（anniu.md 验证通过的方案）：
+    完整链路（docs/dingtalk/anniu.md 验证通过的方案）：
     1. authCode → topapi/v2/user/getuserinfo → userId (staffId 格式)
     2. userId → v1.0/robot/oToMessages/batchSend → 发送引导消息
     """
@@ -549,7 +549,7 @@ async def dingtalk_oauth2_callback(
 
 # ============================================================
 # 钉钉快捷入口管理（query / clear / register）
-# 参考 anniu.md：POST /v1.0/robot/plugins/set 为全量覆盖；
+# 参考 docs/dingtalk/anniu.md：POST /v1.0/robot/plugins/set 为全量覆盖；
 # /v1.0/robot/plugins/clear 清空全部；/v1.0/robot/plugins/query 查询。
 # ============================================================
 

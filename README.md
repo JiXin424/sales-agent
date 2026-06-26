@@ -38,29 +38,26 @@ v0 是本地可运行原型，支持 **HTTP API** 和 **钉钉单聊** 两种接
 - **Provider 缓存**：同一租户复用 ModelProvider 实例
 - **完整可观测性**：每请求记录各阶段耗时、LLM 调用率、RAG 跳过原因、p50/p90/p95 统计
 
-### RAG 知识库
+### 知识库（Neo4j 本体引擎，生产默认）
 
-- Markdown 作为标准入库格式（含 YAML front matter）
-- 按标题层级 / FAQ Q&A 对智能切分
-- pgvector 向量检索，强制按 `tenant_id` 过滤
-- 支持 FAQ、产品文档、客户案例、竞品对比等多种文档类型
-- 跨租户泄漏自动检测和拦截
-- 条件检索：按任务类型和内容决定是否调用 RAG，跳过时记录原因
+生产默认 `KNOWLEDGE_ENGINE=ontology_neo4j`：用 Neo4j 知识图谱（Entity / Fact / Evidence / SourceDocument）
+替代传统 chunk 检索。首版采用图检索 + 保守向量回退（`ONTOLOGY_VECTOR_FALLBACK=conservative`），
+保持 chat 输出与现有 `summary` / `sections` 响应格式兼容。
 
-### Neo4j Ontology Knowledge Engine
-
-应用可将传统 Markdown chunk RAG 替换为 Neo4j 本体知识引擎。设置
-`KNOWLEDGE_ENGINE=ontology_neo4j` 并配置 `NEO4J_*` 环境变量即可启用。首版采用图检索
-+ 保守向量回退（`ONTOLOGY_VECTOR_FALLBACK=conservative`），并保持 chat 输出与现有
-`summary` / `sections` 响应格式兼容。
-
-- Neo4j 存储 Entity / Fact / Evidence / SourceDocument 节点，PostgreSQL 仍存储入库任务与聊天日志。
+- Neo4j 存储图谱节点，PostgreSQL 仍存储入库任务与聊天日志。
 - 高风险事实进入人工复核（pending review），不进入用户可见回答。
 - Agents 知识页新增入库面板（状态 / 任务 / 冲突可视化 + 启动入库）。
 - 支持上传 `.md` / `.txt` / `.doc` / `.docx` / `.pdf` / `.pptx` / `.xlsx`；旧版 `.doc` 经 LibreOffice 无头转 `.docx` 后解析，`.xlsx` 用 openpyxl 按 sheet 抽取（含表名小标题）。
 - 「本体探索」调试页（`/agents/:id/ontology`）：三栏实时可视化检索过程 / 问答 / 喂给大模型的完整上下文（SSE 流式，复用图谱检索+回答引擎）。
 
 详见 [`docs/ontology-neo4j-ops.md`](docs/ontology-neo4j-ops.md)。
+
+### legacy_rag（传统 Markdown chunk 检索，回退模式）
+
+未配置 Neo4j 时（`KNOWLEDGE_ENGINE=legacy_rag`，代码默认值）走传统 chunk RAG——**生产未使用**，
+保留作回退与 CLI ingest/chat/eval 路径：Markdown 标准入库（含 YAML front matter）、
+按标题层级 / FAQ Q&A 对切分、pgvector 向量检索（强制 `tenant_id` 过滤）、跨租户泄漏拦截、
+条件检索（按任务类型决定是否调用，跳过时记录原因）。
 
 ### 风险检查
 
@@ -361,7 +358,7 @@ scripts/check-all-tenants.sh deploy/tenants.json
 ```bash
 # 1. 更新 secrets/taishan.env 中的 MODEL_API_KEY
 # 2. 重启该租户容器
-docker compose --profile taishan restart
+docker compose --profile taishan-split restart
 # 3. 验证
 curl http://localhost:8101/diagnostics/model
 ```
@@ -379,7 +376,7 @@ sales-agent/
 ├── scripts/
 │   └── init-db.sql                 # 数据库初始化（pgvector 扩展）
 ├── secrets/                        # 租户密钥（不入 git）
-│   └── taishan.env.example
+│   └── example.env                 #   租户 env 模板（neo4j.env.example 同级）
 ├── data/sales-agent/tenants/       # 租户知识库
 │   └── taishan/documents/    #   产品介绍、FAQ、案例
 ├── eval/
@@ -434,7 +431,6 @@ sales-agent/
 │   │   ├── conversation_logger.py  #   会话日志记录（含延迟和 LLM 调用率日志）
 │   │   ├── context_loader.py       #   多轮上下文管理（阈值摘要更新）
 │   │   ├── knowledge_ingestor.py   #   知识导入编排
-│   │   ├── model_call_logger.py    #   模型调用脱敏日志
 │   │   ├── prompt_registry.py      #   Prompt 版本管理
 │   │   ├── feedback_service.py     #   反馈持久化
 │   │   ├── run_tracer.py           #   Agent 运行追踪
@@ -570,16 +566,6 @@ PYTHONPATH=src pytest tests/integration/test_pilot_api.py -v
 | `alert_rules` | 告警规则 | D |
 | `alerts` | 告警记录 | D |
 | `pilot_reports` | Pilot 报告 | D |
-
-## Spec 文档
-
-| 文件 | 说明 |
-|------|------|
-| `milestone_plan.md` | 总体里程碑规划（M0-M7） |
-| `local_agent_v0_spec.md` | M1 本地 Agent 原型详细设计 |
-| `api_key_spec.md` | API Key 隔离策略设计 |
-| `youhuaspec.md` | 延迟优化 Spec（三级路径 + 条件化执行） |
-| `PHASE_D_PILOT_VALIDATION_QUALITY_LOOP_SPEC.md` | Phase D: Pilot 验证与质量循环 Spec（10 项需求） |
 
 ## 文档
 

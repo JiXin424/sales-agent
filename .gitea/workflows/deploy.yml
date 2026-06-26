@@ -68,7 +68,7 @@ jobs:
         run: |
           SHA=$(git rev-parse --short HEAD)
           mkdir -p deploy
-          for env in hangzhou; do
+          for env in test; do
             OVERRIDE_IMAGE="${REGISTRY}/${IMAGE_NAME}:${SHA}" \
               python3 scripts/render-multitenant-deploy.py "deploy/tenants.${env}.json" \
               --skip-validation --compose-out "deploy/compose-${env}.yml" --traefik-out /dev/null

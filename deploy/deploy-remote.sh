@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # 在无源码目标机上执行（由 deploy 镜像 docker run 触发）。
-# 用法（容器内 entrypoint）：deploy-remote.sh <env>   例：deploy-remote.sh hangzhou
+# 用法（容器内 entrypoint）：deploy-remote.sh <env>   例：deploy-remote.sh test
 #
 # 挂载约定（ci-fanout image-deploy 负责）：
 #   /var/run/docker.sock        宿主 docker（拉镜像 + compose up）
 #   /root/.docker               docker 认证（pull registry.internal）
-#   /workspace                  目标机的代码目录（含 secrets/ data/ logs/，杭州瘦身后只留这些）
+#   /workspace                  目标机的代码目录（含 secrets/ data/ logs/，无源码目标机瘦身后只留这些）
 set -euo pipefail
 
 ENV="${1:?用法: deploy-remote.sh <env>}"

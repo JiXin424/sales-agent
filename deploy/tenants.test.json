@@ -1,5 +1,5 @@
 {
-  "_comment": "test (47.118.16.235) 多租户清单。每租户独立端口/凭证。",
+  "_comment": "test (47.118.16.235) 无源码目标租户清单。CI image-deploy 用。env_file 在目标机本地，主控 render 时用 --skip-validation。",
   "project_name": "sales-agent",
   "image": "registry.internal:5000/sales-agent:latest",
   "postgres_image": "registry.internal:5000/pgvector/pgvector:pg16",
@@ -18,22 +18,12 @@
   "output": { "compose_file": "docker-compose.generated.yml" },
   "tenants": [
     {
-      "id": "taishan",
-      "name": "Taishan (test)",
-      "api_port": 8002,
-      "env_file": "secrets/taishan.env",
-      "data_dir": "./data/taishan",
-      "logs_dir": "./logs/taishan",
-      "roles": ["api", "worker"]
-    },
-    {
-      "_comment": "第二租户模板 — 取消注释并创建 secrets/tenant-b.env 即生效",
-      "id": "tenant-b",
-      "name": "Tenant B (test)",
-      "api_port": 8102,
-      "env_file": "secrets/tenant-b.env",
-      "data_dir": "./data/tenant-b",
-      "logs_dir": "./logs/tenant-b",
+      "id": "fuduoduo",
+      "name": "fuduoduo (test)",
+      "api_port": 8103,
+      "env_file": "secrets/fuduoduo.env",
+      "data_dir": "./data/fuduoduo",
+      "logs_dir": "./logs/fuduoduo",
       "roles": ["api", "stream", "worker"]
     }
   ]

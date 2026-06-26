@@ -190,3 +190,61 @@
 - **教训**：`.gitignore` 裸名同样递归匹配。**运行时必需资源**（register 上传的图标、H5 模板）必须入仓，否则 CI 镜像缺失、本地却正常（本地有物理文件），形成「本地好、CI 坏」的错觉。用 `!` 反例放行 src 下正式副本（同 `secrets/example.env` 处理）。
 - **验证范式**：`git ls-files | grep coach_mode.png` 确认入仓；`git check-ignore <path>` 确认不再忽略；CI 重建后 `docker exec <api> ls /app/src/.../static/` 确认镜像含。
 - **相关**：lessons #11（`.dockerignore` 同款坑）；本次临时用 `docker cp` 补图标让 register 先跑通，持久化靠 `.gitignore` `!` 反例放行 + push。
+
+## 15. 判断「系统实际跑什么」必须看部署生效的 env_file，不是代码默认值/README/根目录 .env
+- **场景**：用户问「系统知识库是什么」。我先看根目录 `.env`（只有 `NEO4J_PASSWORD`，**无** `KNOWLEDGE_ENGINE`）、`config.py` 默认值（`knowledge_engine: str = "legacy_rag"`）、README 描述（把 legacy_rag 当现有、ontology 当「可选替换」），就下结论「RAG 为主、neo4j 可选」。**用户纠正后查证，实际生产用的是 Neo4j 本体引擎**，主次搞反了。
+- **根因**：配置有三层，优先级/生效范围完全不同，我没分清就取了最低层当事实：
+  1. 代码默认（`config.py: knowledge_engine="legacy_rag"`）— **设计基线，不是当前事实**
+  2. 根目录 `.env` — 开发本地残留，可能不全（本项目就只有 `NEO4J_PASSWORD`，不代表部署）
+  3. `secrets/<tenant>.env`（被 `docker-compose.generated.yml` 的 `env_file:` 加载）— **生产实际生效的配置**
+  部署里 `secrets/taishan.env`、`taishankaifa2.env`、`example.env` 全部 `KNOWLEDGE_ENGINE=ontology_neo4j`，`taishan-api` 服务 `env_file: ./secrets/taishan.env` 覆盖了默认值，`chat_pipeline.py:421` 据此走 ontology 检索分支。
+- **教训**：
+  1. 回答「系统当前实际用什么」类问题，**先找 `docker-compose*.ygl` 里服务的 `env_file:` 指向哪个文件**，那个文件才是生效配置；再看代码分流点（`grep knowledge_engine` 找 `if` 分支）确认走了哪条路。绝不用 `config.py` 默认值或 README 描述当结论。
+  2. README 的「现有 vs 可选」是**写文档时的状态**，可能滞后于部署——本项目 README 仍把 ontology 当「可选替换」，但部署早已全面切换。文档描述 ≠ 运行事实。
+  3. 警惕反向混淆线索：`data/agents/*/ontology` 目录基本空 **≠ 没用 ontology**——本体引擎的 Entity/Fact/Evidence 存在 **Neo4j 图库**里，PostgreSQL 只存入库任务+聊天日志。看「数据在哪」要先确认引擎的存储模型。
+- **检查范式**：`grep -rn KNOWLEDGE_ENGINE secrets/`（生效配置）→ 看 compose 的 `env_file:` → `grep -rn "knowledge_engine ==" src/`（代码分流）→ 若怀疑没真跑，看 `ingestion_jobs.engine` 实际值或 `/ready` 健康检查的 `knowledge_engine` 字段。
+- **相关**：与 lessons #11/#14（「本地有、线上没有」错觉）同源——都是用错的参照系（本地默认 vs 线上生效）得出错误结论。
+
+## 16. 判断「文件的角色 / 是否共用」前，先查 git 跟踪与忽略状态
+- **场景**：用户问 `deploy/` 下多个 `tenants.*.json` 是否重复。我直接读各文件内容，发现 `deploy/tenants.json` 同时被本机 prod2 和 CI(prod3) 引用，就推断「一份文件被两机共用 → 仓库分叉 → CI reset 会冲掉 prod3 生产（定时炸弹）」，SSH 连环核实多轮。**最终 `git check-ignore deploy/tenants.json` 一查：它被 `.gitignore:55` 忽略**——是每台机器本地的真实 inventory（不进 git），prod2/prod3 各自独立一份，CI 的 `git reset --hard` 根本不碰它。所谓「共用 / 分叉 / 炸弹」全是建立在错误前提上的乌龙。
+- **根因**：直接读文件**内容**推断其角色，跳过了「它是否被 git 跟踪」这个前置事实。gitignored 文件每台机器各自一份，看起来同名但内容不同、互不影响；tracked 文件才是全仓库共享的单一真相。混淆这两类，会把「各机本地配置差异」误诊成「仓库分叉」。
+- **教训**：
+  1. 分析仓库里任意文件的角色前，**先 `git ls-files <path>`（是否跟踪）+ `git check-ignore -v <path>`（是否被忽略）+ 读 `.gitignore`**，再读内容推断。这三步把「gitignored 本地文件 vs tracked 共享文件」分清，是一切推断的前提——比读文件内容优先。
+  2. 警惕「同名的 gitignored 文件在多机各自存在」——那**不是重复**，是设计（本项目 `deploy/tenants.json` 每机一份本地真相）。`.gitignore` 的注释（本项目第 88 行「真实租户配置 deploy/tenants.json 已忽略」）往往直接点明设计意图，**先读注释**。
+  3. 与 #11/#14（「先查 git track 再查 .dockerignore」）同源，但本条强调的是**配置/库存文件的角色判定**，不仅是资源文件是否进镜像。
+- **检查范式**：`git ls-files deploy/tenants*`（哪些进 git）→ `git check-ignore deploy/tenants.json`（本地这份是否忽略）→ `.gitignore` 注释（设计意图）→ 再看 `deploy-release.sh` 默认 `INVENTORY=deploy/tenants.json`（实际读哪个）。
+- **相关**：#11/#14（先查 git track）、#13（SSH 用绝对路径——本次核实 prod3 又反复漏 `cd`，最终靠 `git -C <path>` 绕开）、#15（看生效配置而非默认值）——都是「用对参照系」的同族教训。
+
+## 17. 判断 Gitea Actions「是否真触发」：查 action_run 表 + act_runner 日志，别只信 yml 的 on:push
+- **场景**：用户问「push 后 CI 会不会重建镜像」。我读 `.gitea/workflows/deploy.yml` 见 `on: push: branches:[main]`，git log 又有 `87836fa ci: push 到 main 自动触发 deploy`，就判断「会自动触发」。实际 `git push` 后查 Gitea DB `action_run` 表（最新 run 停在老 sha `e067a4f`）+ `journalctl -t act_runner`（日志停 3 天前的 6/23），**最近所有 push 都没触发 CI**——印证 `docs/deploy/cicd-gitea.md`「触发改为手动 `workflow_dispatch`」，yml 里的 `on: push` 是没清理的残留。
+- **根因**：CI 是否触发的**真相源是 Gitea 运行时**（DB `action_run` 表 + runner 实际接活日志），**不是** workflow yml 的 `on:` 声明（可能残留 / 被 repo 级禁用 / 改手动）。yml 声明 ≠ 运行事实；`cicd-gitea.md` 文档反而准确，yml 滞后。
+- **教训**：
+  1. 判断「CI 会否触发 / 是否真跑过」，看**运行时证据**，绝不只读 yml `on:`：
+     - Gitea sqlite 最新 run：`docker exec gitea sqlite3 /data/gitea/gitea.db "SELECT id,status,event,substr(commit_sha,1,7) FROM action_run ORDER BY id DESC LIMIT 5;"`（看最新一条的 commit_sha 是不是刚 push 的）；
+     - runner 是否接活：`journalctl --no-pager -n 20 -t act_runner`（act_runner 是二进制进程 `/usr/local/bin/act_runner daemon`，非容器，日志走 journald tag `act_runner`，**不是** systemd unit 也**不在** `docker ps`）。
+  2. runner 在线 ≠ CI 会触发：本机 `act_runner master-host v0.6.1` 进程在跑、`[actions] ENABLED=true`、runner 已注册，但 push 照样不触发——触发由 workflow 的实际启用方式决定，与 runner 存活无关。
+  3. **git push 用的 token ≠ Gitea REST API token**：origin URL 里 `admin:<tok>@47.120.55.219:3002` 这个 token 能 push（git-over-http basic auth），但调 `/api/v1/...`（含 `Authorization: token` 和 basic auth 两种）一律返回 `{"message":"user does not exist [uid: 0]"`——是 git-only 凭据，无 API/actions 权限。要用 API 触发 `workflow_dispatch` 必须另备带 `actions:write` scope 的有效 PAT，否则只能 Web UI（`.../actions` → deploy → Run workflow）手动触发。
+- **检查范式**：push 后 → `docker exec gitea sqlite3 ... action_run ORDER BY id DESC LIMIT 3`（新 sha 有没有 run）→ `journalctl -t act_runner -n 20`（runner 接没接活）→ 若无 run = 没触发，查 `cicd-gitea.md` 文档确认实际触发方式（手动/自动）→ 需触发则 Web UI 手动或换有效 PAT 调 dispatch API。
+- **相关**：与 #15（判断「系统实际跑什么」看生效配置而非代码默认/文档）同源——都用错了真相源（yml 声明 vs 运行时 DB/日志）。
+- ⚠️ **本条结论（「CI 没触发」「on:push 是残留」「运维 UI 禁用 workflow」）已被 #18 推翻**：本条全部是在**错误 Gitea 实例（本机 `172.25.186.209` 开发机）**上查的，而 push 实际到了**主控 `47.120.55.219`（另一台机）**。本条的**方法**（查 `action_run` + `act_runner` 日志）仍正确，但**前提「本机 = 主控」是错的**，必须在正确的机器上用——见 #18。
+
+## 18. 多机环境：确认「当前机器就是目标服务所在机」要用实证，别凭「本机有该容器」归纳——否则级联出全套错结论
+- **场景**：用户让「push 后检测 runner」。我 `docker ps` 看到本机有 `gitea/gitea:1.24` 容器 + `ps aux` 看到 `act_runner daemon` 进程，就断定「本机就是主控 Gitea 机（= origin 的 `47.120.55.219`）」，然后一路在本机 `docker exec gitea` 查 DB、`journalctl -t act_runner` 查日志，得出「CI 没触发 / on:push 残留 / 运维 UI 禁用 workflow」一整套结论（写成 #17）。**用户一句「本机不是主控」逼我复盘**，`git ls-remote` 一查才证伪：
+  - 本机 `hostname -I` = `172.25.186.209`（cicd-gitea.md 里的 **prod2 开发机**）；
+  - 主控 prod3 = `47.120.55.219` / 私网 `172.25.186.210`（**另一台机**）；
+  - `git ls-remote 47.120.55.219:3002/.../sales-agent.git HEAD` = `8d112b5`（push 成功到了主控）；而本机 gitea（`127.0.0.1:3002`）连 `admin/sales-agent` 都 `Not found`——本机这个 gitea 是**另一个无关实例**。
+  - 于是 #17 那套「CI 没触发」结论**全部作废**（在错实例上查的）。
+- **根因**：把「本机有 gitea 容器 + runner 进程」**错误归纳**成「本机就是 origin 指向的、CI 真正跑的主控」。多机环境里 dev 机也常跑自己的 gitea/runner 做本地开发/镜像，「本机有该服务」≠「本机是生产权威实例」。没有用最便宜的实证去**证伪**这个前提，反而顺着它深挖好几轮（甚至写了 lesson）。
+- **被忽略的红旗（任一都能秒证伪）**：
+  1. origin host = `47.120.55.219`，我查的是本机 `127.0.0.1:3002`——从没验证这俩是不是同一台；
+  2. `hostname -I`=`172.25.186.209` vs cicd-gitea.md 主控私网 `172.25.186.210`，**差一位**——读了文档却没对 IP；
+  3. 本机 gitea bare repo HEAD 停在 `e067a4f`，而我刚 push `8d112b5`——若是同一实例 HEAD 必更新；这个矛盾我早看到却没用来证伪，反而去解释「为什么没触发」。
+- **教训**：
+  1. 多机环境（本项目 dev/主控/生产分机）里，动手查任何「服务内部状态」（DB/日志/容器）前，**先证伪「当前机 == 目标服务所在机」**。三个最便宜的验证任一即可：
+     - **HEAD 对比**：`git ls-remote <origin-url> HEAD` 的 sha，和「本机该服务持有的最新 sha」对一下——不一致就不是同一实例（本次就是这招秒杀）；
+     - **IP 对比**：`hostname -I`（或 `ip addr`）的本机私网 IP，和文档/配置里目标机私网 IP 对一下；
+     - **端口/容器归属**：`docker port <容器>` 的 host:port，和访问入口的 host:port 对一下（公网 IP 经 NAT，不能只看公网 IP 是否命中）。
+  2. origin/push 的 **host**（`47.120.55.219:3002`）≠ 本机回环（`127.0.0.1:3002`）。查服务状态前先确认「这个 host 是本机吗」：`ip addr | grep <host>` 或 curl 对比。**绝不默认公网 host = 本机**。
+  3. 看到「服务在本机跑 + 但状态/数据和预期矛盾」（如 HEAD 没更新、runner 没接活），**第一反应应是「我可能查错实例/机器了」**，而不是顺着错前提深挖「为什么没触发」。矛盾本身是证伪信号，先验证前提。
+- **检查范式**：动手查服务内部前 → `git ls-remote <origin> HEAD`（push 目标真实 sha）vs 本机服务持有的 sha → `hostname -I` vs 文档目标机私网 IP → `docker port <容器>` vs 访问 host:port → 三者一致才继续本机直查；不一致则 SSH 到真正的目标机（`ssh root@<主控公网>`，用绝对路径见 #13），别在本机空查。
+- **相关**：#15（用对参照系）、#17（CI 触发判断方法对，但本条揭示必须在「正确的机器」上用）同族——都是「先确认参照系正确，再下结论」。本次级联最深：错前提 → 错结论 → 还写了 lesson，用户一句话才打断。**也是「先验证再深挖」的反面教材**——本可用一次 `git ls-remote`（1 秒）替代我前面五六轮 DB/日志深挖。

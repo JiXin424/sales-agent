@@ -82,15 +82,15 @@ infra/deploy_key
 infra/deploy_key.pub
 infra/runner.env
 infra/gitea-admin-password.txt
+infra/gitea-admin-token.txt
 infra/runner-reg-token.txt
 infra/gitea-push-pat.txt
+infra/domain.key
+infra/domain.crt
+infra/registry-ca.crt
 
 # fan-out 目标清单含主机信息,按需提交;真实租户配置 deploy/tenants.json 已忽略
 
-
-# Nginx + certbot 运行时状态(含 TLS 私钥、Let's Encrypt 账户私钥,绝不提交)
-nginx/certbot-etc/
-nginx/certbot-webroot/
 
 # Docker images — 离线镜像 tar 包,体积大,不进 git
 images/*.tar

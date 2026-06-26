@@ -1,6 +1,6 @@
 # 无源码目标机初始化手册
 
-> 适用：杭州及未来**不能放源码**的部署目标机。设计见
+> 适用：test及未来**不能放源码**的部署目标机。设计见
 > [`docs/superpowers/specs/2026-06-25-sourceless-deploy-design.md`](../superpowers/specs/2026-06-25-sourceless-deploy-design.md)。
 
 无源码目标机**只保留**：docker + docker compose、registry 登录、CA 证书、`secrets/`。compose 与部署脚本由 CI 打进 `sales-agent-deploy` 镜像传输，目标机 `docker run` 它完成部署。
@@ -10,14 +10,10 @@
 ```bash
 # 1. 装 docker + compose plugin（略）
 
-# 2. 登录 registry（凭证问主控运维，见主控 infra/registry-password.txt）
-docker login registry.internal:5000 -u salesagent
-
-# 3. 放 registry CA 证书
-mkdir -p /etc/docker/certs.d/registry.internal:5000
-#   从主控 scp infra/registry-ca.crt 到这里：
-#   scp 主控:/root/code/sales-agent/infra/registry-ca.crt /etc/docker/certs.d/registry.internal:5000/ca.crt
+# 2. 允许 HTTP registry（走 HTTP + htpasswd，无 TLS）+ 登录
+#    在 /etc/docker/daemon.json 加 { "insecure-registries": ["registry.internal:5000"] }（已有则合并）
 systemctl restart docker
+docker login registry.internal:5000 -u salesagent   # 凭证见主控 infra/registry-password.txt
 
 # 4. /etc/hosts 解析 registry.internal → 主控可达 IP
 #   （跨地域走公网 IP；同 VPC 走私网。具体见 cicd-gitea.md §2）
@@ -37,7 +33,7 @@ chmod 600 *.env
 #   docker network create taishan-network   # 名字与 inventory 的 traefik.shared_network 一致
 ```
 
-杭州跨地域拉镜像要主控**两层防火墙**放行 TCP:5000（阿里云安全组 + 主控 ufw），见 `cicd-gitea.md` §3。
+test跨地域拉镜像要主控**两层防火墙**放行 TCP:5000（阿里云安全组 + 主控 ufw），见 `cicd-gitea.md` §3。
 
 ## 2. 瘦身（删源码）
 
@@ -71,7 +67,7 @@ docker exec sales-agent-fuduoduo-api python -c \
 
 ## 5. 回退 / 排错
 
-- **回退到旧版本**：在 prod2 改 `deploy-targets.json` 杭州的 deploy 镜像 tag（或 registry 里有历史 sha，ci-fanout `${IMAGE##*:}` 决定），重跑 CI。
+- **回退到旧版本**：在 prod2 改 `deploy-targets.json` test的 deploy 镜像 tag（或 registry 里有历史 sha，ci-fanout `${IMAGE##*:}` 决定），重跑 CI。
 - **secrets 缺失**：deploy 镜像启动即 exit（校验 `/secrets/neo4j.env`），本地补 `secrets/neo4j.env` 后重跑 CI。
-- **compose 缺该 env**：`deploy-remote.sh` exit（`compose-<env>.yml` 不在镜像），说明 CI 没 render 该 env——检查 `deploy.yml` 的 `for env in hangzhou` 列表是否含你的 env。
+- **compose 缺该 env**：`deploy-remote.sh` exit（`compose-<env>.yml` 不在镜像），说明 CI 没 render 该 env——检查 `deploy.yml` 的 `for env in test` 列表是否含你的 env。
 - **跨 network 502**（traefik 网关）：compose 必须含 `shared_network` external 声明，见 `tasks/lessons.md` #10。

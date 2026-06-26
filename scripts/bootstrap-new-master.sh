@@ -90,51 +90,9 @@ log "=== 2/10 生成 TLS 证书 (SAN: registry.internal,$BENJI_PRIVATE_IP,$BENJI
 cd "$INFRA_DIR"
 
 # 生成 CA 私钥 + 证书
-openssl genrsa -out ca.key 4096 2>/dev/null
-openssl req -x509 -new -nodes -key ca.key -sha256 -days 3650 \
-  -subj "/CN=Sales Agent Registry CA" \
-  -out registry-ca.crt 2>/dev/null
-
-# 生成 Registry 私钥
-openssl genrsa -out domain.key 4096 2>/dev/null
-
-# SAN 配置
-cat > /tmp/registry-san.cnf <<EOF
-[req]
-default_bits = 4096
-default_md = sha256
-distinguished_name = req_distinguished_name
-req_extensions = req_ext
-x509_extensions = v3_req
-prompt = no
-
-[req_distinguished_name]
-CN = ${REGISTRY_HOSTNAME}
-
-[req_ext]
-subjectAltName = @alt_names
-
-[v3_req]
-subjectAltName = @alt_names
-
-[alt_names]
-DNS.1 = ${REGISTRY_HOSTNAME}
-IP.1 = ${BENJI_PRIVATE_IP}
-IP.2 = ${BENJI_PUBLIC_IP}
-IP.3 = ${LOOPBACK}
-EOF
-
-# 生成 CSR + 签发证书
-openssl req -new -key domain.key -out domain.csr -config /tmp/registry-san.cnf 2>/dev/null
-openssl x509 -req -in domain.csr -CA registry-ca.crt -CAkey ca.key \
-  -CAcreateserial -out domain.crt -days 3650 \
-  -extfile /tmp/registry-san.cnf -extensions v3_req 2>/dev/null
-
-rm -f domain.csr /tmp/registry-san.cnf
-log "TLS 证书生成完成"
-log "  CA:       ${INFRA_DIR}/registry-ca.crt"
-log "  Cert:     ${INFRA_DIR}/domain.crt"
-log "  Key:      ${INFRA_DIR}/domain.key"
+# Registry 走 HTTP + htpasswd（见 cicd-compose.yml），不再生成 TLS 证书。
+# 如需启用 TLS：手动生成 domain.key/crt + registry-ca.crt，并在 cicd-compose.yml
+# 加 REGISTRY_HTTP_TLS_CERTIFICATE/KEY + 挂载。
 
 # ============================================================
 # 3. 生成 Registry 认证
@@ -167,12 +125,8 @@ services:
       REGISTRY_AUTH: htpasswd
       REGISTRY_AUTH_HTPASSWD_REALM: Sales-Agent Registry
       REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd
-      REGISTRY_HTTP_TLS_CERTIFICATE: /certs/domain.crt
-      REGISTRY_HTTP_TLS_KEY: /certs/domain.key
     volumes:
       - ./htpasswd:/auth/htpasswd:ro
-      - ./domain.crt:/certs/domain.crt:ro
-      - ./domain.key:/certs/domain.key:ro
       - registry-data:/var/lib/registry
 
   gitea:
@@ -407,11 +361,7 @@ else
   log "/etc/hosts 已更新 registry.internal → 127.0.0.1"
 fi
 
-# 10b: Docker TLS 证书（本机也需信任自己的 registry CA）
-DOCKER_CERT_DIR="/etc/docker/certs.d/${REGISTRY_HOSTNAME}:${REGISTRY_PORT}"
-mkdir -p "$DOCKER_CERT_DIR"
-cp "${INFRA_DIR}/registry-ca.crt" "${DOCKER_CERT_DIR}/ca.crt"
-log "Registry CA 已部署到 ${DOCKER_CERT_DIR}/ca.crt"
+# 10b: Registry 走 HTTP + htpasswd，无需 Docker TLS CA 信任（跳过证书部署）
 
 # 10c: docker login
 log "登录 registry..."
@@ -450,8 +400,6 @@ log "   CI Actions:      http://${GITEA_DOMAIN}:${GITEA_WEB_PORT}/${GITEA_REPO_O
 log ""
 log "📋 后续步骤："
 log "   1. 在本机完成后续文件配置后 git push 触发首次 CI"
-log "   2. 在 47.120.50.181 上运行 scripts/migration-update-target.sh"
-log "   3. 在 47.118.16.235 上运行 scripts/migration-update-target.sh"
-log "   4. 确认 registry CA 已分发到所有目标机"
+log "   2. 各目标机按 docs/deploy/sourceless-target-setup.md 接入（docker login registry.internal:5000 + hosts 解析）"
 log ""
 log "⚠️  请保存 ${INFRA_DIR} 下的凭证文件（均已在 .gitignore 中）"

@@ -4,9 +4,6 @@
 # 开发模式：只启动 PostgreSQL
 #   docker compose up -d postgres
 #
-# 多租户 dedicated mode（单容器模式）：
-#   docker compose --profile taishan up -d
-#
 # 角色拆分模式（推荐生产部署）：
 #   docker compose --profile taishan-split up -d
 #
@@ -67,25 +64,6 @@ services:
   # 单容器模式（all-in-one，向后兼容）
   # ============================================================
 
-  # --- Dedicated mode: 泰山兄弟 ---
-  taishan-agent:
-    image: sales-agent:latest
-    profiles: ["taishan"]
-    container_name: sales-agent-taishan
-    restart: unless-stopped
-    env_file:
-      - ./secrets/taishan.env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://sales_agent:sales_agent_dev@postgres:5432/sales_agent
-    volumes:
-      - ./data/taishan:/data/taishan
-      - ./logs/taishan:/logs/taishan
-    # 端口不再映射到宿主机，由 Nginx 容器代理
-    expose:
-      - "8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
   # ============================================================
   # 角色拆分模式（生产推荐）
   # ============================================================

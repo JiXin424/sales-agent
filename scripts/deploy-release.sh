@@ -31,7 +31,6 @@ Environment overrides:
 Examples:
   scripts/deploy-release.sh                          # interactive selection
   scripts/deploy-release.sh --env taishan.env        # single tenant, no prompt
-  scripts/deploy-release.sh --env taishan.env --env tenant-b.env
   scripts/deploy-release.sh --yes                    # CI: deploy everything
 USAGE
 }
@@ -493,7 +492,7 @@ import json, pathlib, sys
 
 src = pathlib.Path(sys.argv[1])
 dst = pathlib.Path(sys.argv[2])
-selected = set(sys.argv[3:])  # e.g. {"taishan.env", "tenant-b.env"}
+selected = set(sys.argv[3:])  # e.g. {"taishan.env"}
 
 data = json.loads(src.read_text(encoding="utf-8"))
 

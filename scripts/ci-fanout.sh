@@ -11,7 +11,7 @@
 # 可选字段:
 #   has_source      bool,默认 true。false 时跳过 git sync
 #   compose_file    仅 self-deploy 使用,默认 docker-compose.yml
-#   env             仅 image-deploy 使用,指定用哪份 compose-<env>.yml(如 hangzhou)
+#   env             仅 image-deploy 使用,指定用哪份 compose-<env>.yml(如 test)
 set -euo pipefail
 IMAGE="${IMAGE:?需要 IMAGE 环境变量}"
 

@@ -78,24 +78,11 @@ sales-agent worker
 
 ## Docker Compose 部署
 
-### 单容器模式（兼容现有部署）
-
-```bash
-# 泰山兄弟
-docker compose --profile taishan up -d
-
-# 租户 B
-docker compose --profile tenant-b up -d
-```
-
 ### 角色拆分模式（推荐生产部署）
 
 ```bash
 # 泰山兄弟：API + Stream + Worker
 docker compose --profile taishan-split up -d
-
-# 租户 B：API + Stream + Worker
-docker compose --profile tenant-b-split up -d
 ```
 
 拆分模式下的服务：
@@ -105,9 +92,6 @@ docker compose --profile tenant-b-split up -d
 | `taishan-api` | 8101→8000 | HTTP API |
 | `taishan-stream` | 无 | 钉钉 Stream |
 | `taishan-worker` | 无 | 后台任务 |
-| `tenant-b-api` | 8102→8000 | HTTP API |
-| `tenant-b-stream` | 无 | 钉钉 Stream |
-| `tenant-b-worker` | 无 | 后台任务 |
 
 ## Stream 单例约束
 

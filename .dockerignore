@@ -20,7 +20,6 @@ logs/
 secrets/
 infra/
 docs/
-nginx/
 # 仅排除「仓库根」的游离大文件(镜像内用的是 src/sales_agent/integrations/dingtalk/static/ 下的正式副本)。
 # 必须用前导 / 锚定根目录——裸名(如 cocah.html)会被 BuildKit 递归匹配,误删
 # src/.../static/cocah.html + coach_mode.png,导致 /integrations/dingtalk/quick 返回

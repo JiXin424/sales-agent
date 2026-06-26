@@ -57,6 +57,7 @@ v0 是本地可运行原型，支持 **HTTP API** 和 **钉钉单聊** 两种接
 - Neo4j 存储 Entity / Fact / Evidence / SourceDocument 节点，PostgreSQL 仍存储入库任务与聊天日志。
 - 高风险事实进入人工复核（pending review），不进入用户可见回答。
 - Agents 知识页新增入库面板（状态 / 任务 / 冲突可视化 + 启动入库）。
+- 支持上传 `.md` / `.txt` / `.doc` / `.docx` / `.pdf` / `.pptx` / `.xlsx`；旧版 `.doc` 经 LibreOffice 无头转 `.docx` 后解析，`.xlsx` 用 openpyxl 按 sheet 抽取（含表名小标题）。
 - 「本体探索」调试页（`/agents/:id/ontology`）：三栏实时可视化检索过程 / 问答 / 喂给大模型的完整上下文（SSE 流式，复用图谱检索+回答引擎）。
 
 详见 [`docs/ontology-neo4j-ops.md`](docs/ontology-neo4j-ops.md)。
@@ -340,9 +341,6 @@ docker compose up -d postgres
 cp secrets/example.env secrets/taishan.env
 # 编辑 secrets/taishan.env 填入密钥和配置（替换所有 <...> 占位符）
 
-cp secrets/example.env secrets/tenant-b.env
-# 编辑 secrets/tenant-b.env
-
 chmod 600 secrets/*.env
 
 # 2. 运行部署脚本：自动发现 secrets/*.env，箭头键选择租户（或 --env / --yes）
@@ -381,11 +379,9 @@ sales-agent/
 ├── scripts/
 │   └── init-db.sql                 # 数据库初始化（pgvector 扩展）
 ├── secrets/                        # 租户密钥（不入 git）
-│   ├── taishan.env.example
-│   └── tenant-b.env.example
+│   └── taishan.env.example
 ├── data/sales-agent/tenants/       # 租户知识库
-│   ├── taishan/documents/    #   产品介绍、FAQ、案例
-│   └── tenant_demo_b/documents/    #   产品介绍、FAQ
+│   └── taishan/documents/    #   产品介绍、FAQ、案例
 ├── eval/
 │   └── smoke_test.jsonl            # 冒烟评估集（12 条）
 ├── src/sales_agent/
@@ -540,12 +536,11 @@ PYTHONPATH=src pytest tests/integration/test_pilot_api.py -v
 
 ## Demo 数据
 
-项目包含两个演示租户：
+项目包含演示租户：
 
 | 租户 | 知识库文档 | 场景 |
 |------|-----------|------|
 | `taishan` | 产品介绍、FAQ（10 个 Q/A）、客户案例 | AI 销售助手产品 |
-| `tenant_demo_b` | 产品介绍、FAQ（4 个 Q/A） | 企业云盘产品 |
 
 冒烟评估集（`eval/smoke_test.jsonl`）包含 12 条测试用例，覆盖 5 类任务 + 风险拦截场景。
 
@@ -632,5 +627,6 @@ PYTHONPATH=src pytest tests/integration/test_pilot_api.py -v
 
 | 日期 | 摘要 |
 |------|------|
+| [2026-06-26](changelog/2026-06-26.md) | 知识库（ontology_neo4j）支持上传 `.doc`（LibreOffice 无头转 `.docx`）与 `.xlsx`（openpyxl 按 sheet 抽取）：扩展上传白名单、`_read_content` 新增两分支（抽出 `_docx_text` 复用）、前端 accept 放开、Dockerfile 装 `libreoffice-writer`、pyproject 加 `openpyxl`；移除遗留演示假数据 `tenant_demo_b`（企业云盘产品，与真实业务无关；数据库 43 表零数据、`tenants` 表未注册、eval 不依赖）+ 清理从未部署的 `tenant-b` 部署模板/文档引用（`tenants.test.json`、`deploy-release.sh`、`deployment-roles.md`）；保留跨租户安全测试 fixture（`tenant_b`）与历史日志；**清理顶层 nginx 死配置**（Traefik 已接管 SSL 终止/反代，`qiyelongxia.com.cn` 实际由共享 Traefik serve）+ 配套 `init-letsencrypt.sh`，同步清理 `.gitignore`/`.dockerignore` 死引用；前端容器内置 nginx（SPA + `/api` 代理，Traefik 路由终点）保留；**deploy/inventory 命名清理**：删 3 个死文件（`tenants.prod2/prod3/test.json` 旧版）、`tenants.hangzhou.json`→`tenants.test.json` 对齐机器身份（47.118.16.235=test）+ 修 `deploy.yml`/`ci-fanout.sh`/`deploy-targets.json`/文档引用，env 全链路动态拼接故行为等价（澄清：`deploy/tenants.json` 是 gitignored 的每机本地 inventory，非重复） |
 | [2026-06-25](changelog/2026-06-25.md) | Neo4j 本体知识引擎（ontology_neo4j）：图检索 + 保守向量回退 + 高风险人工复核；双租户 dedicated 部署；前端容器化（每租户 nginx SPA）；4000 运营面板新增「环境配置」卡片（`GET /instance/config`，敏感字段点击揭示+复制）；「本体探索」三栏调试页（检索过程/问答/完整上下文，SSE 流式）；部署脚本完善：`secrets/example.env` 模板纳入 git 追踪（`.gitignore` 改 `secrets/*` + `!example.env` 反例），`deploy-release.sh` 租户发现自动排除模板、交互式箭头键选择租户；**CI/CD 接入 neo4j**：生成器渲染共享 neo4j 容器 + app `NEO4J_*` env 注入、entrypoint api 角色自动 `alembic upgrade`、`deploy-release.sh` `--env-file secrets/neo4j.env` 注入凭证、CI mirror neo4j 镜像到 registry；**钉钉快捷入口 tenant mismatch 修复**：共享域名（如 `aijiaolian.com.cn`）多租户下 Traefik 无法按 query 参数分流，快捷入口端点改为 `/integrations/dingtalk/t/{tenant_id}/...`（tenant_id 进 path 段），Traefik 按 `PathPrefix(/t/<tid>/)` 分流到各自容器，根治跨租户 403 |
 | [2026-06-22](changelog/2026-06-22.md) | Prompt 全层解耦到 DB 版本管理 + 网页端「当前生效」总览直接编辑 |

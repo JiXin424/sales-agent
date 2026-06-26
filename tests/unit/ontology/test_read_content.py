@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock, patch
 
-from sales_agent.ontology.ingestion_service import _read_content
+from sales_agent.ontology.ingestion_service import _doc_to_text, _read_content
 
 
 def test_read_content_md_txt_uses_read_text(tmp_path):
@@ -63,3 +63,61 @@ def test_read_content_docx_failure_raises(tmp_path):
             assert False, "should raise"
         except RuntimeError as e:
             assert "docx 解析失败" in str(e)
+
+
+def test_read_content_doc(tmp_path):
+    path = tmp_path / "x.doc"
+    path.write_bytes(b"D0CF11E0 fake OLE")
+    with patch("sales_agent.ontology.ingestion_service._doc_to_text", return_value="doc text") as m:
+        assert _read_content(path) == "doc text"
+        m.assert_called_once_with(path)
+
+
+def test_read_content_doc_failure_raises(tmp_path):
+    path = tmp_path / "bad.doc"
+    path.write_bytes(b"corrupt")
+    with patch("sales_agent.ontology.ingestion_service._doc_to_text", side_effect=Exception("no soffice")):
+        try:
+            _read_content(path)
+            assert False, "should raise"
+        except RuntimeError as e:
+            assert "doc 解析失败" in str(e)
+
+
+def test_doc_to_text_missing_soffice_raises(tmp_path):
+    path = tmp_path / "x.doc"
+    path.write_bytes(b"fake")
+    with patch("shutil.which", return_value=None):
+        try:
+            _doc_to_text(path)
+            assert False, "should raise"
+        except RuntimeError as e:
+            assert "未安装 LibreOffice" in str(e)
+
+
+def test_read_content_xlsx(tmp_path):
+    path = tmp_path / "x.xlsx"
+    path.write_bytes(b"PK fake")
+    ws = MagicMock()
+    ws.title = "Sheet1"
+    # values_only=True → 每行是值的元组；全空行（None/"")应被跳过
+    ws.iter_rows.return_value = iter([("产品", "价格"), ("Widget", 10), (None, "")])
+    wb = MagicMock()
+    wb.worksheets = [ws]
+    with patch("openpyxl.load_workbook", return_value=wb) as m:
+        text = _read_content(path)
+    assert "## Sheet1" in text
+    assert "产品\t价格" in text
+    assert "Widget\t10" in text
+    m.assert_called_once_with(filename=str(path), data_only=True, read_only=True)
+
+
+def test_read_content_xlsx_failure_raises(tmp_path):
+    path = tmp_path / "bad.xlsx"
+    path.write_bytes(b"corrupt")
+    with patch("openpyxl.load_workbook", side_effect=Exception("parse error")):
+        try:
+            _read_content(path)
+            assert False, "should raise"
+        except RuntimeError as e:
+            assert "xlsx 解析失败" in str(e)

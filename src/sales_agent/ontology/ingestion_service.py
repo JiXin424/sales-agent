@@ -14,10 +14,50 @@ from sales_agent.ontology.conflict import classify_fact_risk, merge_status_for_r
 from sales_agent.ontology.schemas import EntityCandidate, FactCandidate, OntologyIngestionStats
 
 
+def _docx_text(path: Path) -> str:
+    """Extract paragraph text from a .docx (python-docx). Shared by the .docx
+    branch and the .doc → .docx conversion path."""
+    from docx import Document
+    doc = Document(str(path))
+    return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+
+
+def _doc_to_text(src: Path) -> str:
+    """Convert a legacy .doc (OLE2) to .docx via LibreOffice headless, then reuse
+    the python-docx paragraph extraction. Chinese/Unicode fidelity is far better
+    than antiword/catdoc, which matters because the text feeds the LLM extractor.
+
+    Each call gets its own temp dir + UserInstallation profile so concurrent ingest
+    jobs never contend on a shared LibreOffice profile lock."""
+    import shutil
+    import subprocess
+    import tempfile
+    if not shutil.which("soffice"):
+        raise RuntimeError("未安装 LibreOffice (soffice)，无法解析 .doc")
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp)
+        profile_uri = (out / "profile").as_uri()  # absolute file:// URL，soffice 要求
+        subprocess.run(
+            [
+                "soffice", "--headless", "--nologo", "--nofirststartwizard",
+                "--norestore", f"-env:UserInstallation={profile_uri}",
+                "--convert-to", "docx", "--outdir", str(out), str(src),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=120,
+        )
+        converted = out / (src.stem + ".docx")
+        if not converted.exists():
+            raise RuntimeError(f"LibreOffice 转换失败：{src.name}")
+        return _docx_text(converted)
+
+
 def _read_content(path: Path) -> str:
-    """Read file content. Binary office formats (.docx/.pdf/.pptx) are parsed into
-    text by lightweight libs (python-docx / pymupdf / python-pptx). Other files
-    (.md/.txt) are read as UTF-8.
+    """Read file content into plain text for the LLM pipeline. Binary office
+    formats are parsed by lightweight libs (python-docx / pymupdf / python-pptx /
+    openpyxl); legacy .doc is first converted to .docx via LibreOffice headless;
+    .md/.txt are read as UTF-8.
 
     Note: docling was the original choice but its torch-heavy dependency tree
     (2.8GB+) would not install in the target environment (resolver thrash). These
@@ -26,11 +66,14 @@ def _read_content(path: Path) -> str:
     ext = path.suffix.lower()
     if ext == ".docx":
         try:
-            from docx import Document
-            doc = Document(str(path))
-            return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+            return _docx_text(path)
         except Exception:
             raise RuntimeError(f"docx 解析失败：{path.name}")
+    if ext == ".doc":
+        try:
+            return _doc_to_text(path)
+        except Exception:
+            raise RuntimeError(f"doc 解析失败：{path.name}")
     if ext == ".pdf":
         try:
             import fitz  # pymupdf
@@ -53,6 +96,20 @@ def _read_content(path: Path) -> str:
             return "\n".join(texts)
         except Exception:
             raise RuntimeError(f"pptx 解析失败：{path.name}")
+    if ext == ".xlsx":
+        try:
+            from openpyxl import load_workbook
+            wb = load_workbook(filename=str(path), data_only=True, read_only=True)
+            texts: list[str] = []
+            for ws in wb.worksheets:
+                texts.append(f"## {ws.title}")
+                for row in ws.iter_rows(values_only=True):
+                    cells = [str(c).strip() for c in row if c is not None and str(c).strip()]
+                    if cells:
+                        texts.append("\t".join(cells))
+            return "\n".join(texts)
+        except Exception:
+            raise RuntimeError(f"xlsx 解析失败：{path.name}")
     return path.read_text(encoding="utf-8")
 
 

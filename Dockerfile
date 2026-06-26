@@ -30,7 +30,7 @@ RUN if [ -f /etc/apt/sources.list ]; then \
       sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources; \
     fi && \
     apt-get update && apt-get install -y --no-install-recommends \
-    gcc libpq-dev \
+    gcc libpq-dev libreoffice-writer \
     && rm -rf /var/lib/apt/lists/*
 
 # 先只装依赖（仅 pyproject.toml 的依赖变化时才重跑这层——几十秒）。

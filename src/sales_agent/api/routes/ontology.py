@@ -27,7 +27,7 @@ from sales_agent.services.tenant_resolver import TenantResolver
 
 router = APIRouter(prefix="/agents", tags=["ontology"])
 
-ALLOWED_EXTENSIONS = {".md", ".txt", ".docx", ".pdf", ".pptx"}
+ALLOWED_EXTENSIONS = {".md", ".txt", ".docx", ".doc", ".pdf", ".pptx", ".xlsx"}
 
 _logger = logging.getLogger(__name__)
 

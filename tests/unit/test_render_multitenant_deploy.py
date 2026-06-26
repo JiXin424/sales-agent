@@ -97,8 +97,18 @@ def test_skip_validation_renders_without_env_file(tmp_path):
     assert "fuduoduo-api" in out.read_text()
 
 
-def _inv_traefik(tmp_path, domain="", backend="", tenant_id="acme", env_text=""):
-    """Build inventory dict for render_traefik_routes tests."""
+def _inv_traefik(tmp_path, domain="", backend="", tenant_id="", env_text=""):
+    """Build inventory dict for render_traefik_routes tests.
+
+    If *domain* is a multi-level domain and *tenant_id* is not given, the first
+    subdomain component is used as the tenant ID (e.g. domain="songbai.x.y"
+    → tenant_id="songbai").  This matches the expectation of the TDD test cases
+    where router/service names embed the tenant ID.
+    """
+    if not tenant_id and domain:
+        tenant_id = domain.split(".")[0]
+    elif not tenant_id:
+        tenant_id = "acme"
     env = tmp_path / f"{tenant_id}.env"
     env.write_text(env_text)
     tenant = {
@@ -192,9 +202,9 @@ def test_traefik_two_tenants_with_subdomains(tmp_path):
     """Two tenants each with distinct domains → both get subdomain routes, no collision."""
     mod = _load()
     env1 = tmp_path / "songbai.env"
-    env1.write_text("DINGTALK_PUBLIC_URL=https://songbai.aijiaolian.com.cn\n")
+    env1.write_text("DINGTALK_PUBLIC_URL=https://aijiaolian.com.cn\n")
     env2 = tmp_path / "fuduoduo.env"
-    env2.write_text("DINGTALK_PUBLIC_URL=https://fuduoduo.aijiaolian.com.cn\n")
+    env2.write_text("DINGTALK_PUBLIC_URL=https://aijiaolian.com.cn\n")
     data = {
         "project_name": "sales-agent",
         "tenants": [

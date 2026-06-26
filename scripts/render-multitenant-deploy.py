@@ -452,12 +452,20 @@ def render_traefik_routes(data: dict[str, Any]) -> str:
     for tenant in data["tenants"]:
         tenant_id = tenant["id"]
         domain = tenant.get("domain", "")
+        backend = tenant.get("backend", "")  # NEW: optional remote host:port
         env_path = Path(tenant["env_file"]).resolve()
         api_container = f"sales-agent-{tenant_id}-api"
         frontend_container = f"sales-agent-{tenant_id}-frontend"
 
-        if domain:
-            # Host-based route — 用户域名 → 前端 nginx 容器（SPA + API 代理）
+        # Resolve dingtalk backend URL: remote or local container
+        if backend:
+            dingtalk_backend_url = f"http://{backend}"
+        else:
+            dingtalk_backend_url = f"http://{api_container}:8000"
+
+        if domain and not backend:
+            # Host-based route → 前端 nginx 容器（仅本机租户有前端容器）
+            # 远端租户 (backend 有值) 跳过此 catch-all，避免 502
             router_name = f"sales-agent-{tenant_id}"
             service_name = f"sales-agent-{tenant_id}-backend"
             lines.extend([
@@ -476,6 +484,31 @@ def render_traefik_routes(data: dict[str, Any]) -> str:
                     "      loadBalancer:",
                     "        servers:",
                     f'          - url: "http://{frontend_container}:80"',
+                ])
+
+        if domain:
+            # NEW: 子域名 + DingTalk PathPrefix → 租户 API（本机或远端）
+            # 这是快捷入口/免登录的核心路由：Host(subdomain) &&
+            # PathPrefix(/integrations/dingtalk/t/{tenant_id}/) → api backend
+            router_name = f"sales-agent-{tenant_id}-sub-dingtalk"
+            service_name = f"sales-agent-{tenant_id}-sub-dingtalk-svc"
+            lines.extend([
+                f"    {router_name}:",
+                f'      rule: "Host(`{domain}`) && PathPrefix(`/integrations/dingtalk/t/{tenant_id}/`)"',
+                "      entryPoints:",
+                "        - websecure",
+                "      tls:",
+                "        certResolver: letsencrypt",
+                f"      service: {service_name}",
+                "      priority: 210",
+            ])
+            if service_name not in seen_services:
+                seen_services.add(service_name)
+                service_lines.extend([
+                    f"    {service_name}:",
+                    "      loadBalancer:",
+                    "        servers:",
+                    f'          - url: "{dingtalk_backend_url}"',
                 ])
 
         # PathPrefix route for DingTalk integration (shared domain).

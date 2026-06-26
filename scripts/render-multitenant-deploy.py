@@ -525,7 +525,9 @@ def render_traefik_routes(data: dict[str, Any]) -> str:
         public_url = _env_get(env_path, "DINGTALK_PUBLIC_URL")
         if public_url:
             hostname = urlparse(public_url).hostname
-            if hostname:
+            if hostname and hostname != domain:
+                # 当 env 里 DINGTALK_PUBLIC_URL 的 hostname 与 domain 相同时，
+                # 子域名路由（上面 if domain: 块）已覆盖，跳过以避免重复 rule。
                 router_name = f"sales-agent-{tenant_id}-dingtalk"
                 service_name = f"sales-agent-{tenant_id}-dingtalk-svc"
                 lines.extend([

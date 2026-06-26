@@ -248,3 +248,11 @@
   3. 看到「服务在本机跑 + 但状态/数据和预期矛盾」（如 HEAD 没更新、runner 没接活），**第一反应应是「我可能查错实例/机器了」**，而不是顺着错前提深挖「为什么没触发」。矛盾本身是证伪信号，先验证前提。
 - **检查范式**：动手查服务内部前 → `git ls-remote <origin> HEAD`（push 目标真实 sha）vs 本机服务持有的 sha → `hostname -I` vs 文档目标机私网 IP → `docker port <容器>` vs 访问 host:port → 三者一致才继续本机直查；不一致则 SSH 到真正的目标机（`ssh root@<主控公网>`，用绝对路径见 #13），别在本机空查。
 - **相关**：#15（用对参照系）、#17（CI 触发判断方法对，但本条揭示必须在「正确的机器」上用）同族——都是「先确认参照系正确，再下结论」。本次级联最深：错前提 → 错结论 → 还写了 lesson，用户一句话才打断。**也是「先验证再深挖」的反面教材**——本可用一次 `git ls-remote`（1 秒）替代我前面五六轮 DB/日志深挖。
+
+## 19. `ssh -n` 与「管道传 stdin」互斥：照搬同文件模式前先理解 `-n` 的前提
+
+- **场景**：给 `scripts/ci-fanout.sh` 的 image-deploy 分支加「`tar | ssh` 同步运维脚本到无源码目标机」。同文件其它分支（deploy-release / self-deploy / image-deploy 的 docker run）都用 `ssh -n`，照搬成 `tar ... | ssh -n ... "tar -xf -"`。**本地试跑立即报** `tar: This does not look like a tar archive`，远端 tar 读到空。
+- **根因**：`ssh -n` = 「Redirects stdin from /dev/null」，把 ssh 的 stdin 重定向到 /dev/null，**丢弃了管道里 tar 的输出流**，远端 `tar -xf -` 读到空 → 报错。同文件用 `ssh -n` 的真实原因是：那些命令在 `while read ... < /tmp/ci-targets.txt` 循环里，ssh 默认会吞掉循环的输入流，所以要 `-n` 挡住。但 `tar | ssh` 场景下 ssh 的 stdin 已被 tar 管道占用，本就不会读循环输入——`-n` 多此一举且致命。
+- **正解**：`tar ... | ssh -o BatchMode=... ...`（**不带 `-n`**），并在注释里标明「此分支唯一不带 -n 的 ssh，stdin 由 tar 管道占用，不会读走 while 循环输入」。已落注释于 `scripts/ci-fanout.sh`。
+- **教训**：① 复制既有模式前先理解它的前提（`-n` 是为防吞 while 输入，不是万能默认）；②「本地试跑」再次救场——若直接 push 等 CI 跑，得去 Gitea Actions 日志才看到远端 tar 报错，定位更慢。
+- **相关**：#4（验证 Before Done——本次靠本地试跑当场抓 bug）、#15/#16（用对参照系 / 理解前提的同族）。

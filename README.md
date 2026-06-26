@@ -363,6 +363,19 @@ docker compose --profile taishan-split restart
 curl http://localhost:8101/diagnostics/model
 ```
 
+### 无源码目标机：CI 自动同步运维脚本
+
+`deploy/deploy-targets.json` 里 `method=image-deploy` 的目标机（如 test）走无源码部署：CI 只推
+Docker 镜像、不推源码。为让这些机器也能停服务/查健康，每次 `git push origin main` 触发的 CI
+会在部署前自动把两个**自包含**脚本同步到目标机 `${dir}/scripts/`（由 `scripts/ci-fanout.sh`
+的 image-deploy 分支用 `tar | ssh` 完成）：
+
+- `scripts/stop-tenant.sh` — 停止/移除该机某租户容器（`--tenant <id>`，或交互式菜单）
+- `scripts/check-tenant.sh <tenant_id> <api_port>` — 检查容器 + `/health` `/ready`
+
+容器名规则 `sales-agent-<id>-<role>` 与本机一致，目标机上 `bash scripts/stop-tenant.sh` 开箱即用。
+详见 `deploy/DEPLOY_USAGE.md`。
+
 ## 项目结构
 
 ```

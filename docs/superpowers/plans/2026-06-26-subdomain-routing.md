@@ -122,38 +122,42 @@ def test_traefik_no_domain_no_backend(tmp_path):
     assert "    sales-agent-acme:\n" not in out
 
 
-def test_traefik_duplicate_domain_raises(tmp_path):
-    """Two tenants with same domain → duplicate rule assertion fires."""
+def test_traefik_two_tenants_with_subdomains(tmp_path):
+    """Two tenants each with distinct domains → both get subdomain routes, no collision."""
     mod = _load()
-    env1 = tmp_path / "a.env"
-    env1.write_text("DINGTALK_PUBLIC_URL=https://dup.aijiaolian.com.cn\n")
-    env2 = tmp_path / "b.env"
-    env2.write_text("DINGTALK_PUBLIC_URL=https://dup.aijiaolian.com.cn\n")
+    env1 = tmp_path / "songbai.env"
+    env1.write_text("DINGTALK_PUBLIC_URL=https://songbai.aijiaolian.com.cn\n")
+    env2 = tmp_path / "fuduoduo.env"
+    env2.write_text("DINGTALK_PUBLIC_URL=https://fuduoduo.aijiaolian.com.cn\n")
     data = {
         "project_name": "sales-agent",
         "tenants": [
-            {"id": "one", "name": "One", "api_port": 8101,
+            {"id": "songbai", "name": "Songbai", "api_port": 8101,
              "env_file": str(env1),
-             "domain": "dup.aijiaolian.com.cn",
-             "data_dir": "./data/one", "logs_dir": "./logs/one",
+             "domain": "songbai.aijiaolian.com.cn",
+             "backend": "172.25.186.210:8003",
+             "data_dir": "./data/songbai", "logs_dir": "./logs/songbai",
              "roles": ["api", "stream", "worker"]},
-            {"id": "two", "name": "Two", "api_port": 8102,
+            {"id": "fuduoduo", "name": "Fuduoduo", "api_port": 8102,
              "env_file": str(env2),
-             "domain": "dup.aijiaolian.com.cn",
-             "data_dir": "./data/two", "logs_dir": "./logs/two",
+             "domain": "fuduoduo.aijiaolian.com.cn",
+             "backend": "47.118.16.235:8103",
+             "data_dir": "./data/fuduoduo", "logs_dir": "./logs/fuduoduo",
              "roles": ["api", "stream", "worker"]},
         ],
     }
-    import subprocess, sys
-    import json
-    inv_path = tmp_path / "dup.json"
-    inv_path.write_text(json.dumps(data))
-    result = subprocess.run(
-        [sys.executable, str(SCRIPT), str(inv_path)],
-        capture_output=True, text=True, timeout=30,
-    )
-    assert result.returncode != 0, f"Expected non-zero exit, got {result.returncode}"
-    assert "重复" in (result.stderr + result.stdout)
+    out = mod.render_traefik_routes(data)
+
+    # Both tenants have sub-dingtalk routers
+    assert "    sales-agent-songbai-sub-dingtalk:" in out
+    assert "    sales-agent-fuduoduo-sub-dingtalk:" in out
+    # Both have correct backend URLs
+    assert 'url: "http://172.25.186.210:8003"' in out
+    assert 'url: "http://47.118.16.235:8103"' in out
+    # No catch-all for either (both are remote)
+    assert "sales-agent-songbai-backend" not in out
+    assert "sales-agent-fuduoduo-backend" not in out
+    # No duplicate rule assertion — different PathPrefix (/t/songbai/ vs /t/fuduoduo/)
 ```
 
 - [ ] **Step 2: Run tests — expect ALL 5 FAIL**

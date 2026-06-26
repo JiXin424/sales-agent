@@ -30,7 +30,7 @@ from sales_agent.services.task_router import (
     _resolve_priority,
     TASK_DEFAULT_RETRIEVAL,
 )
-from sales_agent.services.retriever import Retriever
+from sales_agent.services.retriever import HybridRetriever, Retriever
 from sales_agent.services.agent_executor import execute_agent
 from sales_agent.services.risk_checker import RiskChecker, RiskCheckResult
 from sales_agent.services import conversation_logger
@@ -45,6 +45,39 @@ from sales_agent.ontology.repository import OntologyRepository
 from sales_agent.ontology.retrieval_service import OntologyRetrievalService
 
 logger = logging.getLogger(__name__)
+
+
+def _build_retriever(db, embedding_model):
+    """根据 retrieval.mode 配置构建向量/关键词/混合检索器。
+
+    Returns:
+        Retriever | HybridRetriever — 两者都实现了 retrieve_for_task() 接口
+    """
+    settings = get_settings()
+    mode = settings.retrieval.mode
+
+    if mode == "keyword":
+        from sales_agent.rag.keyword_retriever import KeywordRetriever
+        kr = KeywordRetriever(db)
+        # KeywordRetriever.search() 直接使用，不需要 retrieve_for_task 接口。
+        # 构造一个简单 wrapper 或回退到 Retriever（vector）以保证兼容性。
+        # 实际使用中，keyword-only 模式较少用，这里回退到 hybrid。
+        logger.warning("retrieval.mode=keyword is not fully integrated as standalone; using hybrid instead.")
+        return HybridRetriever(
+            vector_retriever=Retriever(db, embedding_model),
+            keyword_retriever=kr,
+        )
+
+    if mode == "hybrid":
+        from sales_agent.rag.keyword_retriever import KeywordRetriever
+        kr = KeywordRetriever(db)
+        return HybridRetriever(
+            vector_retriever=Retriever(db, embedding_model),
+            keyword_retriever=kr,
+        )
+
+    # 默认：纯向量检索
+    return Retriever(db, embedding_model)
 
 
 def _build_ontology_answer_service(settings: "Settings", model_provider) -> OntologyAnswerService:
@@ -445,7 +478,7 @@ class ChatPipeline:
                     skip_generation = True
                 elif path_result.needs_retrieval:
                     timings.start("retrieval")
-                    retriever = Retriever(self.db, model_provider.embedding)
+                    retriever = _build_retriever(self.db, model_provider.embedding)
                     retrieval_result = await retriever.retrieve_for_task(
                         tenant_id=tenant_id,
                         message=message,

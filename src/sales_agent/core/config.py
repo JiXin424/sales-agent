@@ -50,6 +50,16 @@ class RetrievalConfig(BaseModel):
     min_score: float = 0.35
     chunk_size: int = 700
     chunk_overlap: int = 120
+    # 检索模式：vector | keyword | hybrid（默认 hybrid，RRF 融合）
+    mode: str = "hybrid"
+    # 关键词检索在 RRF 融合中的权重（0.0 ~ 1.0，默认 0.5）
+    keyword_weight: float = 0.5
+    # RRF 常数 k（越大排名差异越不明显，默认 60）
+    rrf_k: int = 60
+    # 同义词文件路径（相对项目根目录）
+    synonyms_path: str = "data/synonyms.json"
+    # MD 优化预处理开关（在 chunk 前调用 LLM 增强 MD，默认关闭）
+    md_optimization_enabled: bool = False
 
 
 class SourceDisplayConfig(BaseModel):
@@ -102,6 +112,10 @@ class OntologyConfig(BaseModel):
 
     knowledge_engine: str = "legacy_rag"  # legacy_rag | ontology_neo4j
     vector_fallback: str = "conservative"
+    # 视觉模型名称（用于图片/扫描件解读，默认为 qwen-vl-plus）
+    vision_model: str = "qwen-vl-plus"
+    # 是否在 ingestion 中开启图片视觉解读（默认关闭）
+    vision_enabled: bool = False
 
 
 class Neo4jConfig(BaseModel):

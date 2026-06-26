@@ -24,9 +24,10 @@ logger = logging.getLogger(__name__)
 class KnowledgeIngestor:
     """Orchestrate the full knowledge ingestion pipeline."""
 
-    def __init__(self, db: AsyncSession, embedding_model: EmbeddingModel) -> None:
+    def __init__(self, db: AsyncSession, embedding_model: EmbeddingModel, chat_model: Any = None) -> None:
         self.db = db
         self.embedding_model = embedding_model
+        self.chat_model = chat_model
         self.vector_store = VectorStore(db)
 
     # ------------------------------------------------------------------
@@ -40,6 +41,7 @@ class KnowledgeIngestor:
         rebuild_index: bool = False,
         chunk_size: int = 700,
         chunk_overlap: int = 120,
+        optimize_md: bool | None = None,
     ) -> dict[str, Any]:
         """Ingest all markdown files from a directory.
 
@@ -50,12 +52,20 @@ class KnowledgeIngestor:
                 before re-ingesting.
             chunk_size: Target chunk size in characters.
             chunk_overlap: Overlap between chunks in characters.
+            optimize_md: If *True*, run LLM-based MD optimization (add
+                frontmatter, search_keywords, retrieval anchors) before
+                chunking + embedding.  If *None* (default), read the value
+                from ``retrieval.md_optimization_enabled`` config.
 
         Returns:
             Dict with keys: ``documents_seen``, ``documents_ingested``,
             ``chunks_created``, ``warnings``, ``errors``.
         """
+        from sales_agent.core.config import get_settings
+
         directory = Path(directory)
+        if optimize_md is None:
+            optimize_md = get_settings().retrieval.md_optimization_enabled
         if not directory.is_dir():
             return {
                 "documents_seen": 0,
@@ -89,6 +99,7 @@ class KnowledgeIngestor:
                     rebuild_index=rebuild_index,
                     chunk_size=chunk_size,
                     chunk_overlap=chunk_overlap,
+                    optimize_md=optimize_md,
                 )
                 if result is not None:
                     documents_ingested += 1
@@ -117,21 +128,42 @@ class KnowledgeIngestor:
         rebuild_index: bool,
         chunk_size: int,
         chunk_overlap: int,
+        optimize_md: bool = False,
     ) -> int | None:
         """Ingest a single markdown file.
 
         Returns the number of chunks created, or *None* if the file was
         skipped.
         """
-        # 1. Parse the markdown file.
+        # 1. Read raw content.
+        raw_content = file_path.read_text(encoding="utf-8")
+
+        # 1b. MD optimization (LLM-enhanced preprocessing, optional)
+        if optimize_md and self.chat_model is not None:
+            try:
+                raw_content = await self._optimize_md(raw_content, file_path)
+            except Exception as exc:
+                logger.warning(
+                    "MD optimization failed for %s: %s, using original",
+                    file_path, exc,
+                )
+
+        # Write content to temp file for parse_markdown (handles optimized or original)
+        import tempfile
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", delete=False, encoding="utf-8",
+        ) as tmp:
+            tmp.write(raw_content)
+            tmp_path = Path(tmp.name)
         try:
-            doc = parse_markdown(file_path)
+            doc = parse_markdown(tmp_path)
         except ValueError as exc:
             logger.warning("Skipping %s: %s", file_path, exc)
             return None
+        finally:
+            tmp_path.unlink(missing_ok=True)
 
         # 2. Compute content hash.
-        raw_content = file_path.read_text(encoding="utf-8")
         content_hash = hashlib.sha256(raw_content.encode("utf-8")).hexdigest()
 
         # 3. Check if document already exists (by source_path + tenant).
@@ -202,6 +234,26 @@ class KnowledgeIngestor:
             "Ingested %s: %d chunks (doc_id=%s)", file_path, count, doc_id
         )
         return count
+
+    async def _optimize_md(self, raw_content: str, file_path: Path) -> str:
+        """Run LLM-based MD optimization before chunking.
+
+        Injects improved frontmatter, search_keywords, and retrieval anchors.
+        Requires ``self.chat_model`` to be set (passed via constructor).
+        Returns the optimized content, or the original on failure.
+        """
+        from sales_agent.rag.markdown_parser import _infer_source_type
+        hint = _infer_source_type(file_path)
+
+        from sales_agent.services.md_optimizer import MDOptimizer
+        optimizer = MDOptimizer(self.chat_model)
+        try:
+            optimized = await optimizer.optimize(raw_content, source_type_hint=hint)
+            logger.info("MD optimized for %s", file_path.name)
+            return optimized
+        except Exception as exc:
+            logger.warning("MD optimization failed: %s", exc)
+            return raw_content
 
     async def _upsert_document(
         self,

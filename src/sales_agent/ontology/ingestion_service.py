@@ -59,6 +59,9 @@ def _read_content(path: Path) -> str:
     openpyxl); legacy .doc is first converted to .docx via LibreOffice headless;
     .md/.txt are read as UTF-8.
 
+    Image files (jpg/png/webp/bmp/gif) are sent to a vision model for AI
+    interpretation when ``ontology.vision_enabled`` is True.
+
     Note: docling was the original choice but its torch-heavy dependency tree
     (2.8GB+) would not install in the target environment (resolver thrash). These
     lightweight libs cover text extraction for the LLM pipeline at a fraction of
@@ -80,7 +83,11 @@ def _read_content(path: Path) -> str:
             parts: list[str] = []
             with fitz.open(str(path)) as doc:
                 for page in doc:
-                    parts.append(page.get_text())
+                    page_text = page.get_text()
+                    if not page_text.strip():
+                        # 扫描件/图片页：提取页面为图片，交给视觉模型
+                        page_text = _pdf_page_to_vision(page, path.name)
+                    parts.append(page_text)
             return "\n".join(parts)
         except Exception:
             raise RuntimeError(f"pdf 解析失败：{path.name}")
@@ -110,10 +117,137 @@ def _read_content(path: Path) -> str:
             return "\n".join(texts)
         except Exception:
             raise RuntimeError(f"xlsx 解析失败：{path.name}")
+    # ── Image files (vision) ──
+    if ext in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}:
+        try:
+            return _image_to_text_via_vision(path)
+        except Exception:
+            raise RuntimeError(f"图片解析失败：{path.name}")
     return path.read_text(encoding="utf-8")
 
 
-class ExtractorProtocol(Protocol):
+def _pdf_page_to_vision(page, filename: str) -> str:
+    """Extract text from a scanned/image-based PDF page using vision model.
+
+    Renders the page to a PNG pixmap, encodes as base64, and sends to the
+    vision model. Returns the extracted text, or empty string if vision is
+    disabled or unavailable.
+    """
+    from sales_agent.core.config import get_settings
+    settings = get_settings()
+    if not settings.ontology.vision_enabled:
+        return f"[扫描页，视觉解读未开启] {filename}"
+
+    try:
+        import base64
+        pix = page.get_pixmap(dpi=150)
+        img_bytes = pix.tobytes("png")
+        img_b64 = base64.b64encode(img_bytes).decode("ascii")
+        data_url = f"data:image/png;base64,{img_b64}"
+
+        from sales_agent.ontology.img_parser import IMAGE_INTERPRET_PROMPT
+
+        # Use the page-level vision extraction via a lightweight sync wrapper.
+        # For production, this should be called from an async context; the
+        # synchronous fallback uses httpx directly.
+        import httpx
+        from sales_agent.core.config import get_settings as _gs
+        s = _gs()
+        api_key = _get_vision_api_key()
+        if not api_key:
+            return f"[视觉解读无 API Key] {filename}"
+
+        resp = httpx.post(
+            f"{s.model.base_url}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": s.ontology.vision_model,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": IMAGE_INTERPRET_PROMPT},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ],
+                }],
+                "temperature": 0.1,
+                "max_tokens": 1024,
+            },
+            timeout=60,
+        )
+        if resp.status_code == 200:
+            body = resp.json()
+            return body["choices"][0]["message"]["content"].strip()
+        return f"[视觉解读 HTTP {resp.status_code}] {filename}"
+    except Exception:
+        return f"[视觉解读失败] {filename}"
+
+
+def _image_to_text_via_vision(path: Path) -> str:
+    """Extract text from an image file using a vision model.
+
+    Config-driven: requires ``ontology.vision_enabled=True`` and a valid
+    API key. Falls back to a placeholder if vision is disabled.
+    """
+    from sales_agent.core.config import get_settings
+    settings = get_settings()
+    if not settings.ontology.vision_enabled:
+        return f"[图片视觉解读未开启: {path.name}]"
+
+    import httpx
+    from sales_agent.ontology.img_parser import (
+        IMAGE_INTERPRET_PROMPT,
+        get_image_mime_type,
+    )
+
+    api_key = _get_vision_api_key()
+    if not api_key:
+        return f"[视觉解读无 API Key: {path.name}]"
+
+    import base64
+    with open(path, "rb") as f:
+        img_b64 = base64.b64encode(f.read()).decode("ascii")
+
+    mime_type = get_image_mime_type(path)
+    data_url = f"data:{mime_type};base64,{img_b64}"
+
+    resp = httpx.post(
+        f"{settings.model.base_url}/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": settings.ontology.vision_model,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": IMAGE_INTERPRET_PROMPT},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            }],
+            "temperature": 0.1,
+            "max_tokens": 2048,
+        },
+        timeout=60,
+    )
+    if resp.status_code == 200:
+        body = resp.json()
+        content = body["choices"][0]["message"]["content"].strip()
+        return f"## 图片内容提取: {path.name}\n\n{content}"
+    raise RuntimeError(f"视觉解读 HTTP {resp.status_code}: {resp.text[:200]}")
+
+
+def _get_vision_api_key() -> str:
+    """Resolve the API key for vision model calls."""
+    import os
+    from sales_agent.core.config import get_settings
+    settings = get_settings()
+    # Check dedicated embedding API key first, then model API key
+    env_name = settings.model.embedding_api_key_env or settings.model.api_key_env
+    return os.getenv(env_name, "")
     async def extract_entities(self, content: str) -> list[EntityCandidate]: ...
     async def extract_facts(self, content: str, entities: list[EntityCandidate]) -> list[FactCandidate]: ...
 

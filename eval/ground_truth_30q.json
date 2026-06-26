@@ -1,0 +1,221 @@
+{
+  "_comment": "知识库检索评测集 — 30 题明确版。字段说明：",
+  "_q": "评测问题",
+  "_category": "类别（客户开拓/异议处理/案例复盘/竞品对比/产品定位/销售管理）",
+  "_expected_keywords": "top-5 检索结果中应包含的关键词（至少命中 50% 才算召回成功）",
+  "_task_type": "对应 task_router 的任务类型",
+  "_note": "考察点",
+
+  "questions": [
+    {
+      "q": "标准产品包一年多少钱？具体包含哪些功能模块？",
+      "category": "产品定位",
+      "expected_keywords": ["标准产品包", "5万", "AI教练", "知识库"],
+      "task_type": "knowledge_qa",
+      "note": "产品定价 + 功能组成"
+    },
+    {
+      "q": "你们的产品和传统 CRM 有什么区别？",
+      "category": "产品定位",
+      "expected_keywords": ["CRM", "差异化", "区别", "对比"],
+      "task_type": "knowledge_qa",
+      "note": "差异化定位"
+    },
+    {
+      "q": "客户说太贵了预算不够，销售应该怎么回应？",
+      "category": "异议处理",
+      "expected_keywords": ["嫌贵", "价格异议", "预算", "ROI", "价值"],
+      "task_type": "objection_handling",
+      "note": "价格异议处理话术"
+    },
+    {
+      "q": "怎么约到一直拒见的采购副总？电话打了十几次都不接。",
+      "category": "客户开拓",
+      "expected_keywords": ["约不到", "破冰", "拒见", "电话", "邀约"],
+      "task_type": "knowledge_qa",
+      "note": "约访破冰策略"
+    },
+    {
+      "q": "客户已经有供应商了，说不需要换，怎么切入？",
+      "category": "异议处理",
+      "expected_keywords": ["已有供应商", "竞品", "切入", "替代"],
+      "task_type": "objection_handling",
+      "note": "已有供应商的切入策略"
+    },
+    {
+      "q": "竞品比我们便宜 30%，怎么跟客户解释价格差异？",
+      "category": "竞品对比",
+      "expected_keywords": ["竞品", "便宜", "价格差异", "价值", "差异化"],
+      "task_type": "objection_handling",
+      "note": "价格劣势下的价值说服"
+    },
+    {
+      "q": "新销售入职三个月了还没开单，怎么辅导？",
+      "category": "销售管理",
+      "expected_keywords": ["新人", "开单", "成长", "辅导", "培训"],
+      "task_type": "general_sales_coaching",
+      "note": "新人辅导方法论"
+    },
+    {
+      "q": "你们公司有哪些成功的客户案例？给我几个数字。",
+      "category": "案例复盘",
+      "expected_keywords": ["案例", "客户", "效果", "提升"],
+      "task_type": "knowledge_qa",
+      "note": "客户案例召回"
+    },
+    {
+      "q": "销售都知道方法，但到了客户现场就做不到，怎么解决？",
+      "category": "销售管理",
+      "expected_keywords": ["知道做不到", "现场执行", "行为改变", "教练"],
+      "task_type": "general_sales_coaching",
+      "note": "知行合一问题"
+    },
+    {
+      "q": "福多多那个客户最后是怎么拿下的？",
+      "category": "案例复盘",
+      "expected_keywords": ["福多多", "案例", "采购副总", "投标"],
+      "task_type": "knowledge_qa",
+      "note": "福多多案例"
+    },
+    {
+      "q": "你们跟黑谷 AI 的销冠复制功能有什么本质区别？",
+      "category": "竞品对比",
+      "expected_keywords": ["黑谷", "销冠", "差异化", "竞品"],
+      "task_type": "knowledge_qa",
+      "note": "竞品差异化"
+    },
+    {
+      "q": "大客户销售周期长、决策链复杂，怎么推进？",
+      "category": "客户开拓",
+      "expected_keywords": ["大客户", "决策链", "推进", "周期"],
+      "task_type": "knowledge_qa",
+      "note": "大客户推进策略"
+    },
+    {
+      "q": "客户说先发资料看看然后就没下文了，怎么跟进？",
+      "category": "客户开拓",
+      "expected_keywords": ["发资料", "失联", "跟进", "不回复"],
+      "task_type": "knowledge_qa",
+      "note": "发资料后失联跟进"
+    },
+    {
+      "q": "销冠走了业绩对半砍，怎么把销冠经验留在公司？",
+      "category": "销售管理",
+      "expected_keywords": ["销冠", "经验沉淀", "知识", "组织化"],
+      "task_type": "general_sales_coaching",
+      "note": "销冠经验组织化"
+    },
+    {
+      "q": "冰山上和冰山下到底是什么？给销售讲清楚。",
+      "category": "产品定位",
+      "expected_keywords": ["冰山模型", "冰山上", "冰山下", "能力"],
+      "task_type": "knowledge_qa",
+      "note": "冰山模型解释"
+    },
+    {
+      "q": "培训花了几十万，销售回来还是老样子，怎么破？",
+      "category": "销售管理",
+      "expected_keywords": ["培训无效", "传统培训", "行为改变", "Learning Doing Being"],
+      "task_type": "general_sales_coaching",
+      "note": "传统培训效果问题"
+    },
+    {
+      "q": "客户要免费试用一下看看效果，给不给？怎么给？",
+      "category": "异议处理",
+      "expected_keywords": ["试用", "试点", "最小成交", "POC"],
+      "task_type": "objection_handling",
+      "note": "试用/试点策略"
+    },
+    {
+      "q": "怎样在 30 秒内让老板对我们产品感兴趣？",
+      "category": "客户开拓",
+      "expected_keywords": ["30秒", "开场", "破冰", "话术", "痛点"],
+      "task_type": "script_generation",
+      "note": "30 秒开场话术"
+    },
+    {
+      "q": "销售对 AI 工具有抵触情绪，觉得会被替代，怎么引导？",
+      "category": "销售管理",
+      "expected_keywords": ["抵触", "AI替代", "引导", "工具"],
+      "task_type": "emotional_support",
+      "note": "销售 AI 抵触情绪处理"
+    },
+    {
+      "q": "竞品在现场答辩时临时降价 40%，我们怎么应对？",
+      "category": "竞品对比",
+      "expected_keywords": ["竞品", "降价", "现场", "应对", "投标"],
+      "task_type": "objection_handling",
+      "note": "竞品现场降价应对"
+    },
+    {
+      "q": "怎么帮助销售从卖产品升级到卖解决方案？",
+      "category": "销售管理",
+      "expected_keywords": ["卖产品", "卖方案", "解决方案", "价值"],
+      "task_type": "general_sales_coaching",
+      "note": "销售能力升级"
+    },
+    {
+      "q": "有哪些常见的销售场景和对应的最佳应对话术？",
+      "category": "产品定位",
+      "expected_keywords": ["场景", "话术", "应对", "FAQ", "问答"],
+      "task_type": "knowledge_qa",
+      "note": "场景化话术库"
+    },
+    {
+      "q": "云客 AI 那种工作手机+风控的模式跟我们有什么不同？",
+      "category": "竞品对比",
+      "expected_keywords": ["云客", "工作手机", "风控", "竞品", "差异化"],
+      "task_type": "knowledge_qa",
+      "note": "云客竞品分析"
+    },
+    {
+      "q": "中间层的销售怎么突破？卡在一两百万上不去了。",
+      "category": "销售管理",
+      "expected_keywords": ["中间层", "突破", "瓶颈", "辅导"],
+      "task_type": "general_sales_coaching",
+      "note": "中间层突破"
+    },
+    {
+      "q": "投标现场 12 个评委只想要米面油那种死局，怎么翻盘？",
+      "category": "案例复盘",
+      "expected_keywords": ["投标", "评委", "翻盘", "案例"],
+      "task_type": "knowledge_qa",
+      "note": "投标死局翻盘案例"
+    },
+    {
+      "q": "客户说自己用 ChatGPT 就够了，干嘛要买你们？",
+      "category": "异议处理",
+      "expected_keywords": ["ChatGPT", "通用AI", "替代", "差异化"],
+      "task_type": "objection_handling",
+      "note": "通用AI替代异议"
+    },
+    {
+      "q": "怎么做好客户的需求挖掘？每次都问不到痛点。",
+      "category": "客户开拓",
+      "expected_keywords": ["需求挖掘", "痛点", "探需", "提问", "SPIN"],
+      "task_type": "general_sales_coaching",
+      "note": "需求挖掘方法论"
+    },
+    {
+      "q": "电话营销被客户直接挂断，怎么提高接通率和转化？",
+      "category": "客户开拓",
+      "expected_keywords": ["电话", "挂断", "接通率", "开场", "破冰"],
+      "task_type": "script_generation",
+      "note": "电话开场话术"
+    },
+    {
+      "q": "公司产品跟亿量科技的销售保 AICRM 有什么差异？",
+      "category": "竞品对比",
+      "expected_keywords": ["亿量", "AICRM", "销售保", "竞品", "差异化"],
+      "task_type": "knowledge_qa",
+      "note": "亿量竞品分析"
+    },
+    {
+      "q": "怎么给不同规模和预算的客户做分档报价？",
+      "category": "产品定位",
+      "expected_keywords": ["报价", "分档", "阶梯", "定价", "方案"],
+      "task_type": "knowledge_qa",
+      "note": "阶梯报价策略"
+    }
+  ]
+}

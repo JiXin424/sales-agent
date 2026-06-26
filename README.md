@@ -47,7 +47,7 @@ v0 是本地可运行原型，支持 **HTTP API** 和 **钉钉单聊** 两种接
 - Neo4j 存储图谱节点，PostgreSQL 仍存储入库任务与聊天日志。
 - 高风险事实进入人工复核（pending review），不进入用户可见回答。
 - Agents 知识页新增入库面板（状态 / 任务 / 冲突可视化 + 启动入库）。
-- 支持上传 `.md` / `.txt` / `.doc` / `.docx` / `.pdf` / `.pptx` / `.xlsx`；旧版 `.doc` 经 LibreOffice 无头转 `.docx` 后解析，`.xlsx` 用 openpyxl 按 sheet 抽取（含表名小标题）。
+- 支持上传 `.md` / `.txt` / `.doc` / `.docx` / `.pdf` / `.pptx` / `.xlsx` / `.jpg` / `.png` / `.webp` / `.bmp` / `.gif`；旧版 `.doc` 经 LibreOffice 无头转 `.docx` 后解析，`.xlsx` 用 openpyxl 按 sheet 抽取，图片用视觉 LLM 解读（需 `ontology.vision_enabled: true`）。
 - 「本体探索」调试页（`/agents/:id/ontology`）：三栏实时可视化检索过程 / 问答 / 喂给大模型的完整上下文（SSE 流式，复用图谱检索+回答引擎）。
 
 详见 [`docs/ontology-neo4j-ops.md`](docs/ontology-neo4j-ops.md)。
@@ -58,6 +58,32 @@ v0 是本地可运行原型，支持 **HTTP API** 和 **钉钉单聊** 两种接
 保留作回退与 CLI ingest/chat/eval 路径：Markdown 标准入库（含 YAML front matter）、
 按标题层级 / FAQ Q&A 对切分、pgvector 向量检索（强制 `tenant_id` 过滤）、跨租户泄漏拦截、
 条件检索（按任务类型决定是否调用，跳过时记录原因）。
+
+### 混合检索（Hybrid RRF，→ 默认 `retrieval.mode: hybrid`）
+
+**2026-06-26 新增**：默认启用向量 + 关键词双通道 RRF 融合检索，解决纯向量召回对中文口语化/模糊查询不稳定的问题。
+
+- **向量通道**：pgvector cosine similarity（已有，不变）
+- **关键词通道**（新增）：中文 n-gram tokenize + 同义词扩展（`data/synonyms.json`，340+ 条销售领域口语→标准名映射）+ 倒排索引（text/section_title/search_keywords 三字段）+ IDF 加权打分
+- **RRF 融合**：`score = vector_weight/(k+rank_v) + keyword_weight/(k+rank_k)`，参数可配（`keyword_weight=0.5, rrf_k=60`）
+- **同义词覆盖**：方法论(冰山模型/破框五步/GROW...)、场景(嫌贵/拖延/竞品应对...)、痛点(培训无效/CRM替代...)、竞品(黑谷/亿量/云客...)、产品(AI教练/标准包...) 等 8 大类
+- 检索模式可通过 `retrieval.mode: vector|keyword|hybrid` 切换
+
+### 检索召回率评测（→ `scripts/run_retrieval_eval.py`）
+
+**2026-06-26 新增**：对标 Ontology-Taishan 的 trace-driven 评测方法论。30 题明确版评测集覆盖 6 类销售场景（客户开拓/异议处理/案例复盘/竞品对比/产品定位/销售管理），计算 recall@k + MRR + 按类别汇总，支持 trace 落盘（`eval/rounds/traces/round_XX/`）+ Markdown round 报告。
+
+```bash
+python scripts/run_retrieval_eval.py --tenant taishan --mode hybrid --round 01
+```
+
+### MD 优化预处理（→ `retrieval.md_optimization_enabled: true`）
+
+**2026-06-26 新增**：入库前用 LLM 自动增强 Markdown 文档，注入完善的 YAML frontmatter、`search_keywords`（5-15 个检索关键词/口语化表达）、FAQ `## Q:` 标准化标记、正文首段检索锚点摘要。默认关闭，开启后向量+关键词双通道均受益于增强后的元数据。
+
+### 图片/扫描件 AI 视觉解读（→ `ontology.vision_enabled: true`）
+
+**2026-06-26 新增**：支持图片格式直接上传入库（jpg/png/webp/bmp/gif），用视觉 LLM（默认 qwen-vl-plus）将图片转为结构化文本描述后进入实体/事实抽取 → Neo4j 入库链路。同时 PDF 解析自动检测扫描件空白页并走视觉解读。默认关闭。
 
 ### 风险检查
 
@@ -307,6 +333,12 @@ sales-agent eval --tenant taishan --file eval/smoke_test.jsonl
 | `retrieval.min_score` | 最低相似度阈值 | 0.35 |
 | `retrieval.chunk_size` | 文本块大小（字） | 700 |
 | `retrieval.chunk_overlap` | 块重叠（字） | 120 |
+| `retrieval.mode` | 检索模式（vector/keyword/hybrid） | `hybrid` |
+| `retrieval.keyword_weight` | 关键词在 RRF 中的权重 | 0.5 |
+| `retrieval.rrf_k` | RRF 常数 k | 60 |
+| `retrieval.md_optimization_enabled` | MD 优化预处理开关 | `false` |
+| `ontology.vision_enabled` | 图片视觉解读开关 | `false` |
+| `ontology.vision_model` | 视觉模型 | `qwen-vl-plus` |
 | `conversation.history_turns` | 多轮历史轮数 | 4 |
 | `conversation.expire_after_hours` | 会话过期时间 | 8 |
 | `source_display.max_visible_sources` | 销售可见来源数 | 3 |

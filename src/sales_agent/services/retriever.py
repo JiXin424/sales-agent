@@ -1,4 +1,4 @@
-"""RAG 检索服务：基于 pgvector 的相似度检索，强制 tenant_id 过滤。"""
+"""RAG 检索服务：向量检索 + 关键词检索 + RRF 混合融合，强制 tenant_id 过滤。"""
 
 from __future__ import annotations
 
@@ -199,4 +199,165 @@ class Retriever:
             tenant_id, message, allowed_document_ids=allowed_document_ids
         )
         result.retrieval_latency_ms = (__import__("time").monotonic() - start) * 1000
+        return result
+
+
+# ── Hybrid Retriever (RRF) ─────────────────────────────────────────────
+
+
+class HybridRetriever:
+    """混合检索器：向量检索 + 关键词检索 → RRF 融合排序。
+
+    RRF (Reciprocal Rank Fusion) 将两种检索结果的排名合并为统一分数：
+
+        score(d) = vector_weight / (k + rank_vector)
+                 + keyword_weight / (k + rank_keyword)
+
+    其中 k 是常数（默认 60），用于平滑排名差异。
+
+    使用方式：::
+
+        hr = HybridRetriever(vector_retriever=retriever, keyword_retriever=kr)
+        result = await hr.retrieve(tenant_id, "客户嫌贵怎么办", top_k=5)
+    """
+
+    def __init__(
+        self,
+        vector_retriever: "Retriever",
+        keyword_retriever: Any,
+    ) -> None:
+        self.vector_retriever = vector_retriever
+        self.keyword_retriever = keyword_retriever
+        self.settings = get_settings()
+
+    async def retrieve(
+        self,
+        tenant_id: str,
+        query: str,
+        top_k: int | None = None,
+        min_score: float | None = None,
+        allowed_document_ids: set[str] | None = None,
+    ) -> RetrievalResult:
+        """执行混合检索（向量 + 关键词 RRF 融合）。
+
+        Args:
+            tenant_id: 租户 ID。
+            query: 检索查询文本。
+            top_k: 最终返回数量。
+            min_score: 最低 RRF 分数（暂未对 RRF 分数做阈值过滤）。
+            allowed_document_ids: Agent 知识作用域过滤。
+
+        Returns:
+            :class:`RetrievalResult`
+        """
+        top_k = top_k or self.settings.retrieval.top_k
+        rrf_k = self.settings.retrieval.rrf_k
+        keyword_weight = self.settings.retrieval.keyword_weight
+        vector_weight = 1.0 - keyword_weight
+
+        # 并行执行两种检索
+        import asyncio
+
+        vector_result: RetrievalResult | None = None
+        keyword_hits: list[Any] = []
+
+        async def _vector():
+            nonlocal vector_result
+            vector_result = await self.vector_retriever.retrieve(
+                tenant_id, query, top_k=max(top_k * 3, 30),
+                min_score=min_score,
+                allowed_document_ids=allowed_document_ids,
+            )
+
+        async def _keyword():
+            nonlocal keyword_hits
+            from sales_agent.rag.keyword_retriever import KeywordHit
+            keyword_hits = await self.keyword_retriever.search(
+                tenant_id, query, top_k=max(top_k * 3, 30),
+            )
+
+        await asyncio.gather(_vector(), _keyword())
+
+        # 构建 chunk_id → (score, source) 的 RRF 合并
+        # 使用 chunk_id 作为去重键
+        rrf_scores: dict[str, float] = {}
+        id_to_source: dict[str, RetrievalSource] = {}
+
+        # 向量结果 → RRF 分数
+        if vector_result and vector_result.success:
+            for rank, src in enumerate(vector_result.sources, start=1):
+                chunk_id = src.chunk_id
+                rrf_scores[chunk_id] = vector_weight / (rrf_k + rank)
+                id_to_source[chunk_id] = src
+
+        # 关键词结果 → RRF 分数
+        for rank, hit in enumerate(keyword_hits, start=1):
+            chunk_id = hit.chunk_id
+            kw_score = keyword_weight / (rrf_k + rank)
+            if chunk_id in rrf_scores:
+                rrf_scores[chunk_id] += kw_score
+            else:
+                rrf_scores[chunk_id] = kw_score
+                # 将 KeywordHit 转换为 RetrievalSource
+                id_to_source[chunk_id] = RetrievalSource(
+                    chunk_id=hit.chunk_id,
+                    document_id=hit.document_id,
+                    tenant_id=hit.tenant_id,
+                    title=hit.title,
+                    section_title=hit.section_title,
+                    text=hit.text,
+                    score=rrf_scores[chunk_id],  # 会更新
+                    source_type=(hit.metadata or {}).get("source_type", ""),
+                    metadata=hit.metadata,
+                )
+
+        # 按 RRF 分数排序
+        ranked = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+
+        sources = []
+        for chunk_id, rrf_score in ranked:
+            src = id_to_source.get(chunk_id)
+            if src is None:
+                continue
+            src.score = round(rrf_score, 6)
+            sources.append(src)
+
+        # Agent 知识作用域后过滤（已经在向量检索中做了，但 keyword 可能在作用域外）
+        if allowed_document_ids is not None:
+            sources = [s for s in sources if s.document_id in allowed_document_ids]
+
+        return RetrievalResult(
+            sources=sources,
+            query=query,
+            success=bool(sources) or (vector_result and vector_result.success),
+            degraded=not sources,
+        )
+
+    async def retrieve_for_task(
+        self,
+        tenant_id: str,
+        message: str,
+        task_type: str,
+        needs_retrieval: bool = True,
+        allowed_document_ids: set[str] | None = None,
+    ) -> RetrievalResult:
+        """根据任务类型条件触发混合检索。"""
+        if not needs_retrieval and task_type not in ("knowledge_qa",):
+            return RetrievalResult(
+                query=message,
+                success=True,
+                degraded=False,
+                skip_reason="task_does_not_need_enterprise_facts",
+            )
+
+        start = __import__("time").monotonic()
+        result = await self.retrieve(
+            tenant_id, message, allowed_document_ids=allowed_document_ids,
+        )
+        result.retrieval_latency_ms = (__import__("time").monotonic() - start) * 1000
+
+        if task_type == "knowledge_qa" and not result.has_results:
+            result.degraded = True
+            result.skip_reason = "knowledge_qa_no_results"
+
         return result

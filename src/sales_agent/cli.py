@@ -53,7 +53,7 @@ async def _ingest(tenant: str, path: str, rebuild: bool):
             provider = resolver.get_model_provider(tenant_info)
 
             # 导入
-            ingestor = KnowledgeIngestor(db=db, embedding_model=provider.embedding)
+            ingestor = KnowledgeIngestor(db=db, embedding_model=provider.embedding, chat_model=provider.chat)
             result = await ingestor.ingest_directory(
                 tenant_id=tenant,
                 directory=path,

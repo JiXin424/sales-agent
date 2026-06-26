@@ -92,7 +92,11 @@
       "Bash(python3 -c \"import yaml; d=yaml.safe_load\\(open\\('docker-compose.yml'\\)\\); print\\('YAML OK, services:', list\\(d.get\\('services',{}\\).keys\\(\\)\\)\\)\")",
       "Bash(bash -n scripts/bootstrap-new-master.sh)",
       "Bash(.venv/bin/pytest tests/unit/dingtalk/ -q)",
-      "Bash(python3 -c \"import yaml; print\\(list\\(yaml.safe_load\\(open\\('docker-compose.yml'\\)\\)['services'].keys\\(\\)\\)\\)\")"
+      "Bash(python3 -c \"import yaml; print\\(list\\(yaml.safe_load\\(open\\('docker-compose.yml'\\)\\)['services'].keys\\(\\)\\)\\)\")",
+      "Bash(curl -s -H 'Authorization: token __TRACKED_VAR__' __TRACKED_VAR__/branches?limit=50)",
+      "Bash(python3 -c \"import json,sys;d=json.load\\(sys.stdin\\);[print\\(b['name'],'protected=',b.get\\('protected'\\)\\) for b in d]\")",
+      "Bash(curl -s -X PATCH -H 'Authorization: token __TRACKED_VAR__' -H 'Content-Type: application/json' -d '{\"enable_force_push\": true}' __TRACKED_VAR__/branch_protections/main)",
+      "Bash(python3 -c \"import json,sys;d=json.load\\(sys.stdin\\);print\\('enable_force_push =',d.get\\('enable_force_push'\\)\\)\")"
     ]
   }
 }

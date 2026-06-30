@@ -45,6 +45,8 @@ class ChatGraphState(TypedDict, total=False):
     path_reason: str
 
     # === Retrieval ===
+    retrieval_path: str                    # "ontology" | "rag" | "skip"
+    retrieval_info: dict[str, Any]
     retrieval_result: Any
     sources: list[dict]
     skip_generation: bool

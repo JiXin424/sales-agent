@@ -1,0 +1,160 @@
+"""Retrieval router node for the ChatPipeline graph.
+
+Routes to one of three paths based on `select_retrieval_path`:
+  - "ontology": Delegate to the ontology retrieval subgraph (Plan B)
+  - "rag": Traditional vector/hybrid/keyword retrieval via existing services
+  - "skip": Bypass retrieval entirely (e.g. emotional support, script gen)
+
+The ontology path runs its own LLM calls internally and sets
+`skip_generation=True` -- the main `generate` node is bypassed.
+"""
+
+from __future__ import annotations
+
+import logging
+from langgraph.runtime import Runtime
+
+from sales_agent.graph.state import ChatGraphState
+from sales_agent.core.config import get_settings
+
+logger = logging.getLogger(__name__)
+
+
+async def retrieve_node(state: ChatGraphState, runtime: Runtime) -> dict:
+    """Execute retrieval based on the path selected by select_retrieval_path.
+
+    Called with state["retrieval_path"] already set by the conditional edge.
+
+    Args:
+        state: Current graph state.
+        runtime: LangGraph runtime with context (db, chat_model, embedding_model).
+
+    Returns:
+        Dict with retrieval results. May set `skip_generation=True` and
+        `answer_dict` if the ontology subgraph pre-computed the answer.
+    """
+    path = state.get("retrieval_path", "skip")
+    task_type = state.get("task_type", "knowledge_qa")
+    message = state["message"]
+    tenant_id = state["tenant_id"]
+    agent_id = state.get("agent_id")
+
+    # -- Path 1: Ontology Neo4j knowledge graph (subgraph) --
+    if path == "ontology":
+        return await _retrieve_via_ontology(state, runtime, tenant_id, agent_id, task_type, message)
+
+    # -- Path 2: Traditional RAG (vector/hybrid/keyword) --
+    if path == "rag":
+        return await _retrieve_via_rag(state, runtime, tenant_id, task_type, message)
+
+    # -- Path 3: Skip --
+    return {
+        "retrieval_info": {"called": False, "reason": "path_does_not_need_retrieval"},
+        "sources": [],
+        "skip_generation": False,
+    }
+
+
+async def _retrieve_via_ontology(
+    state: ChatGraphState,
+    runtime: Runtime,
+    tenant_id: str,
+    agent_id: str | None,
+    task_type: str,
+    message: str,
+) -> dict:
+    """Run the ontology retrieval subgraph, which handles everything internally:
+    extract terms -> graph query -> [vector fallback] -> compact -> generate answer.
+    """
+    from sales_agent.graph.retrieval.ontology_graph import build_ontology_retrieval_graph
+
+    subgraph_builder = build_ontology_retrieval_graph()
+    subgraph = subgraph_builder.compile()
+
+    sub_input = {
+        "question": message,
+        "tenant_id": tenant_id,
+        "agent_id": agent_id,
+        "task_type": task_type,
+    }
+
+    try:
+        sub_result = await subgraph.ainvoke(
+            sub_input,
+            context=runtime.context,
+        )
+    except Exception as e:
+        logger.warning("Ontology subgraph failed: %s, falling back", e)
+        return {
+            "retrieval_info": {"called": True, "provider": "ontology_neo4j", "error": str(e)},
+            "sources": [],
+            "skip_generation": False,
+            "answer_dict": None,
+        }
+
+    return {
+        "retrieval_info": {
+            "called": True,
+            "provider": "ontology_neo4j",
+            "vector_fallback_used": sub_result.get("vector_fallback_used", False),
+            "source_count": len(sub_result.get("sources", [])),
+        },
+        "sources": sub_result.get("sources", []),
+        "answer_dict": sub_result.get("answer"),       # <- pre-computed answer!
+        "skip_generation": True,                       # <- skip main generate node
+    }
+
+
+async def _retrieve_via_rag(
+    state: ChatGraphState,
+    runtime: Runtime,
+    tenant_id: str,
+    task_type: str,
+    message: str,
+) -> dict:
+    """Traditional vector/hybrid/keyword retrieval via existing Retriever services."""
+    db = runtime.context.get("db")
+    embedding_model = runtime.context.get("embedding_model")
+    settings = get_settings()
+    mode = settings.retrieval.mode
+
+    if db is None:
+        return {"sources": [], "retrieval_result": None, "skip_generation": False}
+
+    from sales_agent.services.retriever import Retriever, HybridRetriever
+    from sales_agent.rag.keyword_retriever import KeywordRetriever
+
+    if mode == "keyword":
+        kr = KeywordRetriever(db)
+        retriever = HybridRetriever(
+            vector_retriever=Retriever(db, embedding_model),
+            keyword_retriever=kr,
+        )
+    elif mode == "hybrid":
+        kr = KeywordRetriever(db)
+        retriever = HybridRetriever(
+            vector_retriever=Retriever(db, embedding_model),
+            keyword_retriever=kr,
+        )
+    else:
+        retriever = Retriever(db, embedding_model)
+
+    retrieval_result = await retriever.retrieve_for_task(
+        tenant_id=tenant_id,
+        message=message,
+        task_type=task_type,
+        needs_retrieval=True,
+    )
+
+    sources = [s.to_source_item() for s in (retrieval_result.sources if retrieval_result else [])]
+
+    return {
+        "retrieval_info": {
+            "called": True,
+            "top_k": settings.retrieval.top_k,
+            "source_count": len(sources),
+        },
+        "sources": sources,
+        "retrieval_result": retrieval_result,
+        "skip_generation": False,
+    }

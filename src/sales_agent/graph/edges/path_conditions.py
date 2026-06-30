@@ -26,3 +26,23 @@ def is_fast_command(state: ChatGraphState) -> str:
     if stripped in _RESET_COMMANDS:
         return "fast"
     return "normal"
+
+
+def select_retrieval_path(state: ChatGraphState) -> str:
+    """Select retrieval strategy based on task type and config.
+
+    Returns:
+        "ontology" -- Neo4j knowledge graph retrieval (Plan B subgraph)
+        "rag" -- Traditional vector/hybrid/keyword retrieval
+        "skip" -- No retrieval needed (emotional support, script gen, etc.)
+    """
+    if not state.get("needs_retrieval"):
+        return "skip"
+
+    from sales_agent.core.config import get_settings
+    settings = get_settings()
+
+    if settings.ontology.knowledge_engine == "ontology_neo4j" and settings.neo4j.uri:
+        return "ontology"
+
+    return "rag"

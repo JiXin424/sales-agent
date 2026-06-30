@@ -109,8 +109,13 @@ _RULE_TABLE: list[tuple[str, list[str], list[str]]] = [
     (
         KNOWLEDGE_QA,
         ["我们产品", "资料里", "有没有案例", "优势是什么", "产品特点", "案例",
-         "和竞品.*区别", "功能有哪些"],
-        [r"我们产品(的)?", r"资料里(有|说)", r"有没有案例", r"优势是什么", r"功能有哪些"],
+         "和竞品.*区别", "功能有哪些",
+         "包含什么", "包含哪些", "有什么", "有哪些", "是什么", "什么是",
+         "介绍一下", "介绍", "价格", "多少钱", "怎么收费", "赔付", "保障",
+         "承诺", "售后", "服务政策", "产品介绍", "公司介绍"],
+        [r"我们产品(的)?", r"资料里(有|说)", r"有没有案例", r"优势是什么", r"功能有哪些",
+         r"包含(什么|哪些)", r"有(什么|哪些)", r"什么是", r"介绍一下",
+         r"(价格|多少钱|怎么收费)", r"(赔付|保障|承诺|售后)(政策|标准)?", r"公司介绍"],
     ),
     (
         EMOTIONAL_SUPPORT,
@@ -183,10 +188,10 @@ def _match_rules(message: str) -> list[tuple[str, float]]:
 
 # --- 多任务命中优先级 ---
 _PRIORITY_ORDER = [
-    CONVERSATION_REVIEW,       # 1. 复盘优先
-    CONVERSATION_SCORING,      # 2. 对话评分（与复盘相关但更具体）
-    VISIT_PREPARATION,         # 3. 访前准备（明确的工作流请求）
-    POST_VISIT_REVIEW,         # 4. 访后复盘（机会推进卡）
+    POST_VISIT_REVIEW,         # 1. 访后复盘（机会推进卡）— 最具体的工作流请求
+    VISIT_PREPARATION,         # 2. 访前准备（明确的工作流请求）
+    CONVERSATION_REVIEW,       # 3. 复盘（通用复盘）
+    CONVERSATION_SCORING,      # 4. 对话评分（与复盘相关但更具体）
     FOLLOW_UP_PLANNING,        # 5. 跟进计划
     CUSTOMER_CONTEXT_SUMMARY,  # 6. 客户上下文整理
     DEAL_ADVANCEMENT,          # 7. 成交推进

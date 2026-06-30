@@ -1,0 +1,91 @@
+name: eval
+on:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: '要测试的模型（逗号分隔，或 "all"）'
+        default: 'all'
+  pull_request:
+    paths:
+      - 'src/sales_agent/services/**'
+      - 'src/sales_agent/llm/**'
+      - 'src/sales_agent/api/**'
+      - 'models.json'
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: sales_agent
+          POSTGRES_USER: sales_agent
+          POSTGRES_PASSWORD: sales_agent_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[dev]" 2>/dev/null || pip install -e .
+
+      - name: Run migrations
+        env:
+          DATABASE_URL: postgresql+asyncpg://sales_agent:sales_agent_dev@localhost:5432/sales_agent
+        run: |
+          alembic upgrade head || echo "[WARN] Migration skipped (may need DB setup)"
+
+      - name: Start app
+        env:
+          ALIYUN_API_KEY: ${{ secrets.ALIYUN_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          MODEL_API_KEY: ${{ secrets.ALIYUN_API_KEY }}
+          MODEL_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+          MODEL_CHAT_MODEL: qwen-plus
+          MODEL_EMBEDDING_MODEL: text-embedding-v3
+          DATABASE_URL: postgresql+asyncpg://sales_agent:sales_agent_dev@localhost:5432/sales_agent
+          DEPLOYMENT_MODE: dedicated
+          TENANT_ID: taishan
+          TENANT_NAME: eval
+        run: |
+          python -m uvicorn sales_agent.main:app --host 0.0.0.0 --port 8000 &
+          # Wait for app to be ready
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:8000/health > /dev/null 2>&1; then
+              echo "App is ready"
+              break
+            fi
+            echo "Waiting for app... ($i/30)"
+            sleep 2
+          done
+
+      - name: Run eval
+        run: |
+          python eval/run_conversation_eval.py \
+            --app-url http://localhost:8000 \
+            --models "${{ inputs.models || 'all' }}" \
+            --concurrency 2 \
+            --output-dir eval/results
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-results
+          path: eval/results/

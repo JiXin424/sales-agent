@@ -1,0 +1,44 @@
+{
+  "_comment": "模型配置文件 — 支持多模型、多 API。api_key_env 存储环境变量名，不存密钥值，可安全提交 git。",
+  "_usage": "评估脚本和 app 共用此配置。app 启动时使用 default_model，评估脚本可遍历所有模型。",
+
+  "default_model": "qwen-plus",
+
+  "models": {
+    "qwen-plus": {
+      "provider": "aliyun",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "api_key_env": "ALIYUN_API_KEY",
+      "embedding_model": "text-embedding-v3",
+      "embedding_base_url": "",
+      "embedding_api_key_env": "",
+      "temperature": 0.3,
+      "timeout_seconds": 30,
+      "max_retries": 2
+    },
+
+    "deepseek-chat": {
+      "provider": "deepseek",
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "embedding_model": "text-embedding-v3",
+      "embedding_base_url": "",
+      "embedding_api_key_env": "",
+      "temperature": 0.3,
+      "timeout_seconds": 30,
+      "max_retries": 2
+    },
+
+    "gpt-4o": {
+      "provider": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "embedding_model": "text-embedding-3-small",
+      "embedding_base_url": "",
+      "embedding_api_key_env": "",
+      "temperature": 0.3,
+      "timeout_seconds": 30,
+      "max_retries": 2
+    }
+  }
+}

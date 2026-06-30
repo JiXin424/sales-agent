@@ -23,7 +23,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sales_agent.models.document import DocumentChunk
+from sales_agent.models.document import DocumentChunk, Document
 
 logger = logging.getLogger(__name__)
 
@@ -252,12 +252,21 @@ class KeywordRetriever:
         索引缓存在 ``self._index_cache[tenant_id]`` 中。
         """
         stmt = (
-            select(DocumentChunk)
+            select(
+                DocumentChunk.id,
+                DocumentChunk.tenant_id,
+                DocumentChunk.document_id,
+                DocumentChunk.text,
+                DocumentChunk.section_title,
+                DocumentChunk.metadata_json,
+                Document.title.label("doc_title"),
+            )
+            .join(Document, DocumentChunk.document_id == Document.id)
             .where(DocumentChunk.tenant_id == tenant_id)
             .order_by(DocumentChunk.id)
         )
         result = await self.db.execute(stmt)
-        rows = result.scalars().all()
+        rows = result.all()
 
         indexed: list[_IndexedChunk] = []
         corpus_texts: list[str] = []
@@ -280,7 +289,7 @@ class KeywordRetriever:
             idx_chunk = _IndexedChunk(
                 chunk_id=row.id,
                 document_id=row.document_id,
-                title=row.title or "",
+                title=row.doc_title or "",
                 section_title=row.section_title or "",
                 text=row.text or "",
                 search_keywords=search_kws,

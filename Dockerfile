@@ -48,6 +48,7 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 # 复制源码（纯代码改动只从这层开始失效，跳过上面的依赖安装层）
 COPY src/ ./src/
+COPY models.json ./
 COPY alembic.ini ./
 COPY config/ ./config/
 COPY scripts/ ./scripts/

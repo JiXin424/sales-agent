@@ -86,7 +86,43 @@ class TenantRuntime:
 
         # 构建 ModelProvider（支持独立 embedding provider）
         model_provider = None
-        if api_key and base_url:
+
+        # --- 优先使用 models.json（如果存在）---
+        from sales_agent.core.model_registry import ModelRegistry
+
+        _registry = ModelRegistry.load()
+        if _registry is not None:
+            _entry = _registry.get()  # default model
+            if _entry and _entry.api_key and _entry.base_url:
+                model_provider = ModelProvider(
+                    chat=OpenAICompatibleChat(
+                        api_key=_entry.api_key,
+                        base_url=_entry.base_url,
+                        model=_entry.chat_model,
+                        temperature=_entry.temperature,
+                        timeout_seconds=_entry.timeout_seconds,
+                        max_retries=_entry.max_retries,
+                    ),
+                    embedding=OpenAICompatibleEmbedding(
+                        api_key=_entry.embedding_api_key,
+                        base_url=_entry.embedding_base_url,
+                        model=_entry.embedding_model,
+                        timeout_seconds=_entry.timeout_seconds,
+                        max_retries=_entry.max_retries,
+                    ),
+                )
+                # 用 models.json 的值覆盖 env var 读到的值
+                chat_model = _entry.chat_model
+                embedding_model = _entry.embedding_model
+                base_url = _entry.base_url
+                provider = _entry.provider
+                logger.info(
+                    "ModelProvider built from models.json: default_model=%s, chat=%s",
+                    _registry.default_model, _entry.chat_model,
+                )
+
+        # --- 回退：env var 方式（models.json 不存在或加载失败）---
+        if model_provider is None and api_key and base_url:
             # Embedding 可使用独立的 base_url 和 api_key
             embedding_base_url = os.environ.get("EMBEDDING_BASE_URL", "") or base_url
             embedding_api_key_env = os.environ.get("EMBEDDING_API_KEY_REF", "") or "EMBEDDING_API_KEY"

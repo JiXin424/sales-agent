@@ -121,6 +121,8 @@ class PipelineResult:
     fast_reply: str | None = None
     # Agent 运行追踪 ID
     run_id: str | None = None
+    # Token 用量（prompt_tokens, completion_tokens, total_tokens）
+    usage: dict[str, int] = field(default_factory=dict)
 
 
 class _ProcessingNoticeGuard:
@@ -189,6 +191,7 @@ class ChatPipeline:
         channel: str = "local",
         reply_fn: Callable[[str], Awaitable[None]] | None = None,
         agent_id: str | None = None,
+        model: str | None = None,
     ) -> PipelineResult:
         """执行 Chat 管道。
 
@@ -257,6 +260,42 @@ class ChatPipeline:
         tenant_config = tenant_info.get("config", {})
         model_provider = resolver.get_model_provider(tenant_info)
         timings.end("tenant_resolve")
+
+        # =============================================
+        # 3b. 模型覆盖（可选）— 评估脚本用此切换模型
+        # =============================================
+        runtime = get_tenant_runtime()
+        chat_model_override = None
+        if model and model != runtime.chat_model:
+            from sales_agent.core.model_registry import ModelRegistry
+            _registry = ModelRegistry.load()
+            if _registry:
+                _entry = _registry.get(model)
+                if _entry and _entry.api_key:
+                    from sales_agent.llm import OpenAICompatibleChat as _Chat
+                    chat_model_override = _Chat(
+                        api_key=_entry.api_key,
+                        base_url=_entry.base_url,
+                        model=_entry.chat_model,
+                        temperature=_entry.temperature,
+                        timeout_seconds=_entry.timeout_seconds,
+                        max_retries=_entry.max_retries,
+                    )
+                    logger.info(
+                        "Model override: %s (base_url=%s) for request",
+                        model, _entry.base_url,
+                    )
+                else:
+                    logger.warning(
+                        "Model override %r not found or missing API key, using default", model,
+                    )
+            else:
+                logger.warning("models.json not found, model override disabled")
+
+        # 决定本次请求实际使用的 chat model
+        _effective_chat = chat_model_override if chat_model_override else model_provider.chat
+        # 初始化 token 用量（后续在主生成阶段覆盖）
+        _main_usage: dict[str, int] = {}
 
         # 3b. Agent 解析（向后兼容：agent_id 为 None 时回退到 tenant 默认 Agent）
         resolved_agent_id: str | None = agent_id
@@ -387,7 +426,7 @@ class ChatPipeline:
             timings.start("routing")
             route_result = await route_task(
                 message=message,
-                chat_model=model_provider.chat,
+                chat_model=_effective_chat,
                 db=self.db,
                 tenant_id=tenant_id,
                 agent_id=resolved_agent_id,
@@ -622,7 +661,7 @@ class ChatPipeline:
                         exec_context["coach_guidance"] = coach_guidance_text
 
                     answer_dict = await execute_agent(
-                        chat_model=model_provider.chat,
+                        chat_model=_effective_chat,
                         task_type=task_type,
                         message=message,
                         context=exec_context,
@@ -638,6 +677,9 @@ class ChatPipeline:
                     answer_dict = normalize_answer(task_type, answer_dict)
                     timings.end("generation")
                     await tracer.record_step("generation", latency_ms=int(timings.stages.get("generation", 0)))
+
+                    # 采集主生成阶段的 token 用量（在风险检查前保存，避免被覆盖）
+                    _main_usage = getattr(_effective_chat, "last_usage", {}) or {}
 
                 # =============================================
                 # 11. 风险检查（分级）
@@ -675,7 +717,7 @@ class ChatPipeline:
                         llm_risk = await rule_checker.check_llm_risk(
                             message=message,
                             answer_text=answer_text,
-                            chat_model=model_provider.chat,
+                            chat_model=_effective_chat,
                             risk_prompt=risk_prompt,
                         )
                         risk_result = _merge_risk_results(risk_result, llm_risk)
@@ -764,6 +806,7 @@ class ChatPipeline:
                 timings=timings,
                 conversation_id=conversation_id,
                 run_id=tracer.run_id,
+                usage=_main_usage,
             )
 
         except Exception as exc:

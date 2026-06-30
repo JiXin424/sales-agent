@@ -40,6 +40,8 @@ class OpenAICompatibleChat(ChatModel):
             timeout=float(timeout_seconds),
             max_retries=max_retries,
         )
+        # 最近一次 generate() 调用的 token 用量
+        self.last_usage: dict[str, int] = {}
 
     async def generate(
         self,
@@ -64,6 +66,13 @@ class OpenAICompatibleChat(ChatModel):
         for attempt in range(self._client.max_retries + 1):
             try:
                 response = await self._client.chat.completions.create(**kwargs)
+                # 记录 token 用量
+                if response.usage:
+                    self.last_usage = {
+                        "prompt_tokens": response.usage.prompt_tokens or 0,
+                        "completion_tokens": response.usage.completion_tokens or 0,
+                        "total_tokens": response.usage.total_tokens or 0,
+                    }
                 content = response.choices[0].message.content
                 if content is None:
                     raise ModelFailedError("Model returned empty content")

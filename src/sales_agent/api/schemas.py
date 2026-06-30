@@ -124,6 +124,7 @@ class ChatRequest(BaseModel):
     channel: str = "local"
     conversation_id: str | None = None
     agent_id: str | None = None  # Agent 作用域；None 时回退到 tenant 默认 Agent
+    model: str | None = None  # 模型名（可选，覆盖 models.json 的 default_model）
     conversation_options: ConversationOptions = Field(default_factory=ConversationOptions)
     context: RequestContext = Field(default_factory=RequestContext)
 
@@ -171,6 +172,8 @@ class DebugInfo(BaseModel):
     stage_latency_ms: dict[str, int] = Field(default_factory=dict)
     llm_calls: dict[str, bool] = Field(default_factory=dict)
     retrieval_info: dict[str, Any] = Field(default_factory=dict)
+    # Token 用量
+    usage: dict[str, int] = Field(default_factory=dict)
 
 
 class ChatResponse(BaseModel):

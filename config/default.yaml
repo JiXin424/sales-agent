@@ -40,8 +40,8 @@ model:
   chat_model: "qwen-plus"
   embedding_model: "text-embedding-v3"
   temperature: 0.3
-  timeout_seconds: 30
-  max_retries: 2
+  timeout_seconds: 120
+  max_retries: 3
 
 retrieval:
   top_k: 5

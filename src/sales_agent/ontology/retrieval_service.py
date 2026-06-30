@@ -1,10 +1,37 @@
 from __future__ import annotations
 
+import re
 import time
 from typing import Protocol
 
 from sales_agent.llm.base import EmbeddingModel
 from sales_agent.ontology.schemas import GraphEvidence
+
+# ── 关键词提取：把自然语言问句转为实体搜索词 ──────────────────────────
+# 中文问句包含大量功能词（"包含什么""有哪些""是什么"等），直接用作
+# Cypher CONTAINS 子串匹配几乎不可能命中实体名。这里用正则剥离疑问/
+# 功能词，将剩余实词作为搜索词数组传入 Neo4j，配合 any(term IN ...)
+# 实现多词 OR 匹配。
+_QUESTION_STRIP_RE = re.compile(
+    r"包含什么|有哪些|是什么|什么样|怎么样|如何|"
+    r"为什么|会不会|是不是|能不能|有没有|有什么|"
+    r"请告诉|请问|麻烦|帮我|"
+    r"[什么哪些怎几]|"
+    r"[的吗呢吧啊呀][？?]?$|"
+    r"[的了么着过]"
+)
+
+
+def _extract_search_terms(question: str) -> list[str]:
+    """从自然语言问句中提取实体搜索关键词。
+
+    去除疑问词和功能词后，按空白/标点切分，返回 >=2 字符的独立词条。
+    若提取后无有效词条，返回原始问题作为兜底。
+    """
+    text = question.rstrip("？?!!。").strip()
+    text = _QUESTION_STRIP_RE.sub(" ", text)
+    terms = [t.strip() for t in re.split(r"[\s,，、。．.；;：:和与及]+", text) if len(t.strip()) >= 2]
+    return list(dict.fromkeys(terms)) if terms else [question]
 
 
 class RepositoryProtocol(Protocol):
@@ -20,10 +47,11 @@ class OntologyRetrievalService:
 
     async def retrieve(self, *, tenant_id: str, agent_id: str | None, question: str) -> GraphEvidence:
         started = time.monotonic()
+        search_terms = _extract_search_terms(question)
         rows = await self.repository.retrieve_by_query({
             "tenant_id": tenant_id,
             "agent_id": agent_id,
-            "query": question,
+            "search_terms": search_terms,
             "limit": self.limit,
         })
         vector_used = False

@@ -22,16 +22,27 @@ from urllib.parse import urlparse
 VALID_ROLES = {"api", "stream", "worker"}
 
 
-def _neo4j_enabled(data: dict[str, Any]) -> bool:
-    """inventory 显式开关优先；缺省时扫描租户 env 自动检测。"""
-    cfg = data.get("neo4j") or {}
-    if "enabled" in cfg:
-        return bool(cfg["enabled"])
+def _tenant_knowledge_engine(tenant: dict[str, Any]) -> str:
+    """返回租户的知识引擎类型：ontology_neo4j | legacy_rag。
+
+    优先从 inventory 的 knowledge_engine 字段读取；缺省时检查 env_file。
+    """
+    ke = tenant.get("knowledge_engine", "")
+    if ke:
+        return ke
+    env_path = Path(tenant.get("env_file", "")).resolve()
+    if _env_has(env_path, "KNOWLEDGE_ENGINE", "ontology_neo4j"):
+        return "ontology_neo4j"
+    return "legacy_rag"
+
+
+def _neo4j_tenant_ids(data: dict[str, Any]) -> set[str]:
+    """返回需要 Neo4j 的租户 ID 集合。"""
+    ids: set[str] = set()
     for tenant in data.get("tenants", []):
-        env_path = Path(tenant.get("env_file", "")).resolve()
-        if _env_has(env_path, "KNOWLEDGE_ENGINE", "ontology_neo4j"):
-            return True
-    return False
+        if _tenant_knowledge_engine(tenant) == "ontology_neo4j":
+            ids.add(tenant["id"])
+    return ids
 
 
 # 共享 Traefik 动态配置目录 — directory provider 会 watch 此目录所有 .yml
@@ -215,10 +226,13 @@ def render_compose(data: dict[str, Any]) -> str:
     ]
 
     database_url = f"postgresql+asyncpg://{db_user}:{db_password}@postgres:5432/{db_name}"
-    neo4j_on = _neo4j_enabled(data)
+    neo4j_tenants = _neo4j_tenant_ids(data)
+    neo4j_on = bool(neo4j_tenants)
     shared_network = (data.get("traefik") or {}).get("shared_network", "")
     for tenant in data["tenants"]:
-        lines.extend(render_tenant_services(tenant, image, database_url, neo4j_on, shared_network))
+        tenant_neo4j = tenant["id"] in neo4j_tenants
+        knowledge_engine = _tenant_knowledge_engine(tenant)
+        lines.extend(render_tenant_services(tenant, image, database_url, tenant_neo4j, knowledge_engine, shared_network))
 
     if neo4j_on:
         neo4j_cfg = data.get("neo4j") or {}
@@ -265,7 +279,7 @@ def render_compose(data: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def render_tenant_services(tenant: dict[str, Any], image: str, database_url: str, neo4j_enabled: bool = False, shared_network: str = "") -> list[str]:
+def render_tenant_services(tenant: dict[str, Any], image: str, database_url: str, neo4j_enabled: bool = False, knowledge_engine: str = "legacy_rag", shared_network: str = "") -> list[str]:
     tenant_id = tenant["id"]
     env_file = tenant["env_file"]
     domain = tenant.get("domain", "")
@@ -286,6 +300,7 @@ def render_tenant_services(tenant: dict[str, Any], image: str, database_url: str
                 "    environment:",
                 "      PROCESS_ROLE: api",
                 f"      DATABASE_URL: {database_url}",
+                f"      KNOWLEDGE_ENGINE: {knowledge_engine}",
             ]
         )
         if domain:
@@ -354,6 +369,7 @@ def render_tenant_services(tenant: dict[str, Any], image: str, database_url: str
                 "    environment:",
                 "      PROCESS_ROLE: stream",
                 f"      DATABASE_URL: {database_url}",
+                f"      KNOWLEDGE_ENGINE: {knowledge_engine}",
             ]
         )
         if domain:
@@ -391,6 +407,7 @@ def render_tenant_services(tenant: dict[str, Any], image: str, database_url: str
                 "    environment:",
                 "      PROCESS_ROLE: worker",
                 f"      DATABASE_URL: {database_url}",
+                f"      KNOWLEDGE_ENGINE: {knowledge_engine}",
             ]
         )
         if domain:

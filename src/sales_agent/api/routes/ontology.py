@@ -35,10 +35,14 @@ _logger = logging.getLogger(__name__)
 # 导致任务静默消失、job 永远卡 running。任务完成后由 done 回调自动移除。
 _running_ingest_tasks: set = set()
 
+# 并发入库信号量：限制同时运行的入库任务数，防止打满 DB 连接池和 LLM API 限流。
+# 每个入库任务至少占用 1 个 DB 连接 + 多次 LLM 调用。
+_ingest_semaphore = asyncio.Semaphore(3)
+
 # 单个文件入库的总超时（秒）：不管卡在 LLM / embedding / neo4j / 解析哪一步，
 # 超过这个时间就 cancel 并标 job failed，避免永远卡 running。
-# 单文件实体抽取 + 分批事实抽取（多次 LLM）正常 1-3 分钟，5 分钟足够兜底。
-INGEST_JOB_TIMEOUT_SECONDS = 300
+# 大文件（50KB+）实体抽取 + 分批事实抽取（多次 LLM）可能到 15-20 分钟。
+INGEST_JOB_TIMEOUT_SECONDS = 1200
 
 
 def _on_ingest_task_done(task: asyncio.Task) -> None:
@@ -138,37 +142,9 @@ async def _run_ingest_background(
     # 整个 body 包进 try：任何阶段（含 session 创建 / TenantResolver / 抽取）失败都把 job 标 failed，
     # 不再静默死（asyncio.create_task 未捕获的异常会被吞，job 永远卡 running）。
     try:
-        from sales_agent.services.tenant_resolver import TenantResolver
-        from sales_agent.core.database import get_session_factory
-        from sales_agent.ontology.runner import build_ingestion_service
-
-        session_factory = get_session_factory()
-        async with session_factory() as bg_db:
-            resolver = TenantResolver(bg_db)
-            tenant_info = await resolver.resolve(tenant_id)
-            model_provider = resolver.get_model_provider(tenant_info)
-
-            async def _on_progress(stage: str, stats: dict):
-                await progress_bus.publish(job_id, {"stage": stage, "status": "running", "stats": stats})
-
-            settings = get_settings()
-            service = build_ingestion_service(bg_db, settings, model_provider)
-            job, stats = await asyncio.wait_for(
-                service.ingest_paths(
-                    tenant_id=tenant_id,
-                    agent_id=agent_id,
-                    paths=[path],
-                    progress_callback=_on_progress,
-                ),
-                timeout=INGEST_JOB_TIMEOUT_SECONDS,
-            )
-            await bg_db.commit()
-            await progress_bus.publish(job_id, {
-                "stage": job.stage,
-                "status": job.status,
-                "stats": stats.to_metadata(),
-            })
-            return  # 成功，直接返回
+        # 先获取并发信号量，避免同时跑太多入库任务打满 DB 连接池 / LLM API 限流
+        async with _ingest_semaphore:
+            await _do_ingest(job_id, tenant_id, agent_id, path)
     except Exception as exc:
         # 超时给个清楚点的提示（asyncio.TimeoutError 的 str() 是空的）
         is_timeout = isinstance(exc, asyncio.TimeoutError)
@@ -189,6 +165,44 @@ async def _run_ingest_background(
             "status": "failed",
             "error_summary": str(exc)[:500],
             "stats": {},
+        })
+
+
+async def _do_ingest(
+    job_id: str,
+    tenant_id: str,
+    agent_id: str,
+    path: Path,
+) -> None:
+    from sales_agent.services.tenant_resolver import TenantResolver
+    from sales_agent.core.database import get_session_factory
+    from sales_agent.ontology.runner import build_ingestion_service
+
+    session_factory = get_session_factory()
+    async with session_factory() as bg_db:
+        resolver = TenantResolver(bg_db)
+        tenant_info = await resolver.resolve(tenant_id)
+        model_provider = resolver.get_model_provider(tenant_info)
+
+        async def _on_progress(stage: str, stats: dict):
+            await progress_bus.publish(job_id, {"stage": stage, "status": "running", "stats": stats})
+
+        settings = get_settings()
+        service = build_ingestion_service(bg_db, settings, model_provider)
+        job, stats = await asyncio.wait_for(
+            service.ingest_paths(
+                tenant_id=tenant_id,
+                agent_id=agent_id,
+                paths=[path],
+                progress_callback=_on_progress,
+            ),
+            timeout=INGEST_JOB_TIMEOUT_SECONDS,
+        )
+        await bg_db.commit()
+        await progress_bus.publish(job_id, {
+            "stage": job.stage,
+            "status": job.status,
+            "stats": stats.to_metadata(),
         })
 
 

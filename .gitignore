@@ -46,6 +46,10 @@ data/agents/
 logs/
 *.log
 
+# Eval results (generated)
+eval/results/*
+!eval/results/.gitkeep
+
 # OS
 .DS_Store
 Thumbs.db

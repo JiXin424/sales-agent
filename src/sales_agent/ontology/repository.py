@@ -85,7 +85,8 @@ def retrieval_statement() -> str:
     WHERE e.tenant_id = $tenant_id
       AND e.status = 'active'
       AND ($agent_id IS NULL OR e.agent_id IS NULL OR e.agent_id = $agent_id)
-      AND (toLower(e.name) CONTAINS toLower($query) OR e.aliases_text CONTAINS $query)
+      AND (any(term IN $search_terms WHERE toLower(e.name) CONTAINS toLower(term))
+           OR any(term IN $search_terms WHERE e.aliases_text CONTAINS term))
     MATCH (e)-[:SUBJECT_OF]->(f:Fact)
     WHERE f.status = 'active'
       AND ($agent_id IS NULL OR f.agent_id IS NULL OR f.agent_id = $agent_id)

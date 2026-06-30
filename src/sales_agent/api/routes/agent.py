@@ -43,6 +43,7 @@ async def chat(req: ChatRequest, db: DbSession) -> ChatResponse:
             context=req.context.model_dump() if req.context else None,
             channel=req.channel,
             agent_id=req.agent_id,
+            model=req.model,
         )
 
         # 构建响应
@@ -76,6 +77,7 @@ async def chat(req: ChatRequest, db: DbSession) -> ChatResponse:
                     "risk": result.path_result.needs_llm_risk_check,
                     "summary": False,
                 },
+                usage=result.usage or {},
             ).model_dump(),
         )
 

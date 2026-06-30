@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from langgraph.graph import StateGraph, START, END
 from sales_agent.graph.state import ChatGraphState
+from sales_agent.graph.nodes.fast_commands import fast_command_node
+from sales_agent.graph.edges.path_conditions import is_fast_command
 
 
 def build_chat_graph() -> StateGraph:
@@ -22,9 +24,15 @@ def build_chat_graph() -> StateGraph:
     """
     builder = StateGraph(ChatGraphState)
 
-    # Phase 1: register nodes (stubs that pass-through for now)
+    # --- Nodes ---
+    builder.add_node("fast_reply", fast_command_node)
 
-    # Phase 1: edges — validate → END (minimal path to test compilation)
-    builder.add_edge(START, END)
+    # --- Edges ---
+    builder.add_conditional_edges(
+        START,
+        is_fast_command,
+        {"fast": "fast_reply", "normal": END},
+    )
+    builder.add_edge("fast_reply", END)
 
     return builder

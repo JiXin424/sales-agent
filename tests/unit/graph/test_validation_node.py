@@ -1,6 +1,7 @@
 """Tests for fast_commands and validation nodes."""
 import pytest
 from sales_agent.graph.nodes.fast_commands import HELP_TEXT, RESET_TEXT, fast_command_node
+from sales_agent.graph.nodes.validation import validate_node
 from sales_agent.graph.edges.path_conditions import is_fast_command
 from sales_agent.graph.state import ChatGraphState
 
@@ -46,3 +47,30 @@ def test_fast_command_node_reset():
     assert result["path_reason"] == "reset_command"
     assert result["answer_dict"]["summary"] == RESET_TEXT
     assert result["conversation_id"] != "c1"  # new conversation_id generated
+
+
+def test_validate_node_passes_valid_input():
+    state: ChatGraphState = {
+        "tenant_id": "t1", "user_id": "u1", "message": "hello",
+        "conversation_id": "c1", "channel": "local",
+    }
+    result = validate_node(state)
+    assert result.get("error") is None
+
+
+def test_validate_node_fails_missing_tenant():
+    state: ChatGraphState = {
+        "tenant_id": "", "user_id": "u1", "message": "hello",
+        "conversation_id": "c1", "channel": "local",
+    }
+    result = validate_node(state)
+    assert result["error"] is not None
+
+
+def test_validate_node_fails_empty_message():
+    state: ChatGraphState = {
+        "tenant_id": "t1", "user_id": "u1", "message": "",
+        "conversation_id": "c1", "channel": "local",
+    }
+    result = validate_node(state)
+    assert result["error"] is not None

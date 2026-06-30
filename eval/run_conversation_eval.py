@@ -55,6 +55,9 @@ class EvalResult:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    # 流式评估
+    ttft_ms: int = 0
+    streaming_chunks: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -66,6 +69,7 @@ class ModelSummary:
     success: int = 0
     errors: int = 0
     avg_latency_ms: float = 0.0
+    avg_ttft_ms: float = 0.0
     task_types: dict[str, int] = field(default_factory=dict)
     results: list[EvalResult] = field(default_factory=list)
     # Token 汇总
@@ -196,23 +200,32 @@ async def ask_question(
     tenant_id: str,
     semaphore: asyncio.Semaphore,
     timeout: float = 120.0,
+    streaming: bool = False,
 ) -> EvalResult:
-    """向 app API 发送一个问题，返回评估结果。"""
+    """向 app API 发送一个问题，返回评估结果。
+
+    Args:
+        streaming: 为 True 时走 /eval/streaming-chat 端点（模拟钉钉流式管线），
+                   并捕获 TTFT。
+    """
     t_start = time.monotonic()
     result = EvalResult(question_id=question_id, model=model, question=question_text, reference=reference)
 
-    payload = {
+    endpoint = "/eval/streaming-chat" if streaming else "/agent/chat"
+    payload: dict[str, Any] = {
         "tenant_id": tenant_id,
         "user_id": "eval-bot",
         "message": question_text,
-        "model": model,
-        "channel": "eval",
+        "channel": "eval_streaming" if streaming else "eval",
     }
+    # 标准端点支持 model 参数
+    if not streaming:
+        payload["model"] = model
 
     async with semaphore:
         try:
             resp = await client.post(
-                f"{app_url.rstrip('/')}/agent/chat",
+                f"{app_url.rstrip('/')}{endpoint}",
                 json=payload,
                 timeout=timeout,
             )
@@ -236,6 +249,11 @@ async def ask_question(
                 result.prompt_tokens = usage.get("prompt_tokens", 0)
                 result.completion_tokens = usage.get("completion_tokens", 0)
                 result.total_tokens = usage.get("total_tokens", 0)
+
+                # 流式指标
+                retrieval_info = (data.get("debug") or {}).get("retrieval_info", {})
+                result.ttft_ms = retrieval_info.get("ttft_ms", 0)
+                result.streaming_chunks = retrieval_info.get("streaming_chunks", [])
             else:
                 result.error = f"HTTP {resp.status_code}: {resp.text[:500]}"
                 result.latency_ms = latency
@@ -260,6 +278,7 @@ async def run_eval(
     questions: list[dict[str, str]],
     tenant_id: str,
     concurrency: int = 3,
+    streaming: bool = False,
 ) -> dict[str, ModelSummary]:
     """对每个 (模型, 问题) 组合执行评估。"""
     summaries: dict[str, ModelSummary] = {
@@ -276,7 +295,7 @@ async def run_eval(
 
             summary = summaries[model]
             tasks = [
-                ask_question(client, app_url, model, q["id"], q["text"], q.get("reference", ""), tenant_id, semaphore)
+                ask_question(client, app_url, model, q["id"], q["text"], q.get("reference", ""), tenant_id, semaphore, streaming=streaming)
                 for q in questions
             ]
 
@@ -297,16 +316,20 @@ async def run_eval(
 
                 summary.results.append(r)
                 tok = f"tok={r.total_tokens}" if r.total_tokens else ""
+                ttft = f"ttft={r.ttft_ms}ms" if r.ttft_ms else ""
                 print(
                     f"  [{i:3d}/{len(questions)}] {r.question_id} {status} "
-                    f"task={r.task_type:25s} latency={r.latency_ms:5d}ms {tok} "
+                    f"task={r.task_type:25s} latency={r.latency_ms:5d}ms {ttft} {tok} "
                     f"{'ERROR: ' + r.error if r.error else ''}"
                 )
 
-            # 计算平均延迟
+            # 计算平均延迟 + TTFT
             latencies = [r.latency_ms for r in summary.results if not r.error]
             if latencies:
                 summary.avg_latency_ms = sum(latencies) / len(latencies)
+            ttfts = [r.ttft_ms for r in summary.results if not r.error and r.ttft_ms > 0]
+            if ttfts:
+                summary.avg_ttft_ms = sum(ttfts) / len(ttfts)
 
     return summaries
 
@@ -354,7 +377,7 @@ def write_csv_report(
         header.append("reference")
     for m in models:
         header += [
-            f"{m}_task_type", f"{m}_risk_level", f"{m}_latency_ms",
+            f"{m}_task_type", f"{m}_risk_level", f"{m}_latency_ms", f"{m}_ttft_ms",
             f"{m}_prompt_tokens", f"{m}_completion_tokens", f"{m}_total_tokens",
             f"{m}_answer",
         ]
@@ -370,10 +393,10 @@ def write_csv_report(
             for m in models:
                 r = next((x for x in summaries[m].results if x.question_id == q["id"]), None)
                 if r is None:
-                    row += ["", "", 0, 0, 0, 0, ""]
+                    row += ["", "", 0, 0, 0, 0, 0, ""]
                 else:
                     row += [
-                        r.task_type, r.risk_level, r.latency_ms,
+                        r.task_type, r.risk_level, r.latency_ms, r.ttft_ms,
                         r.prompt_tokens, r.completion_tokens, r.total_tokens,
                         _answer_text(r.answer),
                     ]
@@ -405,6 +428,7 @@ def write_json_report(
                 "success": s.success,
                 "errors": s.errors,
                 "avg_latency_ms": round(s.avg_latency_ms, 1),
+                "avg_ttft_ms": round(s.avg_ttft_ms, 1),
                 "task_types": s.task_types,
                 "total_prompt_tokens": s.total_prompt_tokens,
                 "total_completion_tokens": s.total_completion_tokens,
@@ -424,6 +448,7 @@ def write_json_report(
                 "risk_flags": r.risk_flags,
                 "sources_count": r.sources_count,
                 "latency_ms": r.latency_ms,
+                "ttft_ms": r.ttft_ms,
                 "prompt_tokens": r.prompt_tokens,
                 "completion_tokens": r.completion_tokens,
                 "total_tokens": r.total_tokens,
@@ -463,14 +488,14 @@ def write_markdown_report(
     # 汇总表
     lines.append("## 模型汇总")
     lines.append("")
-    lines.append("| 模型 | 总数 | 成功 | 失败 | 成功率 | 平均延迟 | Token(输入/输出/总计) |")
-    lines.append("|------|------|------|------|--------|----------|----------------------|")
+    lines.append("| 模型 | 总数 | 成功 | 失败 | 成功率 | 平均延迟 | 平均TTFT | Token(输入/输出/总计) |")
+    lines.append("|------|------|------|------|--------|----------|----------|----------------------|")
     for s in summaries.values():
         rate = f"{s.success / s.total * 100:.1f}%" if s.total > 0 else "N/A"
         tok_str = f"{s.total_prompt_tokens}/{s.total_completion_tokens}/{s.total_tokens}"
         lines.append(
             f"| {s.model} | {s.total} | {s.success} | {s.errors} "
-            f"| {rate} | {s.avg_latency_ms:.0f}ms | {tok_str} |"
+            f"| {rate} | {s.avg_latency_ms:.0f}ms | {s.avg_ttft_ms:.0f}ms | {tok_str} |"
         )
     lines.append("")
 
@@ -517,7 +542,7 @@ def write_markdown_report(
                 lines.append(
                     f"**{s.model}** — task={r.task_type}, "
                     f"risk={r.risk_level}, sources={r.sources_count}, "
-                    f"latency={r.latency_ms}ms, "
+                    f"latency={r.latency_ms}ms, ttft={r.ttft_ms}ms, "
                     f"tokens={r.prompt_tokens}/{r.completion_tokens}/{r.total_tokens}"
                 )
 
@@ -593,6 +618,10 @@ def main() -> None:
         "--output-dir", default=None,
         help="输出目录（默认 eval/results）",
     )
+    parser.add_argument(
+        "--stream", action="store_true",
+        help="走钉钉流式管线（/eval/streaming-chat），记录 TTFT",
+    )
     args = parser.parse_args()
 
     # 解析模型列表
@@ -627,6 +656,7 @@ def main() -> None:
     # 运行评估
     print(f"\n[START] Evaluating {len(models)} model(s) x {len(questions)} questions")
     print(f"[START] App URL: {args.app_url}")
+    print(f"[START] Streaming: {args.stream}")
     print(f"[START] Concurrency: {args.concurrency}")
     t0 = time.monotonic()
 
@@ -637,6 +667,7 @@ def main() -> None:
             questions=questions,
             tenant_id=args.tenant_id,
             concurrency=args.concurrency,
+            streaming=args.stream,
         )
     )
 
@@ -660,7 +691,7 @@ def main() -> None:
         rate = f"{s.success / s.total * 100:.1f}%" if s.total > 0 else "N/A"
         print(
             f"  {s.model:20s}  success={s.success}/{s.total} ({rate})  "
-            f"avg_latency={s.avg_latency_ms:.0f}ms  errors={s.errors}  "
+            f"avg_latency={s.avg_latency_ms:.0f}ms  avg_ttft={s.avg_ttft_ms:.0f}ms  errors={s.errors}  "
             f"tokens={s.total_tokens} (in:{s.total_prompt_tokens} out:{s.total_completion_tokens})"
         )
 

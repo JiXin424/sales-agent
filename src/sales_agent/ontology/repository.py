@@ -81,19 +81,26 @@ def create_fact_statement() -> str:
 
 def retrieval_statement() -> str:
     return """
+    // 先找到匹配的实体（限制实体数）
     MATCH (e:Entity)
     WHERE e.tenant_id = $tenant_id
       AND e.status = 'active'
       AND ($agent_id IS NULL OR e.agent_id IS NULL OR e.agent_id = $agent_id)
       AND (any(term IN $search_terms WHERE toLower(e.name) CONTAINS toLower(term))
            OR any(term IN $search_terms WHERE e.aliases_text CONTAINS term))
+    WITH e
+    LIMIT $entity_limit
+    // 对每个实体取前 N 条事实
     MATCH (e)-[:SUBJECT_OF]->(f:Fact)
     WHERE f.status = 'active'
       AND ($agent_id IS NULL OR f.agent_id IS NULL OR f.agent_id = $agent_id)
+    WITH e, f
+    ORDER BY f.created_at DESC
+    WITH e, collect(f)[0..$facts_per_entity] AS top_facts
+    UNWIND top_facts AS f
     OPTIONAL MATCH (f)-[:OBJECT_OF]->(o:Entity)
     OPTIONAL MATCH (f)-[:SUPPORTED_BY]->(ev:Evidence)-[:FROM]->(d:SourceDocument)
     RETURN e, f, o, collect(ev) AS evidence, collect(d) AS documents
-    LIMIT $limit
     """
 
 
@@ -147,6 +154,9 @@ class OntologyRepository:
             return row["id"] if row else params["fact_id"]
 
     async def retrieve_by_query(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+        # 设置默认值：最多 15 个实体，每个实体最多 20 条事实
+        params.setdefault("entity_limit", 15)
+        params.setdefault("facts_per_entity", 20)
         async with self.client.session() as session:
             result = await session.run(retrieval_statement(), params)
             return [dict(record) async for record in result]

@@ -1,37 +1,24 @@
 from __future__ import annotations
 
-import re
+import json
+import logging
 import time
 from typing import Protocol
 
-from sales_agent.llm.base import EmbeddingModel
+from sales_agent.llm.base import ChatModel, EmbeddingModel
 from sales_agent.ontology.schemas import GraphEvidence
 
-# ── 关键词提取：把自然语言问句转为实体搜索词 ──────────────────────────
-# 中文问句包含大量功能词（"包含什么""有哪些""是什么"等），直接用作
-# Cypher CONTAINS 子串匹配几乎不可能命中实体名。这里用正则剥离疑问/
-# 功能词，将剩余实词作为搜索词数组传入 Neo4j，配合 any(term IN ...)
-# 实现多词 OR 匹配。
-_QUESTION_STRIP_RE = re.compile(
-    r"包含什么|有哪些|是什么|什么样|怎么样|如何|"
-    r"为什么|会不会|是不是|能不能|有没有|有什么|"
-    r"请告诉|请问|麻烦|帮我|"
-    r"[什么哪些怎几]|"
-    r"[的吗呢吧啊呀][？?]?$|"
-    r"[的了么着过]"
-)
+logger = logging.getLogger(__name__)
 
+# ── LLM 实体关键词提取 prompt ──────────────────────────────────────────
+# 用极轻量 LLM 调用（temperature=0, max_tokens=100）从自然语言问句中
+# 抽取实体名/关键词，替代正则穷举。LLM 天然理解任意问句结构，无需维护词表。
+_ENTITY_EXTRACTION_PROMPT = """从用户问题中提取用于知识图谱搜索的实体名称和关键词。
+只返回 JSON 数组，不要其他内容。
 
-def _extract_search_terms(question: str) -> list[str]:
-    """从自然语言问句中提取实体搜索关键词。
+用户问题：{question}
 
-    去除疑问词和功能词后，按空白/标点切分，返回 >=2 字符的独立词条。
-    若提取后无有效词条，返回原始问题作为兜底。
-    """
-    text = question.rstrip("？?!!。").strip()
-    text = _QUESTION_STRIP_RE.sub(" ", text)
-    terms = [t.strip() for t in re.split(r"[\s,，、。．.；;：:和与及]+", text) if len(t.strip()) >= 2]
-    return list(dict.fromkeys(terms)) if terms else [question]
+输出示例：["福多多", "零风险承诺"]"""
 
 
 class RepositoryProtocol(Protocol):
@@ -40,14 +27,55 @@ class RepositoryProtocol(Protocol):
 
 
 class OntologyRetrievalService:
-    def __init__(self, repository: RepositoryProtocol, embedding_model: EmbeddingModel, limit: int = 30):
+    def __init__(
+        self,
+        repository: RepositoryProtocol,
+        embedding_model: EmbeddingModel,
+        chat_model: ChatModel | None = None,
+        limit: int = 200,
+    ):
         self.repository = repository
         self.embedding_model = embedding_model
+        self.chat_model = chat_model
         self.limit = limit
+
+    async def _extract_search_terms(self, question: str) -> list[str]:
+        """用 LLM 从问句中提取实体名/关键词，失败时用原始问题兜底。"""
+        if self.chat_model is None:
+            return [question]
+
+        try:
+            raw = await self.chat_model.generate(
+                messages=[{
+                    "role": "user",
+                    "content": _ENTITY_EXTRACTION_PROMPT.format(question=question),
+                }],
+                temperature=0,
+                max_tokens=100,
+                response_format={"type": "json_object"},
+            )
+            parsed = json.loads(raw)
+            # 兼容各种 LLM 输出格式：直接的数组、或包裹在 key 里的
+            if isinstance(parsed, list):
+                terms = [str(t).strip() for t in parsed if str(t).strip()]
+            elif isinstance(parsed, dict):
+                # 取第一个值是 list 的 key，否则取第一个非空字符串值
+                for val in parsed.values():
+                    if isinstance(val, list):
+                        terms = [str(t).strip() for t in val if str(t).strip()]
+                        break
+                else:
+                    terms = [str(v).strip() for v in parsed.values() if str(v).strip()]
+            else:
+                terms = [question]
+            return list(dict.fromkeys(terms)) if terms else [question]
+        except Exception:
+            logger.warning("LLM entity extraction failed, using raw question", exc_info=True)
+            return [question]
 
     async def retrieve(self, *, tenant_id: str, agent_id: str | None, question: str) -> GraphEvidence:
         started = time.monotonic()
-        search_terms = _extract_search_terms(question)
+        search_terms = await self._extract_search_terms(question)
         rows = await self.repository.retrieve_by_query({
             "tenant_id": tenant_id,
             "agent_id": agent_id,
@@ -84,6 +112,13 @@ class OntologyRetrievalService:
                 for d in (row.get("documents") or []):
                     if d:
                         documents.append(self._node(d))
+
+        # 按搜索词相关性排序事实，确保最相关的事实排在前面被 LLM 看到
+        if search_terms and facts:
+            def _fact_score(f: dict) -> int:
+                fv = str(f.get("value", "")) + str(f.get("predicate", ""))
+                return sum(1 for t in search_terms if t in fv)
+            facts.sort(key=_fact_score, reverse=True)
 
         return GraphEvidence(
             ontology_intent="entity_info",

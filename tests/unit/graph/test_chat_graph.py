@@ -26,13 +26,14 @@ def test_graph_compiles_with_memory_checkpointer():
     assert graph is not None
 
 
-def test_graph_invokes_minimal_input():
+@pytest.mark.asyncio
+async def test_graph_invokes_minimal_input():
     """Graph processes minimal input through basic pipeline."""
     from langgraph.checkpoint.memory import InMemorySaver
     builder = build_chat_graph()
     graph = builder.compile(checkpointer=InMemorySaver())
 
-    result = graph.invoke(
+    result = await graph.ainvoke(
         {
             "tenant_id": "t1",
             "user_id": "u1",
@@ -41,8 +42,9 @@ def test_graph_invokes_minimal_input():
             "channel": "local",
         },
         config={"configurable": {"thread_id": "test-thread-1"}},
+        context={"db": None},
     )
-    # After invoke, state passes through unchanged (stub graph: START -> END)
+    # After invoke, state passes through the pipeline
     assert result is not None
     assert result["message"] == "帮助"
     assert result["tenant_id"] == "t1"

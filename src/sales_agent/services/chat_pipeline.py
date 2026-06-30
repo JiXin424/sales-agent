@@ -88,7 +88,7 @@ def _build_ontology_answer_service(settings: "Settings", model_provider) -> Onto
     """
     client = Neo4jClient(settings.neo4j)
     repository = OntologyRepository(client)
-    retrieval = OntologyRetrievalService(repository, model_provider.embedding)
+    retrieval = OntologyRetrievalService(repository, model_provider.embedding, model_provider.chat)
     return OntologyAnswerService(retrieval, model_provider.chat)
 
 # --- 快速命令集 ---
@@ -493,12 +493,22 @@ class ChatPipeline:
                 if path_result.needs_retrieval and self.settings.ontology.knowledge_engine == "ontology_neo4j":
                     # 知识图谱路径：路由到 OntologyAnswerService，跳过后续 agent 生成
                     timings.start("ontology_answer")
+                    # 解析 ontology 回答 prompt（DB 版本管理，三级回退）
+                    from sales_agent.services.prompt_registry import PromptRegistry
+                    _onto_prompt = None
+                    try:
+                        _onto_prompt = await PromptRegistry(self.db).resolve_prompt(
+                            "ontology", "answer", tenant_id, resolved_agent_id,
+                        )
+                    except Exception:
+                        pass  # 回退到内置 ONTOLOGY_RESPONSE_PROMPT
                     ontology_answer_service = _build_ontology_answer_service(self.settings, model_provider)
                     ontology_result = await ontology_answer_service.answer_for_task(
                         tenant_id=tenant_id,
                         agent_id=resolved_agent_id,
                         task_type=task_type,
                         message=message,
+                        prompt_text=_onto_prompt,
                     )
                     answer_dict = ontology_result.answer
                     sources = ontology_result.sources

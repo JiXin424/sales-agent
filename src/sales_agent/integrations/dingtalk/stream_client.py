@@ -198,7 +198,9 @@ class SalesAgentChatbotHandler(dingtalk_stream.ChatbotHandler):
         reply_fn,
     ):
         """流式处理路径：卡片 + LLM streaming。"""
-        from sales_agent.integrations.dingtalk.streaming_handler import handle_dingtalk_streaming
+        from sales_agent.integrations.dingtalk.graph_stream import (
+            handle_dingtalk_stream_via_graph,
+        )
         from sales_agent.integrations.dingtalk.user_mapper import DingTalkUserMapper
         from sales_agent.integrations.dingtalk.conversation_mapper import DingTalkConversationMapper
         from sales_agent.models.base import generate_id
@@ -236,30 +238,20 @@ class SalesAgentChatbotHandler(dingtalk_stream.ChatbotHandler):
             )
             return
 
-        try:
-            await handle_dingtalk_streaming(
-                db=db,
-                config=self._config,
-                settings=settings,
-                runtime=runtime,
-                card_sender=card_sender,
-                event_id=event_id,
-                corp_id=corp_id,
-                sender_id=sender_id,
-                sender_name=sender_name,
-                message=text_content,
-                message_id=message_id,
-                dingtalk_conversation_id=dingtalk_conversation_id,
-                user_id=internal_user_id,
-                conversation_id=conversation_id,
-            )
-        except Exception as e:
-            logger.error("Streaming handler failed, falling back to reply_fn: %s", e)
-            # 降级：用传统方式回复
-            try:
-                await reply_fn("我这边暂时无法处理，请稍后再试。")
-            except Exception:
-                pass
+        result = await handle_dingtalk_stream_via_graph(
+            tenant_id=runtime.tenant_id,
+            user_id=internal_user_id,
+            dingtalk_user_id=sender_id,
+            message=text_content,
+            conversation_id=conversation_id,
+            agent_id=None,
+            reply_fn=reply_fn,
+            card_sender=card_sender,
+            db=db,
+            chat_model=None,
+        )
+        logger.info("Graph-based streaming completed successfully")
+        return
 
 
 # ============================================================

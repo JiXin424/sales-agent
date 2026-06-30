@@ -311,7 +311,7 @@ def main():
 
     questions = load_all_questions(
         include_questions_md=not args.no_questions_md,
-        include_ground_truth=not args.no_ground_truth)
+        include_ground_truth=False)
     if args.limit > 0: questions = questions[:args.limit]
     print(f"[INFO] Loaded {len(questions)} questions")
 

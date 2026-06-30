@@ -88,6 +88,9 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
 .toolbar input{{flex:1;min-width:200px}}
 .toolbar select{{min-width:140px}}
 .toolbar .count{{font-size:13px;color:#888;white-space:nowrap}}
+.toolbar .count button{{margin:0 2px;padding:2px 8px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;font-size:12px}}
+.toolbar .count button:hover:not(:disabled){{background:#eef2ff;border-color:#3b82f6}}
+.toolbar .count button:disabled{{opacity:0.3;cursor:default}}
 
 /* ── Question Table ── */
 .q-table{{width:100%;border-collapse:collapse;font-size:13px}}
@@ -154,6 +157,9 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
                 <option value="partial">⚠️ 部分通过</option>
                 <option value="fail">❌ 全部未通过</option>
                 <option value="error">💥 错误</option>
+            </select>
+            <select id="task-filter" onchange="renderTable()">
+                <option value="all">全部任务类型</option>
             </select>
             <span class="count" id="result-count"></span>
         </div>
@@ -295,13 +301,21 @@ function getPassStatus(r) {{
     return 'fail';
 }}
 
+const PAGE_SIZE = 50;
+let currentPage = 1;
+
+function goPage(n) {{ currentPage = n; renderTable(); window.scrollTo(0, 300); }}
+
 function renderTable() {{
     const search = (document.getElementById('search').value || '').toLowerCase();
     const kbFilter = document.getElementById('kb-filter').value;
     const scoreFilter = document.getElementById('score-filter').value;
 
+    const taskFilter = document.getElementById('task-filter').value;
+
     let filtered = RESULTS.filter(r => {{
         if (kbFilter !== 'all' && r.kb_label !== kbFilter) return false;
+        if (taskFilter !== 'all' && (r.task_type||'') !== taskFilter) return false;
         const status = getPassStatus(r);
         if (scoreFilter !== 'all' && status !== scoreFilter) return false;
         if (search && !(r.question||'').toLowerCase().includes(search) && !(r.question_id||'').toLowerCase().includes(search)) return false;
@@ -310,12 +324,28 @@ function renderTable() {{
 
     filtered = sortResults(currentSort.col, currentSort.asc).filter(r => filtered.includes(r));
 
-    document.getElementById('result-count').textContent = `显示 ${{filtered.length}} / ${{RESULTS.length}} 条`;
+    const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
+    if (currentPage > totalPages) currentPage = totalPages || 1;
+    const pageItems = filtered.slice((currentPage-1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
+    document.getElementById('result-count').innerHTML = `显示 ${{filtered.length}} / ${{RESULTS.length}} 条` +
+        (totalPages > 1 ? ` | 第 ${{currentPage}}/${{totalPages}} 页` +
+        ` <button onclick="goPage(1)" ${{currentPage<=1?'disabled':''}}>«</button>` +
+        ` <button onclick="goPage(${{currentPage-1}})" ${{currentPage<=1?'disabled':''}}>‹</button>` +
+        ` <button onclick="goPage(${{currentPage+1}})" ${{currentPage>=totalPages?'disabled':''}}>›</button>` +
+        ` <button onclick="goPage(${{totalPages}})" ${{currentPage>=totalPages?'disabled':''}}>»</button>` : '');
 
     // KB filter options
     const kbSelect = document.getElementById('kb-filter');
     if (kbSelect.options.length <= 1) {{
         kbSelect.innerHTML = '<option value="all">全部 KB</option>' + KB_LIST.map(n => `<option value="${{n}}">${{n}}</option>`).join('');
+    }}
+
+    // Task type filter options
+    const taskSelect = document.getElementById('task-filter');
+    if (taskSelect.options.length <= 1) {{
+        const types = [...new Set(RESULTS.map(r => r.task_type || '(空)'))].sort();
+        taskSelect.innerHTML = '<option value="all">全部任务类型</option>' + types.map(t => `<option value="${{t}}">${{t}}</option>`).join('');
     }}
 
     // Headers
@@ -334,7 +364,7 @@ function renderTable() {{
 
     // Rows
     const tbody = document.querySelector('#q-table tbody');
-    tbody.innerHTML = filtered.map((r, i) => {{
+    tbody.innerHTML = pageItems.map((r, i) => {{
         const status = getPassStatus(r);
         const statusIcon = {{pass:'✅',partial:'⚠️',fail:'❌',error:'💥',na:'—'}}[status] || '—';
         const qid = r.question_id || '';

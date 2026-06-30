@@ -18,6 +18,19 @@ from typing import Any, Optional
 import httpx
 from deepeval.test_case import LLMTestCase
 
+# 全局共享 httpx client，避免每个请求创建新连接导致 asyncio 清理报错
+_shared_client: httpx.AsyncClient | None = None
+
+def _get_client() -> httpx.AsyncClient:
+    global _shared_client
+    if _shared_client is None or _shared_client.is_closed:
+        _shared_client = httpx.AsyncClient(
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            timeout=httpx.Timeout(120.0),
+        )
+    return _shared_client
+
+
 # ── 数据模型 ────────────────────────────────────────────────────────
 
 
@@ -312,38 +325,38 @@ async def call_agent_api(
             payload["model"] = model
 
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{app_url.rstrip('/')}{endpoint}",
-                json=payload,
-                timeout=timeout,
-            )
-            response.latency_ms = int((time.monotonic() - t_start) * 1000)
+        client = _get_client()
+        resp = await client.post(
+            f"{app_url.rstrip('/')}{endpoint}",
+            json=payload,
+            timeout=timeout,
+        )
+        response.latency_ms = int((time.monotonic() - t_start) * 1000)
 
-            if resp.status_code == 200:
-                data = resp.json()
-                answer = data.get("answer", {})
-                response.answer_text = _extract_answer_text(answer)
-                response.summary = answer.get("summary", "") if isinstance(answer, dict) else ""
-                response.sections = answer.get("sections", []) if isinstance(answer, dict) else []
-                response.sources = _extract_sources(data.get("sources", []))
-                response.task_type = data.get("task_type", "")
-                risk = data.get("risk", {})
-                response.risk_level = risk.get("level", "none") if isinstance(risk, dict) else "none"
-                response.risk_flags = risk.get("flags", []) if isinstance(risk, dict) else []
+        if resp.status_code == 200:
+            data = resp.json()
+            answer = data.get("answer", {})
+            response.answer_text = _extract_answer_text(answer)
+            response.summary = answer.get("summary", "") if isinstance(answer, dict) else ""
+            response.sections = answer.get("sections", []) if isinstance(answer, dict) else []
+            response.sources = _extract_sources(data.get("sources", []))
+            response.task_type = data.get("task_type", "")
+            risk = data.get("risk", {})
+            response.risk_level = risk.get("level", "none") if isinstance(risk, dict) else "none"
+            response.risk_flags = risk.get("flags", []) if isinstance(risk, dict) else []
 
-                # Token 用量（debug.usage）
-                debug = data.get("debug") or {}
-                usage = debug.get("usage", {})
-                response.prompt_tokens = usage.get("prompt_tokens", 0)
-                response.completion_tokens = usage.get("completion_tokens", 0)
-                response.total_tokens = usage.get("total_tokens", 0)
+            # Token 用量（debug.usage）
+            debug = data.get("debug") or {}
+            usage = debug.get("usage", {})
+            response.prompt_tokens = usage.get("prompt_tokens", 0)
+            response.completion_tokens = usage.get("completion_tokens", 0)
+            response.total_tokens = usage.get("total_tokens", 0)
 
-                # TTFT（仅在 streaming 端点返回）
-                retrieval_info = debug.get("retrieval_info", {})
-                response.ttft_ms = retrieval_info.get("ttft_ms", 0)
-            else:
-                response.error = f"HTTP {resp.status_code}: {resp.text[:500]}"
+            # TTFT（仅在 streaming 端点返回）
+            retrieval_info = debug.get("retrieval_info", {})
+            response.ttft_ms = retrieval_info.get("ttft_ms", 0)
+        else:
+            response.error = f"HTTP {resp.status_code}: {resp.text[:500]}"
     except httpx.TimeoutException:
         response.error = f"Timeout after {timeout}s"
         response.latency_ms = int((time.monotonic() - t_start) * 1000)

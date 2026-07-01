@@ -2,6 +2,9 @@
 
 Calls :func:`execute_agent` via the chat model from Runtime.context.
 Preserves the PromptRegistry 3-tier resolution for custom prompts.
+
+P1: Emits custom stream events via ``runtime.stream_writer`` for
+     progress tracking (retrieval done, generating, done).
 """
 
 from __future__ import annotations
@@ -27,6 +30,9 @@ async def generate_node(state: ChatGraphState, runtime: Runtime) -> dict:
 
     Requires ``runtime.context["chat_model"]`` (ChatModel instance).
 
+    P1: Uses ``runtime.stream_writer`` to emit custom progress events
+    that can be consumed via ``stream_mode="custom"``.
+
     Args:
         state: Current graph state.
         runtime: LangGraph runtime with context containing ``chat_model`` and ``db``.
@@ -34,15 +40,30 @@ async def generate_node(state: ChatGraphState, runtime: Runtime) -> dict:
     Returns:
         Dict with ``answer_dict``, ``raw_response``, and ``usage``.
     """
+    writer = runtime.stream_writer
+
     # ── Ontology subgraph already pre-computed the answer ──
-    if state.get("skip_generation"):
+    # P2: Also cover Send fan-out case where ontology result and RAG
+    #     results race — if answer_dict already has content, skip.
+    existing_answer = state.get("answer_dict")
+    if state.get("skip_generation") or (
+        existing_answer and existing_answer.get("summary")
+    ):
+        writer({
+            "phase": "generation_skipped",
+            "reason": "ontology_precomputed" if state.get("skip_generation") else "fan_out_answer_present",
+        })
         return {}
 
     chat_model = runtime.context.get("chat_model")
     task_type = state.get("task_type", "general_sales_coaching")
 
+    # P1: Emit custom progress event
+    writer({"phase": "generation_started", "task_type": task_type})
+
     # ── Fallback when no model is available (unit tests) ──
     if chat_model is None:
+        writer({"phase": "generation_fallback", "reason": "no_model"})
         return {
             "answer_dict": {
                 "summary": f"No model available for task: {task_type}",
@@ -76,6 +97,9 @@ async def generate_node(state: ChatGraphState, runtime: Runtime) -> dict:
     message = state["message"]
     history_messages = state.get("history_messages", [])
 
+    # P1: Custom stream — generation in progress
+    writer({"phase": "generation_executing", "task_type": task_type})
+
     start_time = time.time()
     answer_dict = await execute_agent(
         chat_model=chat_model,
@@ -92,6 +116,14 @@ async def generate_node(state: ChatGraphState, runtime: Runtime) -> dict:
     logger.info("Graph generation completed in %d ms for task %s", latency_ms, task_type)
 
     usage = getattr(chat_model, "last_usage", {}) or {}
+
+    # P1: Custom stream — generation complete
+    writer({
+        "phase": "generation_complete",
+        "task_type": task_type,
+        "latency_ms": latency_ms,
+        "usage": usage,
+    })
 
     return {
         "answer_dict": answer_dict,

@@ -38,6 +38,7 @@ import AgentAlertsPage from './pages/Agents/AgentAlertsPage';
 import AgentReportsPage from './pages/Agents/AgentReportsPage';
 import AgentEvalRunsPage from './pages/Agents/AgentEvalRunsPage';
 import AgentReviewQueuePage from './pages/Agents/AgentReviewQueuePage';
+import GraphDebugPage from './pages/Agents/GraphDebugPage';
 import { useInstanceAgent } from './hooks/useInstanceAgent';
 
 /** 根路径 boot：解析当前实例的唯一 Agent，重定向到其指定子页（单 Agent 模式）。 */
@@ -80,6 +81,7 @@ export default function App() {
         <Route path="alerts" element={<AgentAlertsPage />} />
         <Route path="reports" element={<AgentReportsPage />} />
         <Route path="traces/:runId" element={<TracePage />} />
+        <Route path="graph-debug" element={<GraphDebugPage />} />
         <Route path="coach" element={<CoachDashboardPage />} />
         <Route path="coach/users" element={<CoachUsersPage />} />
         <Route path="coach/users/:userId" element={<CoachUserProfilePage />} />

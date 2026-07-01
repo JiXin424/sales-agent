@@ -1,3 +1,47 @@
+// --- Graph Debug ---
+
+export interface GraphInfo {
+  id: string;
+  name: string;
+  mermaid: string;
+  node_count: number;
+  edge_count: number;
+}
+
+export interface GraphListResponse {
+  graphs: GraphInfo[];
+}
+
+export interface GraphDebugNodeStart {
+  node: string;
+  input?: unknown;
+}
+
+export interface GraphDebugNodeOutput {
+  node: string;
+  output: Record<string, unknown>;
+}
+
+export interface GraphDebugNodeEnd {
+  node: string;
+  duration_ms: number;
+  result?: unknown;
+}
+
+export interface GraphDebugCustom {
+  data: Record<string, unknown>;
+}
+
+export interface GraphDebugDone {
+  total_duration_ms: number;
+  graph_id: string;
+}
+
+export interface GraphDebugError {
+  message: string;
+}
+
+
 /** TypeScript interfaces mirroring backend Pydantic schemas. */
 
 // --- Generic ---

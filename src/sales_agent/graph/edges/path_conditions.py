@@ -1,11 +1,16 @@
 """Conditional edge functions for the ChatPipeline graph.
 
-Each function receives the current `ChatGraphState` and returns a string
-that maps to a destination node (or "fast"/"normal" for the initial split).
-These are pure functions — no DB, no LLM, no side effects.
+Each function receives the current ``ChatGraphState`` and returns a string
+(or ``list[Send]`` for fan-out) that maps to destination node(s).
+
+Send (parallel fan-out): When a node needs to dispatch to multiple
+parallel retrievals, return ``list[Send]`` — LangGraph executes them
+concurrently and collects the results into state.
 """
 
 from __future__ import annotations
+
+from langgraph.types import Send
 
 from sales_agent.graph.state import ChatGraphState
 
@@ -28,13 +33,21 @@ def is_fast_command(state: ChatGraphState) -> str:
     return "normal"
 
 
-def select_retrieval_path(state: ChatGraphState) -> str:
-    """Select retrieval strategy based on task type and config.
+def select_retrieval_path(state: ChatGraphState):
+    """Select retrieval strategy. Supports Send fan-out for parallel retrieval.
+
+    When the config enables ``retrieval.parallel_enabled`` and the task
+    requires retrieval, this returns a list of ``Send`` objects that run
+    multiple retrieval backends concurrently.
 
     Returns:
-        "ontology" -- Neo4j knowledge graph retrieval (Plan B subgraph)
-        "rag" -- Traditional vector/hybrid/keyword retrieval
-        "skip" -- No retrieval needed (emotional support, script gen, etc.)
+        "ontology" — Neo4j knowledge graph retrieval (solo)
+        "rag" — Traditional vector/hybrid/keyword retrieval (solo)
+        "skip" — No retrieval needed
+
+        list[Send] — Parallel fan-out when ``parallel_enabled`` is True.
+                     Each Send carries a ``retrieval_backend`` hint so the
+                     retrieve_node can distinguish the source.
     """
     if not state.get("needs_retrieval"):
         return "skip"
@@ -42,7 +55,27 @@ def select_retrieval_path(state: ChatGraphState) -> str:
     from sales_agent.core.config import get_settings
     settings = get_settings()
 
-    if settings.ontology.knowledge_engine == "ontology_neo4j" and settings.neo4j.uri:
-        return "ontology"
+    use_ontology = (
+        settings.ontology.knowledge_engine == "ontology_neo4j"
+        and settings.neo4j.uri
+    )
 
+    # ── Send fan-out: parallel retrieval across backends ──────────
+    if getattr(settings.retrieval, "parallel_enabled", False) and use_ontology:
+        # Fan out to ontology + vector retrieval concurrently.
+        # Each Send must carry the full node input so the node can
+        # execute with complete context. Results merge via `sources: add`.
+        ctx = {
+            "tenant_id": state["tenant_id"],
+            "message": state["message"],
+            "task_type": state.get("task_type", "knowledge_qa"),
+            "agent_id": state.get("agent_id"),
+        }
+        return [
+            Send("retrieve", {**ctx, "retrieval_path": "ontology"}),
+            Send("retrieve", {**ctx, "retrieval_path": "rag"}),
+        ]
+
+    if use_ontology:
+        return "ontology"
     return "rag"

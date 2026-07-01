@@ -9,6 +9,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from deepeval.tracing import observe
+
 from sales_agent.prompts.task_router_prompt import TASK_ROUTER_PROMPT
 
 # 任务类型常量 — Phase A
@@ -289,6 +291,7 @@ async def _llm_route(
     return None
 
 
+@observe(type="tool")
 async def route_task(
     message: str,
     chat_model: Any = None,

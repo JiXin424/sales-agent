@@ -1,4 +1,10 @@
-"""Shared state definition for the ChatPipeline graph."""
+"""Shared state definition for the ChatPipeline graph.
+
+Includes support for:
+- ``IsLastStep`` managed value (LangGraph built-in)
+- ``Overwrite`` support via ``operator.add`` on list-typed fields
+- HITL (human-in-the-loop) fields for interrupt/Command
+"""
 
 from __future__ import annotations
 
@@ -6,11 +12,13 @@ from typing import Annotated, Any
 from operator import add
 from typing_extensions import TypedDict
 
+from langgraph.managed.is_last_step import IsLastStep
+
 
 class ChatGraphState(TypedDict, total=False):
     """Shared state flowing through all ChatPipeline graph nodes.
 
-    `total=False` means all keys are optional — each node only needs to
+    ``total=False`` means all keys are optional — each node only needs to
     set the fields it contributes.
     """
 
@@ -48,7 +56,7 @@ class ChatGraphState(TypedDict, total=False):
     retrieval_path: str                    # "ontology" | "rag" | "skip"
     retrieval_info: dict[str, Any]
     retrieval_result: Any
-    sources: list[dict]
+    sources: Annotated[list[dict], add]  # P2: reducer merges parallel Send results
     skip_generation: bool
 
     # === Coach Guidance ===
@@ -61,11 +69,15 @@ class ChatGraphState(TypedDict, total=False):
     # === Risk ===
     input_risk_level: str                  # "none" | "low" | "medium" | "high"
     risk_result: dict[str, Any]
-    risk_action: str                       # "allow" | "warn" | "rewrite" | "block"
+    risk_action: str                       # "allow" | "warn" | "rewrite" | "block" | "human_review"
+    human_review_approved: bool            # HITL: set by Command(resume=...) on resume
 
     # === Control ===
     retry_count: int
     error: str | None
+
+    # === Managed Values (LangGraph built-in) ===
+    is_last_step: IsLastStep  # automatically set by framework
 
     # === Streaming tokens ===
     stream_tokens: Annotated[list[str], add]

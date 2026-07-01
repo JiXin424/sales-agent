@@ -3,6 +3,7 @@
 export * from './health';
 export * from './tenants';
 export * from './admin';
+export * from './graphDebug';
 export * from './prompts';
 export * from './knowledge';
 export * from './ontology';

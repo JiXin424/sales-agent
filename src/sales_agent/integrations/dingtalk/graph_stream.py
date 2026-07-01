@@ -3,6 +3,11 @@
 Replaces ``streaming_handler.py``'s duplicated pipeline logic.
 The graph handles all pipeline stages; this module only manages
 the DingTalk interactive card lifecycle.
+
+P1: Custom stream events from nodes (via ``runtime.stream_writer``)
+     drive the card progress display: retrieval progress → generation
+     progress → done. The card shows clear phase transitions instead
+     of a single "thinking..." spinner.
 """
 
 from __future__ import annotations
@@ -12,8 +17,8 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable
 
-from sales_agent.graph.chat_graph import build_chat_graph
-from sales_agent.graph.checkpoints import get_checkpointer
+from sales_agent.graph.chat_graph import build_chat_graph_compiled
+from sales_agent.graph.checkpoints import get_checkpointer, get_store
 
 logger = logging.getLogger(__name__)
 
@@ -29,17 +34,27 @@ async def handle_dingtalk_stream_via_graph(
     reply_fn: Callable[[str], Awaitable[None]],
     card_sender,  # DingTalkCardSender
     db,  # AsyncSession
-    chat_model,  # ChatModel instance
+    chat_model,  # ChatModel instance (P1: was None — now required for graph)
 ) -> dict:
     """Process a DingTalk stream message through the LangGraph ChatPipeline.
 
     The graph handles all pipeline stages (routing, retrieval, generation).
     This function only manages the DingTalk card lifecycle:
 
-    1. Create an initial "thinking..." card
-    2. Stream token updates from ``graph.astream(stream_mode="messages")``
-    3. On node completion (``stream_mode="updates"``), update card with sections
-    4. Finalize the card with the complete answer
+    1. Create an initial "analyzing..." card
+    2. Stream three modes concurrently:
+       - ``messages``: token-by-token LLM output → card text
+       - ``updates``: node completion → extract final answer
+       - ``custom``: progress events from nodes → card subtitle updates
+    3. Finalize the card with the complete answer
+
+    P1: ``stream_mode="custom"`` events from nodes
+    (``runtime.stream_writer``) update the card's subtitle in real-time:
+    - ```retrieval_started``` → "🔍 检索知识库中..."
+    - ```retrieval_complete``` → "✅ 找到 N 条相关资料"
+    - ```generation_started``` → "✍️ 开始生成回答..."
+    - ```generation_executing``` → "✍️ 生成中..."
+    - ```generation_complete``` → "✅ 回答完成 (1.2s)"
 
     Args:
         tenant_id: Tenant identifier.
@@ -51,15 +66,18 @@ async def handle_dingtalk_stream_via_graph(
         reply_fn: Callback to send DingTalk messages (fallback).
         card_sender: DingTalkCardSender instance for interactive cards.
         db: Async SQLAlchemy session.
-        chat_model: Configured chat model instance.
+        chat_model: Configured chat model instance (required for LLM generation).
 
     Returns:
         The final graph state dict.
     """
     checkpointer = await get_checkpointer()
+    store = await get_store()  # P0: cross-session memory
 
-    builder = build_chat_graph()
-    graph = builder.compile(checkpointer=checkpointer)
+    graph = build_chat_graph_compiled(
+        checkpointer=checkpointer,
+        store=store,
+    )
 
     config = {
         "configurable": {
@@ -79,11 +97,11 @@ async def handle_dingtalk_stream_via_graph(
     # 1. Create initial card
     card_id = await card_sender.send_markdown_card(
         dingtalk_user_id=dingtalk_user_id,
-        title="思考中...",
+        title="分析中...",
         markdown_text="正在分析你的问题...",
     )
 
-    # 2. Stream: messages for token-by-token, updates for completion
+    # 2. Stream: messages, updates, and custom progress (P1)
     final_answer = None
     accumulated_text = ""
 
@@ -91,10 +109,11 @@ async def handle_dingtalk_stream_via_graph(
         input_state,
         config,
         context={"db": db, "chat_model": chat_model},
-        stream_mode=["messages", "updates"],
+        stream_mode=["messages", "updates", "custom"],
+        durability="async",  # P2: async checkpoint for low-latency streaming
     ):
         if chunk["type"] == "messages":
-            # Token-by-token: update the streaming card
+            # Token-by-token LLM output → card typing effect
             msg_data = chunk["data"]
             if hasattr(msg_data[0], "content"):
                 accumulated_text += msg_data[0].content or ""
@@ -102,13 +121,27 @@ async def handle_dingtalk_stream_via_graph(
 
         elif chunk["type"] == "updates":
             data = chunk["data"]
-            # Check if any node emitted an answer_dict
             for node_name, node_output in data.items():
                 if isinstance(node_output, dict) and "answer_dict" in node_output:
                     final_answer = node_output["answer_dict"]
-                    break
 
-    # 3. Finalize card with parsed answer
+        # P1: Custom stream — log-only progress tracking
+        #     Card content is updated exclusively by the messages handler
+        #     to avoid race conditions on the DingTalk streaming API.
+        elif chunk["type"] == "custom":
+            custom_data = chunk["data"]
+            if isinstance(custom_data, dict):
+                phase = custom_data.get("phase", "")
+                if phase:
+                    logger.debug(
+                        "Graph progress: phase=%s task=%s sources=%s latency=%s",
+                        phase,
+                        custom_data.get("task_type", ""),
+                        custom_data.get("source_count", ""),
+                        custom_data.get("latency_ms", ""),
+                    )
+
+    # 3. Finalize card
     if final_answer is None:
         final_answer = {"summary": accumulated_text, "sections": []}
 

@@ -60,6 +60,7 @@ async def extract_terms_node(state: OntologyRetrievalState, runtime: Runtime) ->
     question = state["question"]
 
     if chat_model is None:
+        logger.info("Ontology entity extraction (graph): no chat_model, using raw question")
         return {"search_terms": [question]}
 
     try:
@@ -84,7 +85,12 @@ async def extract_terms_node(state: OntologyRetrievalState, runtime: Runtime) ->
                 terms = [str(v).strip() for v in parsed.values() if str(v).strip()]
         else:
             terms = [question]
-        return {"search_terms": list(dict.fromkeys(terms)) if terms else [question]}
+        result_terms = list(dict.fromkeys(terms)) if terms else [question]
+        logger.info(
+            "Ontology entity extraction (graph): question=%r → terms=%s",
+            question[:120], result_terms,
+        )
+        return {"search_terms": result_terms}
     except Exception:
         logger.warning("Entity extraction failed, falling back to raw question", exc_info=True)
         return {"search_terms": [question]}
@@ -114,6 +120,18 @@ async def graph_query_node(state: OntologyRetrievalState, runtime: Runtime) -> d
         "search_terms": state.get("search_terms", []),
         "limit": 200,
     })
+
+    # Log entity matches for debugging
+    entity_names = []
+    for row in rows:
+        e = row.get("e")
+        if e and isinstance(e, dict):
+            entity_names.append(f"{e.get('name', '?')}({e.get('type', '?')})")
+    logger.info(
+        "Ontology graph query (graph): terms=%s → %d rows, entities=%s",
+        state.get("search_terms", []), len(rows),
+        entity_names[:10] if entity_names else "NONE",
+    )
 
     return {
         "graph_rows": rows,

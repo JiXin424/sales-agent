@@ -81,26 +81,42 @@ def create_fact_statement() -> str:
 
 def retrieval_statement() -> str:
     return """
-    // 先找到匹配的实体（限制实体数）
+    // ── Phase 1: Score entities by keyword match count ──────────────
+    // name_score = how many search terms appear in name or aliases (case-insensitive)
     MATCH (e:Entity)
     WHERE e.tenant_id = $tenant_id
       AND e.status = 'active'
       AND ($agent_id IS NULL OR e.agent_id IS NULL OR e.agent_id = $agent_id)
-      AND (any(term IN $search_terms WHERE toLower(e.name) CONTAINS toLower(term))
-           OR any(term IN $search_terms WHERE e.aliases_text CONTAINS term))
-    WITH e
+    WITH e,
+         size([term IN $search_terms WHERE
+               toLower(e.name) CONTAINS toLower(term)
+               OR toLower(coalesce(e.aliases_text, '')) CONTAINS toLower(term)]) AS name_score
+    // ── Phase 2: Boost from fact content matches ────────────────────
+    // fact_boost = count of distinct facts whose predicate/value contain search terms.
+    // This allows discovering entities whose name doesn't match but whose facts do.
+    OPTIONAL MATCH (e)-[:SUBJECT_OF]->(fb:Fact)
+      WHERE fb.status = 'active'
+        AND ($agent_id IS NULL OR fb.agent_id IS NULL OR fb.agent_id = $agent_id)
+        AND size([term IN $search_terms WHERE
+                  toLower(coalesce(fb.value, '')) CONTAINS toLower(term)
+                  OR toLower(fb.predicate) CONTAINS toLower(term)]) > 0
+    WITH e, name_score, count(DISTINCT fb) AS fact_boost
+    WITH e, name_score + fact_boost AS relevance
+    WHERE relevance > 0
+    ORDER BY relevance DESC
     LIMIT $entity_limit
-    // 对每个实体取前 N 条事实
+    // ── Phase 3: Fetch top facts for selected entities ──────────────
     MATCH (e)-[:SUBJECT_OF]->(f:Fact)
     WHERE f.status = 'active'
       AND ($agent_id IS NULL OR f.agent_id IS NULL OR f.agent_id = $agent_id)
-    WITH e, f
+    WITH e, f, relevance
     ORDER BY f.created_at DESC
-    WITH e, collect(f)[0..$facts_per_entity] AS top_facts
+    WITH e, relevance, collect(f)[0..$facts_per_entity] AS top_facts
     UNWIND top_facts AS f
     OPTIONAL MATCH (f)-[:OBJECT_OF]->(o:Entity)
     OPTIONAL MATCH (f)-[:SUPPORTED_BY]->(ev:Evidence)-[:FROM]->(d:SourceDocument)
-    RETURN e, f, o, collect(ev) AS evidence, collect(d) AS documents
+    RETURN e, f, o, collect(ev) AS evidence, collect(d) AS documents, relevance
+    ORDER BY relevance DESC, e.name
     """
 
 

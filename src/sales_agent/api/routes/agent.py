@@ -1,4 +1,8 @@
-"""Agent Chat 路由 — 委托 ChatPipeline 或 LangGraph 执行。"""
+"""Agent Chat 路由 — 委托 ChatPipeline 或 LangGraph 执行。
+
+P0: Graph execution now includes Store for cross-session memory
+     and supports ``interrupt_before``/``interrupt_after`` for HITL.
+"""
 
 from __future__ import annotations
 
@@ -16,7 +20,8 @@ from sales_agent.core.exceptions import (
     SalesAgentError,
 )
 from sales_agent.core.tenant_runtime import get_tenant_runtime
-from sales_agent.graph.chat_graph import build_chat_graph
+from sales_agent.graph.chat_graph import build_chat_graph_compiled
+from sales_agent.graph.checkpoints import get_checkpointer, get_store
 from sales_agent.models.base import generate_id
 from sales_agent.services.chat_pipeline import ChatPipeline
 from sales_agent.services.response_formatter import build_chat_response
@@ -39,6 +44,10 @@ async def _execute_via_graph(
 ) -> dict:
     """Execute chat via LangGraph StateGraph (parallel path to ChatPipeline).
 
+    P0: Uses ``build_chat_graph_compiled`` with checkpointer and store
+    for cross-session memory. Common ``interrupt_before`` and
+    ``interrupt_after`` options can be passed to enable HITL.
+
     Args:
         db: Database session (placed in Runtime.context for graph nodes).
         chat_model: ChatModel instance (placed in Runtime.context for generation).
@@ -55,9 +64,15 @@ async def _execute_via_graph(
     """
     import uuid
     from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.store.memory import InMemoryStore
 
-    builder = build_chat_graph()
-    graph = builder.compile(checkpointer=InMemorySaver())
+    checkpointer = InMemorySaver()  # P0: could use get_checkpointer()
+    store = InMemoryStore()         # P0: cross-session memory
+
+    graph = build_chat_graph_compiled(
+        checkpointer=checkpointer,
+        store=store,
+    )
 
     result = await graph.ainvoke(
         {
@@ -74,6 +89,7 @@ async def _execute_via_graph(
             "db": db,
             "chat_model": chat_model,
         },
+        durability="sync",  # P2: safe sync checkpoint for HTTP
     )
     return result
 

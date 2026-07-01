@@ -7,6 +7,9 @@ Routes to one of three paths based on `select_retrieval_path`:
 
 The ontology path runs its own LLM calls internally and sets
 `skip_generation=True` -- the main `generate` node is bypassed.
+
+P1: Emits custom stream events via ``runtime.stream_writer`` for
+     progress tracking.
 """
 
 from __future__ import annotations
@@ -25,6 +28,8 @@ async def retrieve_node(state: ChatGraphState, runtime: Runtime) -> dict:
 
     Called with state["retrieval_path"] already set by the conditional edge.
 
+    P1: Uses ``runtime.stream_writer`` for custom progress events.
+
     Args:
         state: Current graph state.
         runtime: LangGraph runtime with context (db, chat_model, embedding_model).
@@ -33,11 +38,15 @@ async def retrieve_node(state: ChatGraphState, runtime: Runtime) -> dict:
         Dict with retrieval results. May set `skip_generation=True` and
         `answer_dict` if the ontology subgraph pre-computed the answer.
     """
+    writer = runtime.stream_writer
     path = state.get("retrieval_path", "skip")
     task_type = state.get("task_type", "knowledge_qa")
     message = state["message"]
     tenant_id = state["tenant_id"]
     agent_id = state.get("agent_id")
+
+    # P1: Custom stream progress
+    writer({"phase": "retrieval_started", "path": path, "task_type": task_type})
 
     # -- Path 1: Ontology Neo4j knowledge graph (subgraph) --
     if path == "ontology":
@@ -48,6 +57,7 @@ async def retrieve_node(state: ChatGraphState, runtime: Runtime) -> dict:
         return await _retrieve_via_rag(state, runtime, tenant_id, task_type, message)
 
     # -- Path 3: Skip --
+    writer({"phase": "retrieval_skipped", "reason": "path_does_not_need_retrieval"})
     return {
         "retrieval_info": {"called": False, "reason": "path_does_not_need_retrieval"},
         "sources": [],
@@ -117,8 +127,10 @@ async def _retrieve_via_rag(
     embedding_model = runtime.context.get("embedding_model")
     settings = get_settings()
     mode = settings.retrieval.mode
+    writer = runtime.stream_writer  # P1
 
     if db is None:
+        writer({"phase": "retrieval_failed", "reason": "no_db"})
         return {"sources": [], "retrieval_result": None, "skip_generation": False}
 
     from sales_agent.services.retriever import Retriever, HybridRetriever
@@ -147,6 +159,13 @@ async def _retrieve_via_rag(
     )
 
     sources = [s.to_source_item() for s in (retrieval_result.sources if retrieval_result else [])]
+
+    # P1: Custom stream — retrieval complete
+    writer({
+        "phase": "retrieval_complete",
+        "mode": mode,
+        "source_count": len(sources),
+    })
 
     return {
         "retrieval_info": {

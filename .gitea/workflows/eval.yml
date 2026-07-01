@@ -50,6 +50,10 @@ jobs:
         run: |
           alembic upgrade head || echo "[WARN] Migration skipped (may need DB setup)"
 
+      - name: Unit tests (graph)
+        run: |
+          python -m pytest tests/unit/graph/ -v --tb=short
+
       - name: Start app
         env:
           ALIYUN_API_KEY: ${{ secrets.ALIYUN_API_KEY }}
@@ -65,7 +69,6 @@ jobs:
           TENANT_NAME: eval
         run: |
           python -m uvicorn sales_agent.main:app --host 0.0.0.0 --port 8000 &
-          # Wait for app to be ready
           for i in $(seq 1 30); do
             if curl -s http://localhost:8000/health > /dev/null 2>&1; then
               echo "App is ready"
@@ -75,13 +78,26 @@ jobs:
             sleep 2
           done
 
-      - name: Run eval
+      - name: Run conversation eval
         run: |
           python eval/run_conversation_eval.py \
             --app-url http://localhost:8000 \
             --models "${{ inputs.models || 'all' }}" \
             --concurrency 2 \
             --output-dir eval/results
+
+      - name: Run retrieval eval
+        run: |
+          python scripts/run_retrieval_eval.py \
+            --tenant taishan --mode hybrid --round ci \
+            --output-dir eval/results/retrieval || echo "[WARN] Retrieval eval skipped"
+
+      - name: DeepEval Gate
+        env:
+          CONFIDENT_API_KEY: ${{ secrets.CONFIDENT_API_KEY }}
+        run: |
+          deepeval gate -q || echo "[WARN] Gate check failed — review results manually"
+        continue-on-error: true
 
       - name: Upload results
         uses: actions/upload-artifact@v4

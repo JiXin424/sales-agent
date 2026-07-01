@@ -1,5 +1,8 @@
 """
-测试用例构建器 —— 从本地数据文件解析问题，调 Agent API 获取回答，构建 DeepEval LLMTestCase。
+测试用例构建器 —— 加载问题，直接调用 ChatPipeline（模拟钉钉用户路径），构建 DeepEval LLMTestCase。
+
+不再通过 HTTP API 调 Agent，而是走与钉钉用户完
+全相同的 FastAPI 流式链路：ChatPipeline.execute() → DingTalkMessageRenderer 渲染。
 
 数据来源：
 1. eval/questions.md —— 126 题（80 题有参考答案 + 46 题纯问题）
@@ -9,26 +12,32 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-import httpx
 from deepeval.test_case import LLMTestCase
 
-# 全局共享 httpx client，避免每个请求创建新连接导致 asyncio 清理报错
-_shared_client: httpx.AsyncClient | None = None
+logger = logging.getLogger(__name__)
 
-def _get_client() -> httpx.AsyncClient:
-    global _shared_client
-    if _shared_client is None or _shared_client.is_closed:
-        _shared_client = httpx.AsyncClient(
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
-            timeout=httpx.Timeout(120.0),
-        )
-    return _shared_client
+
+# ── DB 初始化（一次性） ──────────────────────────────────────────────
+
+def init_eval_db() -> None:
+    """初始化数据库引擎和 session factory（幂等）。
+
+    必须在任何 ChatPipeline 调用前执行一次。
+    复用 Agent 自身的 database.py 模块，不需要单独配置。
+    """
+    from sales_agent.core.database import get_engine, get_session_factory
+
+    # 触发引擎创建 + session factory 初始化
+    get_engine()
+    get_session_factory()
+    logger.info("Eval DB engine initialized")
 
 
 # ── 数据模型 ────────────────────────────────────────────────────────
@@ -50,9 +59,10 @@ class QuestionItem:
 
 @dataclass
 class AgentResponse:
-    """Agent HTTP API 的返回（提取了评估需要的字段）。"""
+    """Agent 执行结果（从 ChatPipeline 提取的评估所需字段）。"""
 
     answer_text: str = ""
+    rendered_output: str = ""        # 钉钉用户实际看到的渲染文本
     summary: str = ""
     sections: list[dict] = field(default_factory=list)
     sources: list[str] = field(default_factory=list)
@@ -143,16 +153,7 @@ def load_all_questions(
     include_ground_truth: bool = True,
     dedup: bool = True,
 ) -> list[QuestionItem]:
-    """加载所有数据源的问题，可选的去重合并。
-
-    Args:
-        include_questions_md: 是否加载 questions.md（合并版，126 题）
-        include_ground_truth: 是否加载 ground_truth_30q.json
-        dedup: 是否去重
-
-    Returns:
-        合并后的问题列表
-    """
+    """加载所有数据源的问题，可选的去重合并。"""
     all_items: list[QuestionItem] = []
 
     if include_questions_md:
@@ -164,9 +165,7 @@ def load_all_questions(
     if dedup:
         all_items = _deduplicate(all_items)
 
-    # 按 source + id 排序
     all_items.sort(key=lambda x: (x.source, _natural_sort_key(x.id)))
-
     return all_items
 
 
@@ -188,7 +187,6 @@ def _deduplicate(items: list[QuestionItem]) -> list[QuestionItem]:
 
     for item in items:
         norm = _normalize(item.text)
-        # 检查是否与已有问题的归一化文本高度重叠
         found_key = None
         for key in deduped:
             if _text_overlap(norm, key) > 0.8:
@@ -197,10 +195,8 @@ def _deduplicate(items: list[QuestionItem]) -> list[QuestionItem]:
 
         if found_key:
             existing = deduped[found_key]
-            # 保留有 reference 的那条
             if item.has_reference and not existing.has_reference:
                 deduped[found_key] = item
-            # 如果都有 reference 或都没有，保留 source 优先级高的（qa_extracted > questions_md > ground_truth）
             elif item.has_reference == existing.has_reference:
                 source_order = ["qa_extracted.md", "questions.md", "ground_truth_30q.json"]
                 if source_order.index(item.source) < source_order.index(existing.source):
@@ -221,7 +217,7 @@ def _text_overlap(a: str, b: str) -> float:
     return len(intersection) / min(len(set_a), len(set_b))
 
 
-# ── Agent API 调用 ────────────────────────────────────────────────
+# ── 从 answer_dict 提取纯文本 ──────────────────────────────────────
 
 
 def _extract_answer_text(answer: dict | str | None) -> str:
@@ -249,24 +245,27 @@ def _extract_answer_text(answer: dict | str | None) -> str:
     return str(answer) if answer else ""
 
 
-def _extract_sources(sources: list[dict] | None) -> list[str]:
-    """从 Agent 返回的 sources 中提取检索文本列表。
+# ── 从 pipeline 的 sources (list[dict]) 提取检索文本 ─────────────────
 
-    用于填充 LLMTestCase.retrieval_context（FaithfulnessMetric 需要）。
-    支持两种格式：
-    - chunk 模式：{content/text/snippet}
-    - ontology 模式：{title, section_title, snippet_ref}（组合为描述性文本）
+
+def _extract_sources(sources: list[dict] | None) -> list[str]:
+    """从 pipeline 返回的 sources 中提取检索文本列表。
+
+    用于填充 LLMTestCase.retrieval_context。
+    RAG 路径：to_source_item() 现在包含 text 字段（截断 2000 字符）
+    Ontology 路径：包含 content/text/snippet/title 字段
     """
     if not sources:
         return []
     texts: list[str] = []
     for s in sources:
         if isinstance(s, dict):
-            content = s.get("content") or s.get("text") or s.get("snippet") or ""
-            if content:
-                texts.append(str(content))
+            # 优先用 text 字段（RAG: to_source_item 包含，Ontology: content 映射到 text）
+            text = s.get("text") or s.get("content") or s.get("snippet") or ""
+            if text:
+                texts.append(str(text))
                 continue
-            # ontology 格式：拼 title + snippet_ref
+            # 回退：拼接元信息
             parts = []
             title = s.get("title") or s.get("display_title") or ""
             if title:
@@ -282,114 +281,156 @@ def _extract_sources(sources: list[dict] | None) -> list[str]:
     return texts
 
 
-async def call_agent_api(
-    app_url: str,
+# ── 核心：直接调用 ChatPipeline（模拟钉钉用户） ────────────────────
+
+_MAX_ACTUAL_OUTPUT_CHARS = 2500
+_MAX_SOURCE_CHARS = 1500
+
+
+async def call_agent_pipeline(
     question: QuestionItem,
-    model: str | None = None,
     tenant_id: str = "taishan",
-    timeout: float = 120.0,
-    streaming: bool = True,
+    model: str | None = None,
+    agent_id: str | None = None,
 ) -> AgentResponse:
-    """调用 Agent HTTP API，返回结构化的 AgentResponse。
+    """直接调用 ChatPipeline.execute()，模拟钉钉用户的消息处理路径。
+
+    与 handle_dingtalk_event() 走完全相同的代码路径：
+    ChatPipeline → routing → retrieval → generation → risk check →
+    DingTalkMessageRenderer 渲染输出。
 
     Args:
-        app_url: Agent API 地址，如 http://localhost:8003
         question: 问题对象
-        model: 模型名。streaming 模式下无效（端点不支持 model 覆盖）
         tenant_id: 租户 ID
-        timeout: 请求超时时间（秒）
-        streaming: 默认 True，走 /eval/streaming-chat 端点模拟钉钉流式场景，
-                   可获取 TTFT 和 token 消耗
+        model: 可选模型覆盖（通过 models.json 切换）
+        agent_id: 可选 Agent ID
+
+    Returns:
+        AgentResponse：包含回答文本、检索来源、耗时、token 用量等
     """
+    from sales_agent.core.config import get_settings
+    from sales_agent.core.database import get_session_factory
+    from sales_agent.integrations.dingtalk.config import DingTalkConfig
+    from sales_agent.integrations.dingtalk.message_renderer import DingTalkMessageRenderer
+    from sales_agent.models.base import generate_id
+    from sales_agent.services.chat_pipeline import ChatPipeline
+
+    settings = get_settings()
+    renderer = DingTalkMessageRenderer(DingTalkConfig(max_reply_chars=20000))
+
+    # 捕获 reply_fn 调用（"处理中"提示、错误等）
+    captured_replies: list[str] = []
+    async def reply_fn(text: str) -> None:
+        captured_replies.append(text)
+
     t_start = time.monotonic()
     response = AgentResponse()
 
-    if streaming:
-        endpoint = "/eval/streaming-chat"
-        payload: dict[str, Any] = {
-            "tenant_id": tenant_id,
-            "user_id": "deepeval_eval",
-            "message": question.text,
-            "channel": "eval_streaming",
-        }
-        # streaming 端点不支持 model 参数
-    else:
-        endpoint = "/agent/chat"
-        payload = {
-            "tenant_id": tenant_id,
-            "user_id": "deepeval_eval",
-            "message": question.text,
-            "channel": "eval",
-        }
-        if model:
-            payload["model"] = model
-
     try:
-        client = _get_client()
-        resp = await client.post(
-            f"{app_url.rstrip('/')}{endpoint}",
-            json=payload,
-            timeout=timeout,
-        )
-        response.latency_ms = int((time.monotonic() - t_start) * 1000)
+        factory = get_session_factory()
+        async with factory() as db:
+            pipeline = ChatPipeline(db, settings)
+            result = await pipeline.execute(
+                tenant_id=tenant_id,
+                user_id="deepeval_eval",
+                message=question.text,
+                conversation_id=f"eval_{generate_id()}",
+                context=None,
+                channel="dingtalk_single",
+                reply_fn=reply_fn,
+                agent_id=agent_id,
+                model=model,
+            )
 
-        if resp.status_code == 200:
-            data = resp.json()
-            answer = data.get("answer", {})
-            response.answer_text = _extract_answer_text(answer)
-            response.summary = answer.get("summary", "") if isinstance(answer, dict) else ""
-            response.sections = answer.get("sections", []) if isinstance(answer, dict) else []
-            response.sources = _extract_sources(data.get("sources", []))
-            response.task_type = data.get("task_type", "")
-            risk = data.get("risk", {})
-            response.risk_level = risk.get("level", "none") if isinstance(risk, dict) else "none"
-            response.risk_flags = risk.get("flags", []) if isinstance(risk, dict) else []
+            response.latency_ms = int(result.timings.total_ms)
 
-            # Token 用量（debug.usage）
-            debug = data.get("debug") or {}
-            usage = debug.get("usage", {})
-            response.prompt_tokens = usage.get("prompt_tokens", 0)
-            response.completion_tokens = usage.get("completion_tokens", 0)
-            response.total_tokens = usage.get("total_tokens", 0)
+            if result.fast_reply:
+                # 快速命令（帮助/reset）直接返回
+                response.answer_text = result.fast_reply
+                response.rendered_output = result.fast_reply
+                response.task_type = "fast_command"
+            else:
+                answer_dict = result.answer_dict
+                if isinstance(answer_dict, dict):
+                    response.answer_text = _extract_answer_text(answer_dict)
+                    response.summary = answer_dict.get("summary", "")
+                    response.sections = answer_dict.get("sections", [])
+                else:
+                    response.answer_text = str(answer_dict)
 
-            # TTFT（仅在 streaming 端点返回）
-            retrieval_info = debug.get("retrieval_info", {})
-            response.ttft_ms = retrieval_info.get("ttft_ms", 0)
-        else:
-            response.error = f"HTTP {resp.status_code}: {resp.text[:500]}"
-    except httpx.TimeoutException:
-        response.error = f"Timeout after {timeout}s"
-        response.latency_ms = int((time.monotonic() - t_start) * 1000)
+                response.task_type = (
+                    result.route_result.task_type if result.route_result else ""
+                )
+
+                # 用 DingTalkMessageRenderer 渲染（模拟钉钉用户看到的文本）
+                render_answer = answer_dict if isinstance(answer_dict, dict) else {
+                    "summary": str(answer_dict), "sections": [],
+                }
+                response.rendered_output = renderer.render(
+                    render_answer,
+                    result.sources or [],
+                    result.risk_result,
+                )
+
+                # 检索来源
+                response.sources = _extract_sources(result.sources or [])
+
+                # 风险
+                response.risk_level = result.risk_result.level
+                response.risk_flags = result.risk_result.flags
+
+                # Token 用量
+                response.prompt_tokens = result.usage.get("prompt_tokens", 0)
+                response.completion_tokens = result.usage.get("completion_tokens", 0)
+                response.total_tokens = result.usage.get("total_tokens", 0)
+
+                # TTFT 近似：generation 之前的各阶段耗时之和
+                stages = result.timings.stages
+                response.ttft_ms = int(
+                    stages.get("validation", 0)
+                    + stages.get("tenant_resolve", 0)
+                    + stages.get("context_load", 0)
+                    + stages.get("routing", 0)
+                    + stages.get("retrieval", 0)
+                    + stages.get("ontology_answer", 0)
+                )
+
+            # 如果 reply_fn 被调用了（处理中提示），记录
+            if captured_replies:
+                logger.debug("Pipeline sent %d reply_fn calls: %s",
+                             len(captured_replies),
+                             [r[:80] for r in captured_replies])
+
     except Exception as e:
+        logger.error("ChatPipeline failed for %s: %s", question.id, e)
         response.error = f"{type(e).__name__}: {e}"
         response.latency_ms = int((time.monotonic() - t_start) * 1000)
 
     return response
 
 
-# 裁判 LLM 单次 prompt 的上下文有限，过长的输入/输出/检索内容
-# 会导致 JSON 解析失败。这里对进入评估的字段做安全截断。
-_MAX_ACTUAL_OUTPUT_CHARS = 2500
-_MAX_SOURCE_CHARS = 1500
+# ── 构建 LLMTestCase ─────────────────────────────────────────────────
 
 
 def build_llm_test_case(
     question: QuestionItem,
     agent_response: AgentResponse,
 ) -> LLMTestCase:
-    """用 Agent 的返回结果构建 DeepEval LLMTestCase。
+    """用 Agent 返回结果构建 DeepEval LLMTestCase。
 
     Args:
         question: 问题对象（含 reference 等元信息）
-        agent_response: Agent API 返回的响应
+        agent_response: 从 ChatPipeline 获取的响应
 
     Returns:
         LLMTestCase：可直接传给 DeepEval 的 evaluate() 或 assert_test()
     """
+    # 截断过长的回答
     actual = agent_response.answer_text
     if len(actual) > _MAX_ACTUAL_OUTPUT_CHARS:
         actual = actual[:_MAX_ACTUAL_OUTPUT_CHARS]
 
+    # 截断过长的来源文本
     sources = [
         s[:_MAX_SOURCE_CHARS] for s in agent_response.sources
     ] if agent_response.sources else []
@@ -401,3 +442,17 @@ def build_llm_test_case(
         retrieval_context=sources,
         context=sources,
     )
+
+
+# ── 导出 ─────────────────────────────────────────────────────────────
+
+__all__ = [
+    "init_eval_db",
+    "QuestionItem",
+    "AgentResponse",
+    "parse_questions_markdown",
+    "parse_ground_truth_json",
+    "load_all_questions",
+    "call_agent_pipeline",
+    "build_llm_test_case",
+]

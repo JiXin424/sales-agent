@@ -2,18 +2,20 @@
 # ──────────────────────────────────────────────────────────────────
 # Sales Agent + DeepEval 一键评估脚本
 #
+# 直接走 ChatPipeline（与钉钉用户相同的代码路径），不再依赖 HTTP API。
+#
 # 用法:
-#   # 1. 快速验证（5 题，单实例）
+#   # 1. 快速冒烟（5 题）
 #   bash eval/deepeval_run.sh smoke
 #
-#   # 2. 单实例完整评估（Agent 已在运行）
-#   bash eval/deepeval_run.sh eval http://localhost:8000 my_kb
+#   # 2. 单租户完整评估
+#   bash eval/deepeval_run.sh eval taishan
 #
-#   # 3. KB 对比评估（两个实例都在运行）
-#   bash eval/deepeval_run.sh compare http://localhost:8001 legacy_rag http://localhost:8002 ontology_neo4j
+#   # 3. 两租户对比
+#   bash eval/deepeval_run.sh compare taishan taishankaifa2
 #
 #   # 4. 自定义参数
-#   bash eval/deepeval_run.sh eval http://localhost:8000 taishan "" "qwen-plus" 10
+#   bash eval/deepeval_run.sh eval taishan "qwen-plus" 10
 # ──────────────────────────────────────────────────────────────────
 
 set -euo pipefail
@@ -73,12 +75,12 @@ MODE="${1:-help}"
 case "$MODE" in
     smoke)
         # 快速冒烟测试：5 题，验证流程是否跑通
-        APP_URL="${2:-http://localhost:8000}"
+        TENANT_ID="${2:-taishan}"
         LIMIT="${3:-5}"
 
-        info "Smoke test: $LIMIT questions against $APP_URL"
+        info "Smoke test: $LIMIT questions against tenant=$TENANT_ID"
         "$VENV_PYTHON" "$SCRIPT_DIR/deepeval_eval.py" \
-            --app-url "$APP_URL" \
+            --tenant-id "$TENANT_ID" \
             --limit "$LIMIT" \
             --concurrency 1 \
             --output-dir "$SCRIPT_DIR/results/deepeval/"
@@ -86,25 +88,24 @@ case "$MODE" in
         ;;
 
     eval)
-        # 单实例完整评估
-        APP_URL="${2:?Usage: $0 eval <app-url> <label> [models] [limit]}"
-        LABEL="${3:-eval}"
-        MODELS="${4:-all}"
-        LIMIT="${5:-0}"
+        # 单租户完整评估
+        TENANT_ID="${2:?Usage: $0 eval <tenant-id> [models] [limit]}"
+        MODELS="${3:-all}"
+        LIMIT="${4:-0}"
 
-        info "Single-instance eval: $LABEL @ $APP_URL"
+        info "Single-tenant eval: tenant=$TENANT_ID"
         info "Models: $MODELS, Limit: ${LIMIT:-all}"
 
         if [ "$LIMIT" != "0" ] && [ -n "$LIMIT" ]; then
             "$VENV_PYTHON" "$SCRIPT_DIR/deepeval_eval.py" \
-                --app-url "$APP_URL" \
+                --tenant-id "$TENANT_ID" \
                 --models "$MODELS" \
                 --limit "$LIMIT" \
                 --concurrency 3 \
                 --output-dir "$SCRIPT_DIR/results/deepeval/"
         else
             "$VENV_PYTHON" "$SCRIPT_DIR/deepeval_eval.py" \
-                --app-url "$APP_URL" \
+                --tenant-id "$TENANT_ID" \
                 --models "$MODELS" \
                 --concurrency 3 \
                 --output-dir "$SCRIPT_DIR/results/deepeval/"
@@ -112,38 +113,42 @@ case "$MODE" in
         ok "Eval done. Check eval/results/deepeval/"
         ;;
 
+    risk)
+        # 风险检测评估
+        TENANT_ID="${2:-taishan}"
+
+        info "Risk detection eval: tenant=$TENANT_ID"
+        "$VENV_PYTHON" "$SCRIPT_DIR/deepeval_risk_eval.py" \
+            --tenant-id "$TENANT_ID" \
+            --output-dir "$SCRIPT_DIR/results/risk/"
+        ok "Risk eval done. Check eval/results/risk/"
+        ;;
+
     compare)
-        # KB 对比评估
-        # 用法: $0 compare <url1> <label1> <url2> <label2> [models] [limit] [tenant1] [tenant2]
-        LEGACY_URL="${2:?Usage: $0 compare <url1> <label1> <url2> <label2> [models] [limit] [tenant1] [tenant2]}"
-        LEGACY_LABEL="${3:-kb1}"
-        ONTOLOGY_URL="${4:?}"
-        ONTOLOGY_LABEL="${5:-kb2}"
+        # 两租户对比
+        TENANT_ID="${2:?Usage: $0 compare <tenant-id-1> <tenant-id-2> [models] [limit]}"
+        TENANT_ID_2="${3:?}"
+        LABEL1="${4:-$TENANT_ID}"
+        LABEL2="${5:-$TENANT_ID_2}"
         MODELS="${6:-all}"
         LIMIT="${7:-0}"
-        TENANT1="${8:-taishan}"
-        TENANT2="${9:-taishankaifa2}"
 
-        info "KB comparison: $LEGACY_LABEL vs $ONTOLOGY_LABEL"
-        info "  $LEGACY_LABEL: $LEGACY_URL (tenant=$TENANT1)"
-        info "  $ONTOLOGY_LABEL: $ONTOLOGY_URL (tenant=$TENANT2)"
+        info "Tenant comparison: $LABEL1 vs $LABEL2"
+        info "  $LABEL1: tenant=$TENANT_ID"
+        info "  $LABEL2: tenant=$TENANT_ID_2"
 
         if [ "$LIMIT" != "0" ] && [ -n "$LIMIT" ]; then
             "$VENV_PYTHON" "$SCRIPT_DIR/deepeval_eval.py" \
-                --app-url-legacy "$LEGACY_URL" --label-legacy "$LEGACY_LABEL" \
-                --tenant-id-legacy "$TENANT1" \
-                --app-url-ontology "$ONTOLOGY_URL" --label-ontology "$ONTOLOGY_LABEL" \
-                --tenant-id-ontology "$TENANT2" \
+                --tenant-id "$TENANT_ID" --label "$LABEL1" \
+                --tenant-id-2 "$TENANT_ID_2" --label-2 "$LABEL2" \
                 --models "$MODELS" \
                 --limit "$LIMIT" \
                 --concurrency 3 \
                 --output-dir "$SCRIPT_DIR/results/deepeval/"
         else
             "$VENV_PYTHON" "$SCRIPT_DIR/deepeval_eval.py" \
-                --app-url-legacy "$LEGACY_URL" --label-legacy "$LEGACY_LABEL" \
-                --tenant-id-legacy "$TENANT1" \
-                --app-url-ontology "$ONTOLOGY_URL" --label-ontology "$ONTOLOGY_LABEL" \
-                --tenant-id-ontology "$TENANT2" \
+                --tenant-id "$TENANT_ID" --label "$LABEL1" \
+                --tenant-id-2 "$TENANT_ID_2" --label-2 "$LABEL2" \
                 --models "$MODELS" \
                 --concurrency 3 \
                 --output-dir "$SCRIPT_DIR/results/deepeval/"
@@ -155,21 +160,26 @@ case "$MODE" in
         echo "Usage: $0 <command> [args...]"
         echo ""
         echo "Commands:"
-        echo "  smoke [app-url] [limit]"
-        echo "      Quick smoke test (default: 5 questions, http://localhost:8000)"
+        echo "  smoke [tenant-id] [limit]"
+        echo "      Quick smoke test (default: 5 questions, tenant=taishan)"
         echo ""
-        echo "  eval <app-url> <label> [models] [limit]"
-        echo "      Full single-instance evaluation"
-        echo "      Example: $0 eval http://localhost:8000 my_kb qwen-plus"
+        echo "  eval <tenant-id> [models] [limit]"
+        echo "      Full single-tenant evaluation"
+        echo "      Example: $0 eval taishan qwen-plus 10"
         echo ""
-        echo "  compare <legacy-url> <legacy-label> <ontology-url> <ontology-label> [models] [limit]"
-        echo "      Compare two KB instances"
-        echo "      Example: $0 compare http://localhost:8001 legacy_rag http://localhost:8002 ontology_neo4j"
+        echo "  risk [tenant-id]"
+        echo "      Evaluate risk detection (block/miss/false-alarm)"
+        echo "      Example: $0 risk taishan"
+        echo ""
+        echo "  compare <tenant-id-1> <tenant-id-2> [label1] [label2] [models] [limit]"
+        echo "      Compare two tenants"
+        echo "      Example: $0 compare taishan taishankaifa2 泰山 泰山开发"
         echo ""
         echo "Prerequisites:"
-        echo "  - OPENAI_API_KEY (or compatible) set in environment"
-        echo "  - Agent instance(s) already running"
+        echo "  - .env file with DATABASE_URL, MODEL_* vars"
+        echo "  - OPENAI_API_KEY (or DEEPEVAL_MODEL) for judge LLM"
         echo "  - DeepEval installed in .venv"
+        echo "  - DB accessible (same DB as running Agent)"
         ;;
     *)
         err "Unknown command: $MODE"

@@ -21,6 +21,12 @@ from deepeval.metrics import (
     HallucinationMetric,
     BaseMetric,
     ArenaGEval,
+    TaskCompletionMetric,
+    ToolCorrectnessMetric,
+    StepEfficiencyMetric,
+    ContextualRelevancyMetric,
+    ContextualRecallMetric,
+    ContextualPrecisionMetric,
 )
 from deepeval.models import GPTModel, DeepEvalBaseLLM
 from deepeval.test_case import LLMTestCase, SingleTurnParams, ArenaTestCase, Contestant
@@ -400,6 +406,121 @@ def make_completeness_metric(judge_model=None) -> GEval:
     )
 
 
+# ── 方案 D 新增：Agentic 指标 ──────────────────────────────────
+
+def make_task_completion_metric(judge_model=None):
+    """任务完成度：评估 Agent 是否成功解决了用户的销售咨询问题。
+
+    这是 Agentic 评估的核心指标——不只检查回答是否正确，
+    而是从"用户的任务是否被完成"的角度来评估。
+
+    适用于所有题目（有/无参考答案均可）。
+    """
+    return TaskCompletionMetric(
+        threshold=0.5,
+        task=(
+            "评估销售教练 Agent 是否成功完成了用户的请求。\n"
+            "好的完成包括：\n"
+            "1. 直接回应用户的具体问题（不答非所问）\n"
+            "2. 提供了可操作的、具体的销售建议或信息\n"
+            "3. 没有遗漏用户问题中的关键信息点\n"
+            "4. 回答的语气和风格符合专业销售教练的角色"
+        ),
+        model=judge_model or _get_cached_judge(),
+        include_reason=True,
+    )
+
+
+def make_step_efficiency_metric(judge_model=None):
+    """步骤效率：Agent 是否走了不必要的步骤或做了冗余操作。
+
+    用于评估 Agent 的 pipeline 执行效率，
+    帮助发现路由、检索、生成阶段是否存在浪费。
+    """
+    return StepEfficiencyMetric(
+        threshold=0.5,
+        model=judge_model or _get_cached_judge(),
+        include_reason=True,
+    )
+
+
+def make_tool_correctness_for_routing_metric(
+    expected_task_type: str,
+    judge_model=None,
+):
+    """路由正确性：task_router 是否将请求路由到了正确的 task_type。
+
+    仅在已知预期 task_type 的场景下使用（如：问题类别明确标注了
+    应该触发哪个 pipeline 分支）。
+
+    Args:
+        expected_task_type: 预期的任务类型（如 "knowledge_qa"）
+        judge_model: 裁判 LLM 模型
+    """
+    from deepeval.test_case import ToolCall, ToolCallParams
+    return ToolCorrectnessMetric(
+        threshold=0.5,
+        evaluation_params=[ToolCallParams.OUTPUT],
+        model=judge_model or _get_cached_judge(),
+        include_reason=True,
+    )
+
+
+# ── 方案 E 新增：检索质量指标 ──────────────────────────────────
+
+
+def make_contextual_relevancy_metric(judge_model=None):
+    """检索相关性：检索回来的内容与用户问题相关吗？
+
+    算法：把检索出来的每段文本拆成「语句」，逐个判断是否与 input 相关。
+    score = 相关语句数 / 总语句数。
+
+    高分散 → 检索回来的内容大部分和问题有关。
+    低分   → 检索捞了不相关的东西，浪费了上下文窗口。
+    """
+    return ContextualRelevancyMetric(
+        threshold=0.5,
+        include_reason=True,
+        model=judge_model or _get_cached_judge(),
+        async_mode=True,
+    )
+
+
+def make_contextual_recall_metric(judge_model=None):
+    """检索召回率：参考答案里的关键信息，检索内容覆盖了多少？
+
+    算法：把 expected_output 拆成逐句，判断每句能否在 retrieval_context 里找到支撑。
+    score = 被支撑的句子数 / 总句子数。
+
+    高分散 → 参考文献里的信息基本都被检索到了，Agent 有充足素材来回答。
+    低分   → 关键信息没检索到——就算 Agent 答对了也是「猜的」，不是基于知识库。
+    """
+    return ContextualRecallMetric(
+        threshold=0.5,
+        include_reason=True,
+        model=judge_model or _get_cached_judge(),
+        async_mode=True,
+    )
+
+
+def make_contextual_precision_metric(judge_model=None):
+    """检索精度：相关的检索内容排在前面吗？
+
+    算法：对每个检索节点判断是否「对得出 expected_output 有用」，
+    然后按排名计算 Average Precision。
+    score = 1/R × Σ(relevant_at_k / k)。
+
+    检索系统不仅要「找对」，还要「把对的排前面」——排在后面的即使相关，
+    Agent 也可能因为截断看不到。这个指标惩罚相关但在末尾的内容。
+    """
+    return ContextualPrecisionMetric(
+        threshold=0.5,
+        include_reason=True,
+        model=judge_model or _get_cached_judge(),
+        async_mode=True,
+    )
+
+
 # ── 指标组合工厂 ──────────────────────────────────────────────────
 
 def get_metrics_for_question(
@@ -417,19 +538,26 @@ def get_metrics_for_question(
     """
     model = judge_model or _get_cached_judge()
 
-    # 所有题目都用这些
+    # 所有题目都用这些（检索 + 生成 + Agentic）
     base = [
+        # 检索质量
+        make_contextual_relevancy_metric(model),
+        # 生成质量
         make_faithfulness_metric(model),
         make_answer_relevancy_metric(model),
         AnswerRecallMetric(model=model, threshold=0.4),
+        # Agentic
+        make_task_completion_metric(model),
     ]
 
     if has_reference:
-        # 方案 A：+正确性 +完整性
+        # 有参考答案：+检索召回 +检索精度 +正确性 +完整性
+        base.insert(0, make_contextual_precision_metric(model))
+        base.insert(0, make_contextual_recall_metric(model))
         base.insert(0, make_completeness_metric(model))
         base.insert(0, make_correctness_metric(model))
     else:
-        # 方案 B：+幻觉检测
+        # 无参考答案：+幻觉检测
         base.append(make_hallucination_metric(model))
 
     return base
@@ -523,4 +651,10 @@ __all__ = [
     "make_faithfulness_metric",
     "make_answer_relevancy_metric",
     "make_hallucination_metric",
+    "make_task_completion_metric",
+    "make_step_efficiency_metric",
+    "make_tool_correctness_for_routing_metric",
+    "make_contextual_relevancy_metric",
+    "make_contextual_recall_metric",
+    "make_contextual_precision_metric",
 ]

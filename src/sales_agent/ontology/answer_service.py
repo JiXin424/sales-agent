@@ -74,22 +74,35 @@ _MAX_ENTITIES_FOR_PROMPT = 10
 _MAX_FACTS_FOR_PROMPT = 25
 
 
+# 中文问题分词：按常见虚词/功能词切分，提取有意义的检索词
+_SPLIT_FUNCTION_WORDS = re.compile(r'[的了呢吗啊吧是有哪些什么怎么在哪去]')
+
+
+def _extract_question_terms(question: str) -> list[str]:
+    """从中文问题中提取有意义的检索词（按虚词切分 + 过滤空白）。
+
+    例如 "全品c的产品的冷饮有哪些品牌" → ["全品c", "产品", "冷饮", "品牌"]
+    """
+    terms = [t.strip() for t in _SPLIT_FUNCTION_WORDS.split(question) if t.strip()]
+    return terms or [question]  # 兜底：如果切分后为空，用原始问题
+
+
 def _compact_evidence(evidence: GraphEvidence, question: str = "") -> dict[str, Any]:
     """压缩图谱证据到 LLM prompt 可接受的大小。
 
     实体和事实各保留前 N 条，优先保留与问题关键词相关的事实。
     每条只保留 name/type/predicate/value 等关键字段。
     """
-    # 从问题中提取关键词用于相关性排序
-    q_terms = set(question) if question else set()
+    # 从问题中提取有意义的检索词（词级匹配，不再是字符级）
+    q_terms = _extract_question_terms(question) if question else []
 
     def _relevance(f: dict) -> int:
-        """计算事实与问题的相关性得分。"""
+        """计算事实与问题的相关性得分（词级子串匹配）。"""
         score = 0
         fv = str(f.get("value", "")) + str(f.get("predicate", ""))
-        for ch in q_terms:
-            if ch in fv:
-                score += 1
+        for term in q_terms:
+            if term in fv:
+                score += len(term)  # 长词匹配权重更高
         return score
 
     # 按相关性排序事实，取前 N
@@ -202,6 +215,10 @@ class OntologyAnswerService:
                 "display_title": doc.get("title", "图谱来源"),
                 "score": graph_evidence.confidence,
                 "source_type": "ontology",
+                "text": (
+                    doc.get("content") or doc.get("text")
+                    or doc.get("snippet") or doc.get("title", "")
+                )[:2000],
             }
             for doc in graph_evidence.source_documents[:3]
         ]

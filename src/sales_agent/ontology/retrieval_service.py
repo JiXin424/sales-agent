@@ -42,6 +42,7 @@ class OntologyRetrievalService:
     async def _extract_search_terms(self, question: str) -> list[str]:
         """用 LLM 从问句中提取实体名/关键词，失败时用原始问题兜底。"""
         if self.chat_model is None:
+            logger.info("Ontology entity extraction: no chat_model, using raw question as search term")
             return [question]
 
         try:
@@ -68,7 +69,12 @@ class OntologyRetrievalService:
                     terms = [str(v).strip() for v in parsed.values() if str(v).strip()]
             else:
                 terms = [question]
-            return list(dict.fromkeys(terms)) if terms else [question]
+            terms = list(dict.fromkeys(terms)) if terms else [question]
+            logger.info(
+                "Ontology entity extraction: question=%r → terms=%s",
+                question[:120], terms,
+            )
+            return terms
         except Exception:
             logger.warning("LLM entity extraction failed, using raw question", exc_info=True)
             return [question]
@@ -92,6 +98,10 @@ class OntologyRetrievalService:
             evidence.extend([self._node(ev) for ev in row.get("evidence", []) if ev])
 
         if not matched_entities:
+            logger.info(
+                "Ontology graph query returned 0 entities for terms=%s, trying vector fallback",
+                search_terms,
+            )
             embedding = (await self.embedding_model.embed([question]))[0]
             vector_rows = await self.repository.query_vector({
                 "tenant_id": tenant_id,
@@ -120,7 +130,7 @@ class OntologyRetrievalService:
                 return sum(1 for t in search_terms if t in fv)
             facts.sort(key=_fact_score, reverse=True)
 
-        return GraphEvidence(
+        result = GraphEvidence(
             ontology_intent="entity_info",
             center_entities=matched_entities[:5],
             matched_entities=matched_entities,
@@ -132,6 +142,19 @@ class OntologyRetrievalService:
             confidence=0.8 if matched_entities else 0.0,
             timings_ms={"ontology_retrieval": int((time.monotonic() - started) * 1000)},
         )
+        logger.info(
+            "Ontology retrieval result: strategy=%s entities=%d facts=%d docs=%d confidence=%.2f latency_ms=%d",
+            result.retrieval_strategy, len(result.matched_entities),
+            len(result.facts_used), len(result.source_documents),
+            result.confidence, result.timings_ms.get("ontology_retrieval", 0),
+        )
+        if result.matched_entities:
+            entity_summary = [
+                f"{e.get('name', '?')}({e.get('type', '?')})"
+                for e in result.matched_entities[:10]
+            ]
+            logger.info("Ontology matched entities: %s", entity_summary)
+        return result
 
     def _node(self, value):
         if value is None:

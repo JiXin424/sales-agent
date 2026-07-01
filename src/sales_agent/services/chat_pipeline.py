@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from deepeval.tracing import observe
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -180,6 +182,7 @@ class ChatPipeline:
             path_router_config=self.settings.path_router,
         )
 
+    @observe(type="agent")
     async def execute(
         self,
         *,
@@ -735,11 +738,12 @@ class ChatPipeline:
                         logger.warning("LLM risk check failed, using rule result: %s", e)
 
                 # 如果被 block，替换为安全建议
+                # 注意：summary 和 sections 不要放相同内容，避免 format_text_output 输出两遍。
                 if risk_result.action == "block":
+                    _notice = risk_result.notice or "该请求涉及高风险承诺，已改为安全建议"
                     answer_dict = {
-                        "summary": risk_result.notice or "该请求涉及高风险承诺，已改为安全建议",
+                        "summary": _notice,
                         "sections": [
-                            {"title": "安全提示", "content": risk_result.notice},
                             {"title": "建议", "content": "请使用合规的销售表达，不要对外做出未确认的承诺。"},
                         ],
                     }

@@ -3,6 +3,9 @@
 This is the foundation for autonomous tool-calling agents.
 The agent decides which tools to call, in what order, and when to stop --
 without a fixed workflow.
+
+P0: Accepts ``store`` for cross-session persistent memory (BaseStore).
+P1: Tools use ``InjectedState`` and ``InjectedStore`` for rich context.
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ from sales_agent.graph.tools import ALL_TOOLS
 def build_react_agent(
     chat_model,
     checkpointer=None,
+    store=None,  # P0: cross-session store
 ) -> CompiledStateGraph:
     """Build a ReAct-style agent with tool-calling capability.
 
@@ -24,9 +28,13 @@ def build_react_agent(
     2. Decides whether to call a tool or respond
     3. Loops until it has enough information to answer
 
+    P1: Tools have access to graph state via ``InjectedState`` and
+    persistent memory via ``InjectedStore``.
+
     Args:
         chat_model: The chat model (must support tool calling).
         checkpointer: Optional checkpointer for state persistence.
+        store: Optional LangGraph Store for cross-session memory (P0).
 
     Returns:
         A compiled StateGraph ready for invoke/stream.
@@ -35,5 +43,6 @@ def build_react_agent(
         model=chat_model,
         tools=ALL_TOOLS,
         checkpointer=checkpointer,
+        store=store,  # P0: pass store through to tools
     )
     return agent

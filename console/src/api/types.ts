@@ -41,6 +41,67 @@ export interface GraphDebugError {
   message: string;
 }
 
+/** /run SSE `started` event — carries the checkpointer thread_id. */
+export interface GraphDebugStarted {
+  thread_id?: string;
+  [key: string]: unknown;
+}
+
+// --- Graph Debug checkpoint time-travel (read-only) ---
+
+/** Single checkpoint metadata entry on the history timeline.
+
+`parent_checkpoint_id` is the precise parent lineage from
+`snapshot.parent_config["configurable"]["checkpoint_id"]` — null for the
+root checkpoint, and for A2 forks it points at the checkpoint the user edited.
+
+`source` is optional: the backend may include `"update"` for checkpoints
+created by `aupdate_state` (fork origin). If absent, the DAG infers fork
+points structurally from the parent→child graph (a node with >1 child). */
+export interface CheckpointMeta {
+  checkpoint_id: string;
+  step: number | null;
+  node: string | null;
+  ts: string | null;
+  next: string[] | null;
+  parent_checkpoint_id: string | null;
+  /** Optional backend hint for fork detection ('update' = created by update_state). */
+  source?: string | null;
+}
+
+export interface CheckpointListResponse {
+  checkpoints: CheckpointMeta[];
+}
+
+export interface CheckpointStateResponse {
+  values: Record<string, unknown>;
+  next: string[] | null;
+}
+
+/** Body for POST .../checkpoints/{cid}/state — update state values for a fork. */
+export interface UpdateStateRequest {
+  values: Record<string, unknown>;
+  graph_id?: string;
+}
+
+/** Response from POST .../checkpoints/{cid}/state — the new checkpoint_id created by the fork. */
+export interface UpdateStateResponse {
+  checkpoint_id: string;
+}
+
+/** Body for POST .../checkpoints/{cid}/replay — re-run the tail from a checkpoint. */
+export interface ReplayRequest {
+  graph_id?: string;
+}
+
+/** Persisted recent debug run record (localStorage["graph-debug:runs"]). */
+export interface RecentDebugRun {
+  thread_id: string;
+  graph_id: string;
+  message: string;
+  ts: string; // ISO timestamp
+}
+
 
 /** TypeScript interfaces mirroring backend Pydantic schemas. */
 

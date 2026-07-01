@@ -256,3 +256,25 @@
 - **正解**：`tar ... | ssh -o BatchMode=... ...`（**不带 `-n`**），并在注释里标明「此分支唯一不带 -n 的 ssh，stdin 由 tar 管道占用，不会读走 while 循环输入」。已落注释于 `scripts/ci-fanout.sh`。
 - **教训**：① 复制既有模式前先理解它的前提（`-n` 是为防吞 while 输入，不是万能默认）；②「本地试跑」再次救场——若直接 push 等 CI 跑，得去 Gitea Actions 日志才看到远端 tar 报错，定位更慢。
 - **相关**：#4（验证 Before Done——本次靠本地试跑当场抓 bug）、#15/#16（用对参照系 / 理解前提的同族）。
+
+## 20. 跨层 response 形状契约必须写死；别假设 LangGraph checkpoint 字段名——跑最小 probe dump 真实对象
+
+- **场景**：Graph Debug 时间旅行。① 后端 `list_checkpoints` 最初 `return summaries`（裸 `list[CheckpointSummary]`），但前端类型是 `CheckpointListResponse { checkpoints: [...] }`、消费处 `resp.checkpoints ?? []` → 时间轴恒空。② design.md 假设 `StateSnapshot.metadata.writes` 存在、从中推断节点名；进程内验证才发现 langgraph>=1.2 的 `metadata` 只有 `source`/`step`/`parents`，**没有 writes**，`node` 全 null。
+- **根因**：① 后端、前端由两个子代理并行实现，两方各自"按 design.md 做"，但 design 对"列表是否包一层 `{checkpoints:...}`"没写死，形状漂移；任一方单看都"对"，合起来才暴露。② `metadata.writes` 是大量旧示例代码里的字段，当前大版本已不写——照搬记忆里的 API 形状而没实测。
+- **教训**：
+  1. **跨层 response 形状是契约，必须在 design.md 写死到"裸数组 vs 包对象"级别**，并在验收里加一条"前端实际拿到的字段非 undefined"。子代理并行实现前后端时，形状漂移是最高频 bug。
+  2. **第三方框架的字段名/结构别凭记忆，跑一次最小 probe dump 真实对象**。本次 10 行脚本 `async for snap in aget_state_history: print(snap.metadata, snap.tasks, snap.next)` 同时证伪了 writes 假设、定位到 `tasks[*].name` 才是节点名来源。design.md 风险栏虽点名了"字段名跨版本差异"，但只有真跑才落实。
+  3. **进程内直调端点函数 + 共享 InMemorySaver** 是绕过 HTTP/Docker/DB 的最快验证法：monkey-patch `get_checkpointer` 返回同一个 `InMemorySaver`，`run` 写、端点读，一秒验证字段映射 + 403 + 形状，无需起 server。
+- **检查范式**：涉及前后端新端点 → design.md 明确 response 形状（包对象 vs 裸数组）→ 实现后写进程内 probe（共享 InMemorySaver）dump 真实 `metadata`/`tasks`/`next` → 前端消费处加 `?? []` 兜底前，先确认字段名拼写与后端一致。
+- **相关**：#4（验证 Before Done——本次进程内 probe 当场抓两个 bug）、#19 同族（实证优先于假设）。
+
+## 21. LangGraph `astream(stream_mode=[list])` 返回 `tuple[mode,payload]` 不是 dict；"进程内验证端点函数" ≠ "验证了所有代码路径"
+
+- **场景**：A1 的 `/run` 端点 `async for chunk in graph.astream(..., stream_mode=["updates","custom","debug"]): chunk.get("type","")`。`astream` 在 stream_mode 是 **list** 时 yield `tuple[mode, payload]`，`.get` 对 tuple 抛 AttributeError → `/run` 真实运行时**只发 `error` 事件**，从没发 `node_start`/`node_output`/`node_end`/`done`。A1 验证时只跑了 checkpoint history 端点（进程内直调函数），**没跑 SSE 流式路径**，所以没发现。A2 抽 `_run_graph_sse` 时撞到，才修。
+- **根因**：① LangGraph 的 `astream` 返回形状依赖 stream_mode 类型——单字符串 yield dict，list yield `tuple[mode,payload]`。照搬旧示例（dict 风格）没核对当前版本。② A1 的"进程内验证"只覆盖了端点的**业务逻辑**（`aget_state_history`），没覆盖 **SSE 流式路径**（`astream` chunk 解包），给了"已验证"的假象。
+- **教训**：
+  1. **LangGraph 流式：stream_mode 是 list → chunk 是 tuple；是单字符串 → chunk 是 dict**。解包前先 `isinstance(chunk, tuple)` 归一化，别假设一种形状。
+  2. **"验证了端点函数" ≠ "验证了所有代码路径"**。SSE 流式（generator yield）、异步迭代、分支逻辑要单独触发。A1 漏了 SSE 路径，因为只直调了 list/state 函数。验证清单要覆盖每条 yield/return 路径。
+  3. **真实 HTTP 跑一次是发现这类 bug 的最终手段**；环境受限时（本机无 DB、容器外代码）至少为"流式/异步"路径写专门的进程内 probe（直调 generator 收集 yield），而非只测同步返回。
+- **检查范式**：任何 `async for chunk in graph.astream(...)` → 先 `print(type(chunk), chunk)` 确认形状 → 归一化 → 再分支。SSE 端点写进程内 probe：`async for evt in streamer(): collect`，验证 yield 的事件类型符合预期。
+- **相关**：#20（langgraph 字段名别假设——同族：writes/tasks/astream-tuple 都是"照搬记忆里的 API 形状没实测"）、#4（验证 Before Done——本次是"验证覆盖不全"的变种）。

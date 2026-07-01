@@ -95,3 +95,96 @@
   max-height: 40vh;
   overflow-y: auto;
 }
+
+/* ── Runs selector (top of right panel) ── */
+
+.gd-runs-select {
+  margin-left: auto;
+  min-width: 320px;
+  max-width: 50%;
+}
+
+/* ── Checkpoint timeline ── */
+
+.gd-checkpoint-state {
+  margin-top: 12px;
+  border: 1px solid #f0f0f0;
+  border-radius: 6px;
+  background: #fafafa;
+  padding: 12px;
+  max-height: 50vh;
+  overflow: auto;
+  font-size: 12px;
+  font-family: 'Menlo', 'Consolas', monospace;
+}
+
+.gd-checkpoint-empty {
+  padding: 24px 0;
+  text-align: center;
+  color: #8c8c8c;
+}
+
+/* ── Checkpoint branch-tree DAG (reactflow, replaces A1 Steps timeline) ── */
+
+.gd-dag-wrap {
+  width: 100%;
+  height: 45vh;
+  min-height: 280px;
+  border: 1px solid #f0f0f0;
+  border-radius: 6px;
+  background: #fafafa;
+}
+
+.gd-dag-node {
+  /* reactflow node body — actual style is set inline in CheckpointDAG.tsx
+     so selection / fork colors are dynamic. This class exists for any
+     static overrides and to keep the dev tools grep-able. */
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Tighten reactflow control buttons to match the small panel. */
+.gd-dag-wrap .reactflow-controls,
+.gd-dag-wrap .react-controls {
+  font-size: 11px;
+}
+
+/* ── JsonNode (recursive collapsible viewer) ── */
+
+.json-node {
+  line-height: 1.5;
+}
+
+.json-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.json-toggle {
+  cursor: pointer;
+  user-select: none;
+  display: inline-block;
+  width: 12px;
+  color: #8c8c8c;
+  font-size: 10px;
+}
+
+.json-key {
+  color: #c41d7f;
+  font-weight: 500;
+}
+
+.json-summary {
+  color: #8c8c8c;
+  font-style: italic;
+}
+
+.json-empty {
+  color: #8c8c8c;
+}
+
+.json-children {
+  margin-left: 18px;
+  border-left: 1px dashed #e0e0e0;
+  padding-left: 8px;
+}

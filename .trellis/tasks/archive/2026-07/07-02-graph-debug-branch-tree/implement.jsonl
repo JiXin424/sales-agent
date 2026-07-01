@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "parent_checkpoint_id 后端字段 ↔ 前端 reactflow 建边必须对齐"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 list_checkpoints(仅加字段)/getCheckpointState/JsonNode viewer;reactflow 是唯一新依赖"}
+{"file": ".trellis/tasks/archive/2026-07/07-02-graph-debug-fork/design.md", "reason": "A2 的 fork 语义 + parent_config probe 实证(A3 数据层基础)"}

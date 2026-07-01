@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "后端 checkpoint 端点 ↔ 前端 GraphDebugPage 的跨层数据形状契约必须对齐(step/node/next/values 字段)"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "必须复用现有 get_checkpointer() / _safe_serialize / SSE 解析,避免重复造轮子"}

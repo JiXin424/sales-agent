@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "校验前端时间轴渲染的字段与后端 checkpoints/state 端点返回形状一致、无字段漂移"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "校验是否复用了 checkpointer 单例与 _safe_serialize,而非新造工具"}

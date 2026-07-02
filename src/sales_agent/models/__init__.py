@@ -13,6 +13,18 @@ from .agent_risk_policy import AgentRiskPolicy
 from .agent_channel_config import AgentChannelConfig
 from .agent_clone_manifest import AgentCloneManifest
 from .document import Document, DocumentChunk, SourceFile
+from .knowledge_version import (
+    DocumentRevision,
+    KnowledgeVersion,
+    KnowledgeVersionDocument,
+    RetrievalProfile,
+    RouterProfile,
+)
+from .runtime_release import (
+    OptimizationRelease,
+    AgentRuntimeBinding,
+    ReleaseEvent,
+)
 from .conversation import (
     Conversation,
     ConversationMessage,
@@ -70,6 +82,14 @@ __all__ = [
     "Document",
     "DocumentChunk",
     "SourceFile",
+    "DocumentRevision",
+    "KnowledgeVersion",
+    "KnowledgeVersionDocument",
+    "RetrievalProfile",
+    "RouterProfile",
+    "OptimizationRelease",
+    "AgentRuntimeBinding",
+    "ReleaseEvent",
     "Conversation",
     "ConversationMessage",
     "ConversationSummary",

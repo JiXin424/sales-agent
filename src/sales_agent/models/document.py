@@ -51,8 +51,13 @@ class DocumentChunk(TimestampMixin, Base):
     text: Mapped[str] = mapped_column(Text, nullable=False)
     section_title: Mapped[str] = mapped_column(Text, nullable=True)
     metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
-    # pgvector 向量列，1536 维（OpenAI text-embedding-3-small 默认维度）
+    # pgvector 向量列，1024 维
     embedding = mapped_column(Vector(1024), nullable=True)
+    # Version-pinned columns for multi-version knowledge isolation
+    knowledge_version_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    document_revision_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    chunker_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    chunk_config_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     def __repr__(self) -> str:
         return f"<DocumentChunk(id={self.id}, tenant_id={self.tenant_id}, doc={self.document_id})>"

@@ -410,8 +410,8 @@ def main() -> int:
     parser.add_argument("--top-k", "-k", type=int, default=5, help="检索返回数量（默认 5）")
     parser.add_argument(
         "--ground-truth", "-g",
-        default=str(Path(__file__).resolve().parent / "ground_truth_30q.json"),
-        help="Ground truth JSON 文件路径",
+        default=str(Path(__file__).resolve().parents[1] / "eval" / "ground_truth_30q.json"),
+        help="Ground truth JSON 文件路径（默认 eval/ground_truth_30q.json）",
     )
     parser.add_argument("--no-trace", action="store_true", help="不落 trace JSON（更快）")
     parser.add_argument(

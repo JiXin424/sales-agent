@@ -51,12 +51,32 @@ while IFS='|' read -r user host port dir method local name has_source compose_fi
 
   if [ "$local" = "True" ]; then
     # ── 本地执行 ──
-    if [ "$has_source" = "True" ] && [ "$method" != "self-deploy" ]; then
+    if [ "$method" = "image-deploy" ]; then
+      # 本地 image-deploy(prod3 runner 本机):
+      # 用 deploy 镜像(内含 compose-<env>.yml + deploy-remote.sh)在本机起容器。
+      # 关键:挂 ${dir}(/root/code/sales-agent,持久克隆,含 secrets)而非 ${REPO_DIR}(ephemeral checkout)。
+      DEPLOY_IMG="${REGISTRY_HOST:-registry.internal:5000}/sales-agent-deploy:${IMAGE##*:}"
+      echo "[image-deploy] ${DEPLOY_IMG} env=${env:-?}"
+
+      # 本地同步自包含运维脚本(stop-tenant.sh / check-tenant.sh / run-eval.sh),
+      # 失败不阻断部署(与远程 image-deploy 同款兜底)。
+      mkdir -p "${dir}/scripts"
+      cp -f "${REPO_DIR}/scripts/stop-tenant.sh" "${REPO_DIR}/scripts/check-tenant.sh" \
+            "${REPO_DIR}/scripts/run-eval.sh" "${dir}/scripts/" 2>/dev/null || true
+      chmod +x "${dir}/scripts/"*.sh 2>/dev/null || true
+
+      docker pull "${DEPLOY_IMG}" \
+        && docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+             -v /root/.docker:/root/.docker:ro -v "${dir}:/workspace" \
+             -e APP_IMAGE="${IMAGE}" "${DEPLOY_IMG}" "${env}" \
+        || echo "⚠️  [$name] local image-deploy 失败，继续下一台" >&2
+
+    elif [ "$has_source" = "True" ] && [ "$method" != "self-deploy" ]; then
       git -C "$REPO_DIR" stash 2>/dev/null
       git -C "$REPO_DIR" fetch origin main && git -C "$REPO_DIR" reset --hard origin/main \
         && echo "[fanout] git synced to $(git -C "$REPO_DIR" rev-parse --short HEAD)"
+      REGISTRY_IMAGE="$IMAGE" FRONTEND_IMAGE="${FRONTEND_IMAGE:-}" bash "$script" $args || echo "⚠️  [$name] 部署失败，继续下一台" >&2
     fi
-    REGISTRY_IMAGE="$IMAGE" FRONTEND_IMAGE="${FRONTEND_IMAGE:-}" bash "$script" $args || echo "⚠️  [$name] 部署失败，继续下一台" >&2
 
   else
     # ── 远程执行 ──
@@ -76,9 +96,9 @@ while IFS='|' read -r user host port dir method local name has_source compose_fi
       # 失败不阻断后续部署(与下方 image-deploy 同款兜底)。
       # 注意 ssh 不带 -n:tar 流要经 stdin 传到远端解包;且此处 stdin 已被 tar 管道
       # 占用,不会读走外层 while 循环的 /tmp/ci-targets.txt(与其它分支的 ssh -n 不同)。
-      tar -C "${REPO_DIR}/scripts" -cf - stop-tenant.sh check-tenant.sh \
+      tar -C "${REPO_DIR}/scripts" -cf - stop-tenant.sh check-tenant.sh run-eval.sh \
         | ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p "$port" "${user}@${host}" \
-          "mkdir -p '${dir}/scripts' && tar -C '${dir}/scripts' -xf - && chmod +x '${dir}/scripts/stop-tenant.sh' '${dir}/scripts/check-tenant.sh'" \
+          "mkdir -p '${dir}/scripts' && tar -C '${dir}/scripts' -xf - && chmod +x '${dir}/scripts/stop-tenant.sh' '${dir}/scripts/check-tenant.sh' '${dir}/scripts/run-eval.sh'" \
         || echo "⚠️  [$name] 运维脚本同步失败，继续部署" >&2
 
       ssh -n -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p "$port" "${user}@${host}" \

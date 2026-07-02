@@ -219,6 +219,27 @@ pytest tests/test_deepeval_agent.py -v
 pytest tests/test_deepeval_risk.py -v
 ```
 
+### 场景 9：无源码机跑 eval（image-deploy 目标机）
+
+无源码机（host 上没有 `eval/`、没有 Python venv）通过薄壳 `scripts/run-eval.sh` 跑
+eval：实际在运行中的 `<tenant>-api` 容器内执行（依赖、`eval/`、`DATABASE_URL`/`MODEL_*`
+都现成），仅裁判 LLM key 经 `--env-file` 透传。该薄壳由 CI fan-out 自动同步到各机
+（见 `scripts/ci-fanout.sh` 的 image-deploy 分支）。
+
+```bash
+# conversation eval：只调 app HTTP，不需要裁判 key；app-url 默认容器内 8000
+scripts/run-eval.sh taishan conversation
+
+# DeepEval：需裁判 LLM key（拷 deploy/eval.env.example → secrets/eval.env 并填值）
+scripts/run-eval.sh taishan deepeval --env-file secrets/eval.env
+
+# 检索 eval：容器自带 DB/embedding key；可覆盖 -m/-r
+scripts/run-eval.sh taishan retrieval -- --round 01 --mode hybrid
+```
+
+结果默认从容器 `/app/eval/{results,rounds}` 拷回 host 的 `./eval-results/`（`--results-dir` 可改）。
+多机分别跑后用 `python eval/merge_results.py` 合并。
+
 ---
 
 ## 输出报告

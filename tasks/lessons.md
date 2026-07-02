@@ -278,3 +278,60 @@
   3. **真实 HTTP 跑一次是发现这类 bug 的最终手段**；环境受限时（本机无 DB、容器外代码）至少为"流式/异步"路径写专门的进程内 probe（直调 generator 收集 yield），而非只测同步返回。
 - **检查范式**：任何 `async for chunk in graph.astream(...)` → 先 `print(type(chunk), chunk)` 确认形状 → 归一化 → 再分支。SSE 端点写进程内 probe：`async for evt in streamer(): collect`，验证 yield 的事件类型符合预期。
 - **相关**：#20（langgraph 字段名别假设——同族：writes/tasks/astream-tuple 都是"照搬记忆里的 API 形状没实测"）、#4（验证 Before Done——本次是"验证覆盖不全"的变种）。
+
+## 22. CI fan-out `deploy-release` 跨机部署卡点：tenants.json 跨机污染 / DINGTALK_PUBLIC_URL / 孤儿容器；跨机 rsync 会覆盖 secrets+tenants.json
+
+- **场景**：push origin → CI 构建镜像 → ci-fanout 部署三台。test（image-deploy，自包含 deploy 镜像）成功；prod2 + prod3（deploy-release 脚本）都失败、容器不更新。
+- **prod2 三卡点**：① 本机 `deploy/tenants.json` 混入别机 tenant（songbai/taishanyanshi/fuduoduo，env 在本机不存在）→ deploy-release `--yes` 给每 tenant 校验 env 报 missing 中断；② `DINGTALK_ENABLED=true`+`REGISTER_QUICK_ENTRY=true` 但没填 `DINGTALK_PUBLIC_URL` → "Configuration is not ready" 退出（dev 无公网入口就如实填 PUBLIC_URL，或确定不要快捷入口才设 false，别为绕过检查而绕过）；③ 孤儿容器（不在当前 compose project）占 container name → compose create 冲突，需 `docker rm -f` 清掉再 up。
+- **prod3 根因（更严重）**：主控 `/root/code/sales-agent` 被 **prod2 全目录 rsync/copy 覆盖**——连 `.git`（remote 变 github）、`tenants.json`（变 prod2 的 taishan/taishankaifa2）、`secrets`（变 prod2 的 + 主控自己的 taishanyanshi/songbai 变 1 行空壳）。主控真实租户配置只剩运行容器的 env 里。重建：`docker inspect <api> --format .Config.Env` 提取完整配置（含密钥）写回 secrets + 从容器 `.Mounts`/端口/domain 反推 tenants.json + 去掉 prod2 的 `taishan-network`（主控 traefik/api 都在 `sales-agent_default`，不需 shared_network）。
+- **教训**：
+  1. **CI 部署容器没更新 → ssh 目标机手跑 `deploy-release.sh` 看真实报错**（别猜），按三卡点排查：tenants.json 是否混入别机 tenant / DINGTALK_PUBLIC_URL 是否缺 / 是否孤儿容器占名。
+  2. **跨机同步代码目录（rsync/scp）必须排除 `secrets/` 和 `deploy/tenants.json`**——这俩是每机本地配置，跨机覆盖会让目标机配置丢失（secrets 变空壳/串成源机的）。`git reset` 不动它们（gitignored），但 rsync 全目录会。
+  3. **traefik `shared_network` 每机不同**（prod2 用 `taishan-network`，prod3 用 `sales-agent_default`）——tenants.json 的 traefik 段不能跨机复制；目标机 traefik 和 api 若同在 default network 就不需 shared_network。
+  4. **配置丢失但容器在跑 → 从 `docker inspect` 的 `.Config.Env`/`.Mounts` 重建**：运行容器 env 含部署时完整配置（含密钥），Mounts 含宿主 data/logs 路径，是重建 secrets/tenants.json 的最后兜底。
+- **检查范式**：CI 部署失败 → ssh 跑 deploy-release.sh 看报错 → 三卡点排查 → 配置丢失从容器 inspect 重建（env 写 secrets + Mounts/ports/domain 写 tenants.json）。
+- **相关**：#7（dev 机端口漂移先 curl 实测）、#10（traefik 跨 network 502）、#18（多机先确认参照系）同族——"多机部署，每机配置/网络不同，别假设一致"。
+
+## 23. `.dockerignore` 的 `*.md`（带通配符）只匹配根级、不递归；裸名才递归——别信调研结论，最小 build 实测
+
+- **场景**：eval 全机可用任务，调研子代理断言「`.dockerignore` 的 `*.md` 排除了 `eval/questions.md`，镜像里没题库」，据此计划加 `!eval/questions.md` 反向例外。实现期先做最小 build 实测：**原始 `.dockerignore`（未改）build 出的镜像里 `/app/eval/questions.md` 就在**（11958 字节），运行中的 taishan-api 容器里也有。调研结论错，改动是 no-op，已撤销。
+- **根因**：`.dockerignore` 用 Go `filepath.Match` 语义，`*` **不跨 `/`**。故 `*.md` 只匹配根级 `*.md`（如 `README.md`），**不匹配嵌套** `eval/questions.md`。而 **裸名**（无通配、无 `/`，如 `cocah.html`）被 BuildKit **递归匹配**任意深度（见 #11）——这是带通配符模式与裸名的关键区别。
+- **教训**：
+  1. **判断「某文件是否进 docker 镜像」永远最小 build 实测**（`FROM python:3.10-slim` + `COPY <dir>/ ./<dir>/` + `RUN ls`），别凭 `.dockerignore` 规则凭空推断、也别全信子代理的二手结论。
+  2. 改 `.dockerignore` 前先问：这条规则到底匹配根级还是递归？带通配符（`*.md`、`*.log`）= 根级；裸名（`foo.html`）= 递归；带 `/`（`/foo`、`a/b`）= 按路径。
+  3. 见 #11（先查 git 跟踪再查 dockerignore）、#14（.gitignore 裸名同样递归）同族。
+- **检查范式**：怀疑某文件被 dockerignore 排除 → 写 3 行临时 Dockerfile COPY 该目录 + ls → build → 在/不在一目了然 → 再决定改不改。
+
+## 24. bash `shift` 耗尽参数返回非零，在 `set -e` 下会无声杀死脚本——参数解析循环别让末尾 `shift` 在空参数上跑
+
+- **场景**：`scripts/run-eval.sh` 初版参数解析，`--` 分支用内层 `while` 把剩余参数全耗尽后，回到外层循环末尾的 `shift`——此时 `$#` 已为 0，`shift` 返回 1，`set -e` 立即终止脚本（且发生在所有 echo 之前），表现为「运行无任何输出就退出」。静态 `bash -n` + `--help`（不走 `--`）全过，没暴露；直到真实 `--` 调用才炸。
+- **根因**：`shift` 无参数可移除时退出码非零；`set -e` 对此不豁免。循环 `while [ $# -gt 0 ]; do ...; shift; done` 里，若 case 体已自行 `shift`/`break` 漏掉对外层 `shift` 的保护，末尾 `shift` 就可能在空参数上失败。
+- **教训**：
+  1. **`--` 分隔符用 `shift; break` 模式**，别用内层 while 耗尽——break 后用 `$@` 取剩余，外层 `shift` 被 break 跳过，永不踩空。
+  2. 或末尾 `shift` 加保护：`(( $# )) && shift` / `shift || true`。
+  3. **`set -e` 脚本必须做一次「真实多分支调用」冒烟**（不只是 `bash -n` + `--help`），尤其走 `--` / 可选 flag 的路径——静态检查发现不了运行期 set -e 退出。
+  4. 见 #8（`((n++))` 在 set -e 下旧值 0 杀脚本）、#19（`ssh -n` 与 stdin 管道互斥）同族——bash 隐式失败 + set -e 是反复踩的坑。
+- **检查范式**：写带 `set -euo pipefail` 的参数解析 → `--` 用 `shift; break` → 每个分支（含 `--`）都实跑一次冒烟。
+
+## 25. 第三方「追踪/观测」装饰器（deepeval `@observe`、各类 telemetry）在生产没配 key 时仍是纯负债——会算一堆 trace 再丢弃，且其序列化路径随时可能炸整个请求；上线前必须「无 key 也能安全 no-op」或直接移除
+
+- **场景**：全站 `/agent/chat` 500（prod2/prod3/test 所有租户），`RuntimeError: dictionary changed size during iteration`。排查发现根因是 `ChatPipeline.execute()` 上的 `@observe(type="agent")`（deepeval 追踪）：函数退出时 `Observer.__exit__` 序列化子 span 的 input，deepeval `_serialize` 迭代某嵌套对象的**活 `__dict__`**，序列化触发惰性字段写回同一 dict → 迭代中改大小 → 崩。聊天本身算完了，是装饰器收尾炸。整条链还散布 5 处 `@observe`（agent/tool/llm/retriever×2），潜伏自 `bb2b1eb`，某次对象形态变化后触发。
+- **关键认知**：prod **没设 `DEEPEVAL_*/Confident` key**，日志明写「Skipping trace posting」——trace 算了**全丢弃**。即这个装饰器在生产**零收益、纯风险**，却把每个请求搞 500。
+- **教训**：
+  1. **追踪/观测类装饰器上线前问一句：生产环境（无 key / 未启用）下它是 no-op 还是仍跑副作用？** 仍跑 = 负债。deepeval `@observe` 即使没 key 也照常建 span + 序列化，只是不 POST。
+  2. **第三方序列化路径（`make_json_serializable` / `vars(obj).items()` 这类「遍历活对象内部」）是定时炸弹**——你控不了用户对象何时新增惰性字段。能不用就不用；用了要能整体关掉。
+  3. **「容器在跑、/health 200」≠「业务通」**：这个 500 在 catch-all 里被包成 JSON 返回，traceback 还因日志配置没进 stdout（写文件/被吞），`docker logs` 完全看不到——**生产对 500 几乎零可见性**。健康检查必须覆盖真实业务路径（`/agent/chat` 冒烟），不能只 `/ready`。
+  4. **根因定位别只看自己的代码**：堆栈全在 `site-packages/deepeval/`，但触发点是自己的 `@observe` 装饰器。装饰器/中间件引入的第三方调用栈，要一路看到底。
+- **检查范式**：线上 500 但日志干净 → 怀疑被 catch-all 吞 + 日志没进 stdout → 直接 `curl` 复现拿 response.detail → 按 detail 串（如 "dictionary changed size"）反查装饰器/中间件序列化路径 → 无收益的观测装饰器直接移除。
+- **相关**：#15（看部署生效的 env_file 不是代码默认）、#20（跨层契约写死、跑 probe dump 真实对象）同族——「第三方/隐式序列化对不可控对象的处理」是反复踩的坑。
+
+## 26. `render-multitenant-deploy.py` 有副作用：默认会写 traefik 动态配置文件（`traefik.dynamic_output`）。本机 render「非本机 inventory」会**覆盖本机正在用的 traefik 路由** → 域名 502。本地 render 非本机 inventory 必须加 `--traefik-out /dev/null`
+
+- **场景**：C2 准备阶段，子代理在本机（prod2）本地验证 `render ... deploy/tenants.prod3.json`（prod3 的 songbai/taishanyanshi 路由），没加 `--traefik-out /dev/null`。render 默认按 inventory 的 `traefik.dynamic_output` 写文件 → 把 prod2 的 `/root/code/traefik/dynamic.d/generated-sales-agent.yml`（prod2 的 taishan/taishankaifa2 路由）**覆盖成 prod3 的路由**（指向 prod2 上不存在的 `sales-agent-songbai-frontend` 等后端）→ prod2 的 taishan/taishankaifa2 域名经 traefik 会 502 约 2-3 分钟。已用 prod2 tenants.json 重渲染恢复。
+- **根因**：`render-multitenant-deploy.py` 不是纯函数——除了写 compose，还按 `traefik.dynamic_output`（默认 `/root/code/traefik/dynamic.d/generated-sales-agent.yml`）写 traefik 动态配置。而 prod2 的 traefik 容器挂了 `/root/code/traefik → /etc/traefik` 且 `providers.file.directory: /etc/traefik/dynamic.d, watch: true`——**这个文件是活的、被监听的**，一改 traefik 立即重载。
+- **教训**：
+  1. **本机 render 任何「非本机 inventory」一律 `--traefik-out /dev/null`**（CI 的 deploy.yml 早就这么做了，本地手动 render 也必须）。同理 `--compose-out` 也别写到正在用的 compose 路径。
+  2. **render/生成器脚本要当「有副作用」对待**：先 grep 它写哪些文件（不止你传的 --compose-out），别假设它是纯生成。
+  3. **traefik `watch: true` + 动态目录 = 改文件即生效**：往那个目录写东西要极其小心，写错立刻影响线上域名。
+- **检查范式**：要在本机渲染别的环境 inventory → 命令必带 `--traefik-out /dev/null --compose-out /tmp/xxx.yml`；事后 `stat` 一下 `/root/code/traefik/dynamic.d/generated-sales-agent.yml` 的 mtime 确认没被自己改到。
+- **相关**：#22（跨机 rsync 覆盖 secrets/tenants.json）、#10（traefik 跨 network 502）同族——「每机的 traefik/网络/配置是本地的，跨机操作别覆盖」。

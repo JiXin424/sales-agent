@@ -160,3 +160,22 @@ class ReportDetailResponse(ReportSummaryResponse):
 class TrendResponse(BaseModel):
     agent_id: str
     trends: list[Any] = Field(default_factory=list)
+
+
+# ── MCP command schemas ──────────────────────────────────────────────────────
+
+
+class AlternativeCandidateRequest(BaseModel):
+    diagnosis_id: str
+    constraints: dict[str, Any] = Field(default_factory=dict)
+
+
+class RerunCandidateEvalRequest(BaseModel):
+    suite_type: str = Field(default="fixed")  # targeted / fixed
+
+
+class CommandResultResponse(BaseModel):
+    status: str
+    target_id: str | None = None
+    idempotency_key: str | None = None
+    detail: Any = Field(default_factory=dict)

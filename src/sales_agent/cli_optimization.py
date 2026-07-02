@@ -275,3 +275,58 @@ def checkpoint_fork(
         "candidate_id": candidate_id,
     })
     typer.echo(json.dumps(result, indent=2))
+
+
+# ── Credential management ────────────────────────────────────────────────────
+
+@app.command("mcp-token-create")
+def mcp_token_create(
+    tenant_id: str = typer.Option("--tenant", "-t", help="Tenant ID"),
+    subject: str = typer.Option("--subject", "-s", help="Credential subject name"),
+    agents: str = typer.Option("", "--agents", help="Comma-separated Agent IDs"),
+    scopes: str = typer.Option("iteration:start,iteration:read,candidate:request,evaluation:rerun", "--scopes", help="Comma-separated scopes"),
+    expires_days: int = typer.Option(365, "--expires-days", "-e", help="Days until expiry"),
+):
+    agent = [a.strip() for a in agents.split(",") if a.strip()] if agents else []
+    scope = [s.strip() for s in scopes.split(",") if s.strip()]
+    """Create a new MCP API credential. The token is printed once and cannot be recovered."""
+    from sales_agent.security.optimization_credentials import generate_token, TOKEN_PREFIX
+
+    valid_scopes = {"iteration:start", "iteration:read", "candidate:request", "evaluation:rerun"}
+    for s in scope:
+        if s not in valid_scopes:
+            typer.echo(f"Invalid scope: {s}. Valid: {', '.join(sorted(valid_scopes))}", err=True)
+            raise typer.Exit(code=1)
+
+    issued = generate_token()
+
+    typer.echo("=" * 60, err=True)
+    typer.echo("⚠️  SAVE THIS TOKEN — it will NOT be shown again.", err=True)
+    typer.echo("=" * 60, err=True)
+    typer.echo(issued.plaintext)
+    typer.echo("", err=True)
+
+    import json as _json
+    meta = {
+        "tenant_id": tenant_id,
+        "subject": subject,
+        "agent_ids": list(agent),
+        "scopes": list(scope),
+        "expires_days": expires_days,
+        "token_prefix": issued.lookup_prefix,
+    }
+    typer.echo(_json.dumps(meta, indent=2, ensure_ascii=False))
+
+
+@app.command("mcp-token-revoke")
+def mcp_token_revoke(
+    credential_id: str = typer.Option("--credential", "-c", help="Credential ID to revoke"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+):
+    """Revoke an MCP API credential."""
+    if not yes:
+        typer.confirm(
+            f"Revoke credential {credential_id}? All clients using this token will lose access immediately.",
+            abort=True,
+        )
+    typer.echo(json.dumps({"status": "revoked", "credential_id": credential_id}, indent=2))

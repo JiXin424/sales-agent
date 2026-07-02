@@ -119,3 +119,133 @@ pg_dump -U sales_agent -h localhost -p 5433 sales_agent > backup_$(date +%Y%m%d)
 Key tables: `optimization_releases`, `agent_runtime_bindings`,
 `release_events`, `optimization_iterations`, `optimization_candidates`,
 `iteration_graph_checkpoints`, `knowledge_facts`.
+
+---
+
+## Iteration Observability & Effect Reports
+
+*Added 2026-07-02*
+
+### Migration Order
+
+The observability schema is in migration `0008_iteration_observability_reports`.
+It adds four new tables (`iteration_events`, `iteration_reports`,
+`iteration_report_metrics`, `iteration_report_cases`) and extends
+`optimization_iterations` with lifecycle, event cursor, and time-travel columns.
+
+**Deploy order:**
+1. Run `alembic upgrade head` (or let `init_db()` auto-migrate on startup).
+2. Existing iterations continue to work; new columns default to NULL/0.
+3. No data backfill is required for existing rows.
+
+### Report Root & Retention
+
+Report artifacts are written under `eval/results/iterations/{tenant}/{agent}/{iteration}/{report}/`.
+These are derived from the authoritative JSON stored in the database.
+Artifacts can be regenerated at any time via the API or CLI without
+re-running evaluation.
+
+Retention policy: retain for the lifetime of the iteration.
+Delete artifacts alongside iteration archival.
+
+### Status Lifecycle
+
+| Status | Meaning |
+|--------|---------|
+| `created` | Iteration record created |
+| `generating_cases` | Building exploration questions |
+| `evaluating_baseline` | Running baseline fixed suite |
+| `diagnosing` | Attributing failures to root causes |
+| `generating_candidates` | Proposing optimization candidates |
+| `evaluating_candidates` | Running candidate eval gates |
+| `awaiting_approval` | Waiting for human operator approval |
+| `publishing` | Creating a release from approved candidate |
+| `post_publish_evaluating` | Running fixed suite against published release |
+| `generating_final_report` | Computing final effect report |
+| `completed` | Final report ready; iteration is done |
+
+**Publish is not completion.** An iteration reaches `completed` only after
+the post-publish fixed evaluation finishes and a final effect report is
+generated.
+
+### Event Replay & SSE
+
+- **Replay**: `GET /iterations/{id}/events?after_sequence=N&limit=M`
+- **Long poll**: `GET /iterations/{id}/events/wait?after_sequence=N&timeout_seconds=T`
+- **SSE**: `GET /iterations/{id}/events/stream` (supports `Last-Event-ID` for reconnect)
+
+Heartbeat comments every 15 seconds keep the SSE connection alive.
+The stream closes when the iteration reaches a terminal state.
+
+### CLI Watch & Export
+
+```bash
+# Watch events with cursor
+sales-agent optimization watch --agent A1 --iteration I1 --after-sequence 5
+
+# Export report artifact
+sales-agent optimization report --agent A1 --iteration I1 --report-id R1 --format markdown --output report.md
+
+# View trends
+sales-agent optimization trends --agent A1 --limit 10
+```
+
+### Report Rebuild
+
+Reports are idempotent. If evaluation data or the formula version changes,
+regenerate with:
+
+```python
+from sales_agent.optimization.reporting.service import IterationReportService
+service = IterationReportService(db)
+report = await service.generate_final(
+    tenant_id="...", agent_id="...", iteration_id="...",
+    release_id="...", baseline_eval_run_id="...",
+    post_publish_eval_run_id="...",
+)
+```
+
+A changed formula version or different input hash creates a new report version.
+Identical inputs return the existing completed report.
+
+### Hard Gates
+
+| Gate | Source | Effect |
+|------|--------|--------|
+| `tenant_leakage` | Cross-tenant data in response | `do_not_publish` / `rollback_recommended` |
+| `critical_fact_error` | Factual accuracy failure | `do_not_publish` / `rollback_recommended` |
+| `unsafe_response` | Safety metric failure | `do_not_publish` / `rollback_recommended` |
+| `increased_fabrication` | More fabrication on unanswerable | `do_not_publish` / `rollback_recommended` |
+
+Hard gates override the composite score. A failed gate on a candidate
+produces `do_not_publish`; on a final report, `rollback_recommended`.
+
+### Time Travel Lineage
+
+Forked iterations record `parent_iteration_id` and `forked_from_checkpoint_id`.
+Original and forked executions have distinct IDs and event streams.
+Reports bind to exact release/checkpoint/eval inputs and remain immutable.
+
+### Rollback Procedure
+
+1. Identify a previous healthy release via the trends API or CLI.
+2. Run a rollback: `POST /agents/{A}/optimization/releases/rollback` with `target_release_id`.
+3. Rollback releases are typed as `OptimizationRelease` with `rollback_of_release_id`.
+4. Rollback reports remain readable and identify both the failed release and the new rollback release.
+
+### Verification Commands
+
+```bash
+# Backend tests
+pytest tests/unit/optimization/ tests/unit/test_optimization_cli.py -q
+
+# Migration check
+alembic upgrade head && alembic current
+# Expected: current revision is 0008_iteration_observability_reports
+
+# Frontend build
+cd console && npm run build
+
+# Task validation
+python3 ./.trellis/scripts/task.py validate 07-02-iteration-observability-reports
+```

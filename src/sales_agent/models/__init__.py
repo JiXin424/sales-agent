@@ -50,6 +50,12 @@ from .optimization import (
     IterationGraphCheckpoint,
     OptimizationJob,
 )
+from .iteration_observability import (
+    IterationEvent,
+    IterationReport,
+    IterationReportMetric,
+    IterationReportCase,
+)
 from .alert import AlertRule, Alert
 from .pilot_report import PilotReport
 from .coach import (
@@ -127,6 +133,10 @@ __all__ = [
     "CandidateEvalRun",
     "IterationGraphCheckpoint",
     "OptimizationJob",
+    "IterationEvent",
+    "IterationReport",
+    "IterationReportMetric",
+    "IterationReportCase",
     "AlertRule",
     "Alert",
     "PilotReport",

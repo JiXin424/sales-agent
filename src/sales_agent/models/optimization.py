@@ -18,12 +18,25 @@ class OptimizationIteration(TimestampMixin, Base):
     agent_id: Mapped[str] = mapped_column(Text, nullable=False)
     iteration_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="draft")
+    # Event cursor and lifecycle stage
+    event_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    current_stage: Mapped[str | None] = mapped_column(Text, nullable=True)
+    progress_current: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    progress_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Baseline references
     baseline_release_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     baseline_knowledge_version_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     fixed_suite_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     exploration_suite_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     baseline_eval_run_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Selection, publish, and post-publish lifecycle
+    selected_candidate_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    published_release_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    post_publish_eval_run_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    final_report_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Time-travel lineage
+    parent_iteration_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    forked_from_checkpoint_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Budget
     max_candidates: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     max_consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=2)

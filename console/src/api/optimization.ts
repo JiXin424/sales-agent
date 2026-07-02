@@ -155,3 +155,166 @@ export function forkCheckpoint(
     body: JSON.stringify({ candidate_id: candidateId }),
   });
 }
+
+// ── Event types ──────────────────────────────────────────────────────────
+
+export interface EventResponse {
+  id: string;
+  sequence_no: number;
+  event_type: string;
+  stage?: string | null;
+  status?: string | null;
+  progress_current?: number | null;
+  progress_total?: number | null;
+  message: string;
+  payload: Record<string, unknown>;
+  actor_type: string;
+  actor_id?: string | null;
+  created_at?: string | null;
+}
+
+export interface EventPageResponse {
+  events: EventResponse[];
+  next_sequence: number;
+  terminal: boolean;
+}
+
+// ── Report types ─────────────────────────────────────────────────────────
+
+export interface ReportMetricResponse {
+  metric_name: string;
+  group_name: string;
+  direction: string;
+  weight: number;
+  before_value?: number | null;
+  after_value?: number | null;
+  before_normalized?: number | null;
+  after_normalized?: number | null;
+  delta?: number | null;
+  applicable: boolean;
+  gate_result?: string | null;
+}
+
+export interface ReportCaseResponse {
+  case_id: string;
+  classification: string;
+  cause?: string | null;
+  before_pass?: boolean | null;
+  after_pass?: boolean | null;
+  score_delta?: number | null;
+  rank_delta?: number | null;
+  latency_delta_ms?: number | null;
+  token_delta?: number | null;
+}
+
+export interface ReportSummaryResponse {
+  id: string;
+  tenant_id: string;
+  agent_id: string;
+  iteration_id: string;
+  report_type: string;
+  candidate_id?: string | null;
+  candidate_key: string;
+  release_id?: string | null;
+  report_version: number;
+  formula_version: string;
+  status: string;
+  recommendation?: string | null;
+  effect_index_before?: number | null;
+  effect_index_after?: number | null;
+  effect_index_delta?: number | null;
+  hard_gates: Record<string, unknown>;
+  data_snapshot_hash?: string | null;
+  created_at?: string | null;
+}
+
+export interface ReportDetailResponse extends ReportSummaryResponse {
+  groups: Record<string, unknown>[];
+  cases: ReportCaseResponse[];
+}
+
+export interface TrendPointResponse {
+  report_id: string;
+  iteration_id: string;
+  recommendation?: string | null;
+  effect_index_before?: number | null;
+  effect_index_after?: number | null;
+  effect_index_delta?: number | null;
+  hard_gates: Record<string, unknown>;
+  created_at?: string | null;
+}
+
+export interface TrendResponse {
+  agent_id: string;
+  trends: TrendPointResponse[];
+}
+
+// ── Event API calls ──────────────────────────────────────────────────────
+
+export function listEvents(
+  agentId: string,
+  iterationId: string,
+  afterSequence: number = 0,
+  limit: number = 50,
+): Promise<EventPageResponse> {
+  return apiGet(
+    `/agents/${agentId}/optimization/iterations/${iterationId}/events?after_sequence=${afterSequence}&limit=${limit}`,
+  );
+}
+
+export function waitEvents(
+  agentId: string,
+  iterationId: string,
+  afterSequence: number = 0,
+  timeoutSeconds: number = 30,
+): Promise<EventPageResponse> {
+  return apiGet(
+    `/agents/${agentId}/optimization/iterations/${iterationId}/events/wait?after_sequence=${afterSequence}&timeout_seconds=${timeoutSeconds}`,
+  );
+}
+
+export function streamEventsUrl(
+  agentId: string,
+  iterationId: string,
+  lastEventId: string = '',
+): string {
+  const base = `/agents/${agentId}/optimization/iterations/${iterationId}/events/stream`;
+  return lastEventId ? `${base}?Last-Event-ID=${lastEventId}` : base;
+}
+
+// ── Report API calls ─────────────────────────────────────────────────────
+
+export function listReports(
+  agentId: string,
+  iterationId: string,
+): Promise<ReportSummaryResponse[]> {
+  return apiGet(`/agents/${agentId}/optimization/iterations/${iterationId}/reports`);
+}
+
+export function getReport(
+  agentId: string,
+  iterationId: string,
+  reportId: string,
+): Promise<ReportDetailResponse> {
+  return apiGet(
+    `/agents/${agentId}/optimization/iterations/${iterationId}/reports/${reportId}`,
+  );
+}
+
+export function getReportArtifactUrl(
+  agentId: string,
+  iterationId: string,
+  reportId: string,
+  format: string,
+): string {
+  return `/agents/${agentId}/optimization/iterations/${iterationId}/reports/${reportId}/artifacts/${format}`;
+}
+
+// ── Trend API calls ──────────────────────────────────────────────────────
+
+export function getTrends(
+  agentId: string,
+  limit: number = 10,
+): Promise<TrendResponse> {
+  return apiGet(`/agents/${agentId}/optimization/optimization/trends?limit=${limit}`);
+}

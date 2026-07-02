@@ -71,6 +71,10 @@ from .coach import (
     CoachReportRequest,
     CoachSettings,
 )
+from .optimization_auth import (
+    OptimizationApiCredential,
+    OptimizationCommandAudit,
+)
 from .quick_session import QuickSession
 
 
@@ -151,5 +155,7 @@ __all__ = [
     "CoachRealtimeObservation",
     "CoachReportRequest",
     "CoachSettings",
+    "OptimizationApiCredential",
+    "OptimizationCommandAudit",
     "QuickSession",
 ]

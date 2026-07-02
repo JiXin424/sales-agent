@@ -330,6 +330,29 @@ class ChatPipeline:
             resolved_agent_id = agent_id
 
         # =============================================
+        # 3d. Release version resolution (pinned knowledge version)
+        # =============================================
+        pinned_knowledge_version_id: str | None = None
+        try:
+            from sqlalchemy import select
+            from sales_agent.models.runtime_release import AgentRuntimeBinding
+            from sales_agent.services.release_service import ReleaseService
+
+            binding = await self.db.scalar(
+                select(AgentRuntimeBinding).where(
+                    AgentRuntimeBinding.tenant_id == tenant_id,
+                    AgentRuntimeBinding.agent_id == resolved_agent_id,
+                )
+            )
+            if binding is not None:
+                manifest = await ReleaseService(self.db).get_manifest(
+                    tenant_id, binding.active_release_id,
+                )
+                pinned_knowledge_version_id = manifest.knowledge_version_id
+        except Exception:
+            pinned_knowledge_version_id = None
+
+        # =============================================
         # 3c. Coach 报告意图拦截（早于正常任务路由；失败不得影响正常会话）
         # =============================================
         try:
@@ -534,6 +557,7 @@ class ChatPipeline:
                         task_type=task_type,
                         needs_retrieval=needs_retrieval,
                         allowed_document_ids=allowed_doc_ids,
+                        knowledge_version_id=pinned_knowledge_version_id,
                     )
                     sources = [s.to_source_item() for s in retrieval_result.sources]
                     retrieval_info = {

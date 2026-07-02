@@ -80,6 +80,7 @@ class Retriever:
         top_k: int | None = None,
         min_score: float | None = None,
         allowed_document_ids: set[str] | None = None,
+        knowledge_version_id: str | None = None,
     ) -> RetrievalResult:
         """执行检索。
 
@@ -90,6 +91,7 @@ class Retriever:
             min_score: 最低相似度，默认从配置读取
             allowed_document_ids: Agent 知识作用域允许的 document_id 集合。
                 None 表示不限（tenant 全量）；空集合表示 Agent 作用域为空。
+            knowledge_version_id: 可选的知识版本 ID，用于多版本隔离。
 
         Returns:
             RetrievalResult 包含检索来源和状态
@@ -168,6 +170,7 @@ class Retriever:
         task_type: str,
         needs_retrieval: bool = True,
         allowed_document_ids: set[str] | None = None,
+        knowledge_version_id: str | None = None,
     ) -> RetrievalResult:
         """根据任务类型判断是否需要检索，并执行。
 
@@ -186,7 +189,9 @@ class Retriever:
         if task_type == "knowledge_qa":
             start = __import__("time").monotonic()
             result = await self.retrieve(
-                tenant_id, message, allowed_document_ids=allowed_document_ids
+                tenant_id, message,
+                allowed_document_ids=allowed_document_ids,
+                knowledge_version_id=knowledge_version_id,
             )
             result.retrieval_latency_ms = (__import__("time").monotonic() - start) * 1000
             if not result.has_results:
@@ -197,7 +202,9 @@ class Retriever:
         # 其他任务类型的条件检索
         start = __import__("time").monotonic()
         result = await self.retrieve(
-            tenant_id, message, allowed_document_ids=allowed_document_ids
+            tenant_id, message,
+            allowed_document_ids=allowed_document_ids,
+            knowledge_version_id=knowledge_version_id,
         )
         result.retrieval_latency_ms = (__import__("time").monotonic() - start) * 1000
         return result
@@ -238,6 +245,7 @@ class HybridRetriever:
         top_k: int | None = None,
         min_score: float | None = None,
         allowed_document_ids: set[str] | None = None,
+        knowledge_version_id: str | None = None,
     ) -> RetrievalResult:
         """执行混合检索（向量 + 关键词 RRF 融合）。
 
@@ -247,6 +255,7 @@ class HybridRetriever:
             top_k: 最终返回数量。
             min_score: 最低 RRF 分数（暂未对 RRF 分数做阈值过滤）。
             allowed_document_ids: Agent 知识作用域过滤。
+            knowledge_version_id: 可选的知识版本 ID，用于多版本隔离。
 
         Returns:
             :class:`RetrievalResult`
@@ -341,6 +350,7 @@ class HybridRetriever:
         task_type: str,
         needs_retrieval: bool = True,
         allowed_document_ids: set[str] | None = None,
+        knowledge_version_id: str | None = None,
     ) -> RetrievalResult:
         """根据任务类型条件触发混合检索。"""
         if not needs_retrieval and task_type not in ("knowledge_qa",):
@@ -353,7 +363,9 @@ class HybridRetriever:
 
         start = __import__("time").monotonic()
         result = await self.retrieve(
-            tenant_id, message, allowed_document_ids=allowed_document_ids,
+            tenant_id, message,
+            allowed_document_ids=allowed_document_ids,
+            knowledge_version_id=knowledge_version_id,
         )
         result.retrieval_latency_ms = (__import__("time").monotonic() - start) * 1000
 

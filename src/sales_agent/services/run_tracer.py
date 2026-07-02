@@ -148,14 +148,83 @@ _SENSITIVE_KEYS = frozenset({
 })
 
 
+    # ── Route and retrieval trace (knowledge iteration) ──────────────────
+
+    async def record_route_trace(
+        self,
+        router_type: str,
+        task_type: str,
+        confidence: float,
+        llm_called: bool,
+        needs_retrieval: bool,
+        decision_reason: str = "",
+        route_metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Record route decision evidence for attribution.
+
+        Persisted as a step named ``route_trace`` with full decision metadata.
+        """
+        meta = {
+            "router_type": router_type,
+            "task_type": task_type,
+            "confidence": confidence,
+            "llm_called": llm_called,
+            "needs_retrieval": needs_retrieval,
+            "decision_reason": decision_reason,
+        }
+        if route_metadata:
+            safe = _sanitize_metadata(route_metadata)
+            meta.update(safe)
+        await self.record_step("route_trace", metadata=meta)
+
+    async def record_retrieval_trace(
+        self,
+        original_query: str,
+        rewritten_queries: list[str] | None = None,
+        top_k: int = 5,
+        candidate_k: int = 30,
+        vector_weight: float | None = None,
+        keyword_weight: float | None = None,
+        rrf_constant: int | None = None,
+        retrieval_triggered: bool = True,
+        skip_reason: str | None = None,
+        trace_hits: list[dict[str, Any]] | None = None,
+        retrieval_latency_ms: float = 0.0,
+    ) -> None:
+        """Record ranked retrieval evidence for attribution.
+
+        Each hit dict must include: channel, channel_rank, channel_score,
+        final_rank, final_score, selected_for_context, chunk_id, document_id.
+        """
+        meta = {
+            "original_query": original_query,
+            "rewritten_queries": rewritten_queries or [],
+            "top_k": top_k,
+            "candidate_k": candidate_k,
+            "vector_weight": vector_weight,
+            "keyword_weight": keyword_weight,
+            "rrf_constant": rrf_constant,
+            "retrieval_triggered": retrieval_triggered,
+            "skip_reason": skip_reason,
+            "trace_hits": trace_hits or [],
+            "retrieval_latency_ms": retrieval_latency_ms,
+        }
+        await self.record_step("retrieval_trace", metadata=_sanitize_metadata(meta))
+
+
 def _sanitize_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
-    """移除 metadata 中的敏感字段。"""
+    """移除 metadata 中的敏感字段，包括嵌套 list 和 dict。"""
     safe: dict[str, Any] = {}
     for key, value in metadata.items():
         if key.lower() in _SENSITIVE_KEYS:
             safe[key] = "[REDACTED]"
         elif isinstance(value, dict):
             safe[key] = _sanitize_metadata(value)
+        elif isinstance(value, list):
+            safe[key] = [
+                _sanitize_metadata(v) if isinstance(v, dict) else v
+                for v in value
+            ]
         else:
             safe[key] = value
     return safe

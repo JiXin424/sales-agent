@@ -58,6 +58,7 @@ class RetrievalResult:
     error_message: str = ""
     skip_reason: str = ""  # 跳过原因（spec §6.2）
     retrieval_latency_ms: float = 0.0  # 检索耗时
+    trace_hits: list[dict] = field(default_factory=list)  # per-channel ranked hits
 
     @property
     def has_results(self) -> bool:
@@ -210,6 +211,14 @@ class Retriever:
         return result
 
 
+def _find_rank(chunk_id: str, ranked: list[tuple[str, float]]) -> int | None:
+    """Find the 1-indexed rank of a chunk_id in the ranked list."""
+    for i, (cid, _) in enumerate(ranked, start=1):
+        if cid == chunk_id:
+            return i
+    return None
+
+
 # ── Hybrid Retriever (RRF) ─────────────────────────────────────────────
 
 
@@ -336,11 +345,40 @@ class HybridRetriever:
         if allowed_document_ids is not None:
             sources = [s for s in sources if s.document_id in allowed_document_ids]
 
+        # Build trace_hits: per-channel rank/score + final RRF rank/score
+        trace_hits: list[dict] = []
+        # Vector channel hits
+        if vector_result and vector_result.success:
+            for rank, src in enumerate(vector_result.sources, start=1):
+                trace_hits.append({
+                    "chunk_id": src.chunk_id,
+                    "document_id": src.document_id,
+                    "channel": "vector",
+                    "channel_rank": rank,
+                    "channel_score": src.score,
+                    "final_rank": _find_rank(src.chunk_id, ranked),
+                    "final_score": rrf_scores.get(src.chunk_id),
+                    "selected_for_context": src.chunk_id in {cid for cid, _ in ranked},
+                })
+        # Keyword channel hits
+        for rank, hit in enumerate(keyword_hits, start=1):
+            trace_hits.append({
+                "chunk_id": hit.chunk_id,
+                "document_id": hit.document_id,
+                "channel": "keyword",
+                "channel_rank": rank,
+                "channel_score": hit.score,
+                "final_rank": _find_rank(hit.chunk_id, ranked),
+                "final_score": rrf_scores.get(hit.chunk_id),
+                "selected_for_context": hit.chunk_id in {cid for cid, _ in ranked},
+            })
+
         return RetrievalResult(
             sources=sources,
             query=query,
             success=bool(sources) or (vector_result and vector_result.success),
             degraded=not sources,
+            trace_hits=trace_hits,
         )
 
     async def retrieve_for_task(

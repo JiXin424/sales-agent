@@ -466,6 +466,15 @@ class ChatPipeline:
                     "needs_retrieval": needs_retrieval,
                 },
             )
+            # Record structured route trace for evaluation attribution
+            await tracer.record_route_trace(
+                router_type=route_result.router_type if hasattr(route_result, "router_type") else "llm",
+                task_type=task_type,
+                confidence=route_result.confidence,
+                llm_called=getattr(route_result, "llm_router_called", False),
+                needs_retrieval=needs_retrieval,
+                decision_reason=getattr(route_result, "reason", ""),
+            )
 
             # =============================================
             # 6b. Prompt 解析（task + system，均经 registry 三级回退）
@@ -571,6 +580,17 @@ class ChatPipeline:
                         "retrieval",
                         latency_ms=int(timings.stages.get("retrieval", 0)),
                         metadata=retrieval_info,
+                    )
+                    # Record structured retrieval trace with per-channel hits
+                    await tracer.record_retrieval_trace(
+                        original_query=message,
+                        top_k=self.settings.retrieval.top_k,
+                        vector_weight=1.0 - self.settings.retrieval.keyword_weight,
+                        keyword_weight=self.settings.retrieval.keyword_weight,
+                        rrf_constant=self.settings.retrieval.rrf_k,
+                        retrieval_triggered=True,
+                        trace_hits=getattr(retrieval_result, "trace_hits", []),
+                        retrieval_latency_ms=retrieval_result.retrieval_latency_ms,
                     )
                 else:
                     retrieval_info = {

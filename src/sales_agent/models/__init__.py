@@ -40,6 +40,7 @@ from .feedback import Feedback
 from .review_item import ReviewItem
 from .knowledge_gap import KnowledgeGap
 from .eval import EvalSuite, EvalCase, EvalRun, EvalRunResult
+from .eval_trace import EvalMetricResult, RetrievalTrace, RetrievalTraceHit
 from .alert import AlertRule, Alert
 from .pilot_report import PilotReport
 from .coach import (
@@ -107,6 +108,9 @@ __all__ = [
     "EvalCase",
     "EvalRun",
     "EvalRunResult",
+    "EvalMetricResult",
+    "RetrievalTrace",
+    "RetrievalTraceHit",
     "AlertRule",
     "Alert",
     "PilotReport",

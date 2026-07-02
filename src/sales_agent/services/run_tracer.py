@@ -125,6 +125,61 @@ class RunTracer:
             run.route_confidence = route_confidence
             await self.db.flush()
 
+    # ── Route and retrieval trace (knowledge iteration) ──────────────────
+
+    async def record_route_trace(
+        self,
+        router_type: str,
+        task_type: str,
+        confidence: float,
+        llm_called: bool,
+        needs_retrieval: bool,
+        decision_reason: str = "",
+        route_metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Record route decision evidence for attribution."""
+        meta: dict[str, Any] = {
+            "router_type": router_type,
+            "task_type": task_type,
+            "confidence": confidence,
+            "llm_called": llm_called,
+            "needs_retrieval": needs_retrieval,
+            "decision_reason": decision_reason,
+        }
+        if route_metadata:
+            meta.update(_sanitize_metadata(route_metadata))
+        await self.record_step("route_trace", metadata=meta)
+
+    async def record_retrieval_trace(
+        self,
+        original_query: str,
+        rewritten_queries: list[str] | None = None,
+        top_k: int = 5,
+        candidate_k: int = 30,
+        vector_weight: float | None = None,
+        keyword_weight: float | None = None,
+        rrf_constant: int | None = None,
+        retrieval_triggered: bool = True,
+        skip_reason: str | None = None,
+        trace_hits: list[dict[str, Any]] | None = None,
+        retrieval_latency_ms: float = 0.0,
+    ) -> None:
+        """Record ranked retrieval evidence for attribution."""
+        meta: dict[str, Any] = {
+            "original_query": original_query,
+            "rewritten_queries": rewritten_queries or [],
+            "top_k": top_k,
+            "candidate_k": candidate_k,
+            "vector_weight": vector_weight,
+            "keyword_weight": keyword_weight,
+            "rrf_constant": rrf_constant,
+            "retrieval_triggered": retrieval_triggered,
+            "skip_reason": skip_reason,
+            "trace_hits": trace_hits or [],
+            "retrieval_latency_ms": retrieval_latency_ms,
+        }
+        await self.record_step("retrieval_trace", metadata=_sanitize_metadata(meta))
+
     async def fail_run(self, error_summary: str) -> None:
         """标记 run 为 failed。"""
         if self._run_id is None:
@@ -146,70 +201,6 @@ _SENSITIVE_KEYS = frozenset({
     "api_key", "api_key_ref", "api_key_env", "authorization",
     "token", "secret", "password", "credential",
 })
-
-
-    # ── Route and retrieval trace (knowledge iteration) ──────────────────
-
-    async def record_route_trace(
-        self,
-        router_type: str,
-        task_type: str,
-        confidence: float,
-        llm_called: bool,
-        needs_retrieval: bool,
-        decision_reason: str = "",
-        route_metadata: dict[str, Any] | None = None,
-    ) -> None:
-        """Record route decision evidence for attribution.
-
-        Persisted as a step named ``route_trace`` with full decision metadata.
-        """
-        meta = {
-            "router_type": router_type,
-            "task_type": task_type,
-            "confidence": confidence,
-            "llm_called": llm_called,
-            "needs_retrieval": needs_retrieval,
-            "decision_reason": decision_reason,
-        }
-        if route_metadata:
-            safe = _sanitize_metadata(route_metadata)
-            meta.update(safe)
-        await self.record_step("route_trace", metadata=meta)
-
-    async def record_retrieval_trace(
-        self,
-        original_query: str,
-        rewritten_queries: list[str] | None = None,
-        top_k: int = 5,
-        candidate_k: int = 30,
-        vector_weight: float | None = None,
-        keyword_weight: float | None = None,
-        rrf_constant: int | None = None,
-        retrieval_triggered: bool = True,
-        skip_reason: str | None = None,
-        trace_hits: list[dict[str, Any]] | None = None,
-        retrieval_latency_ms: float = 0.0,
-    ) -> None:
-        """Record ranked retrieval evidence for attribution.
-
-        Each hit dict must include: channel, channel_rank, channel_score,
-        final_rank, final_score, selected_for_context, chunk_id, document_id.
-        """
-        meta = {
-            "original_query": original_query,
-            "rewritten_queries": rewritten_queries or [],
-            "top_k": top_k,
-            "candidate_k": candidate_k,
-            "vector_weight": vector_weight,
-            "keyword_weight": keyword_weight,
-            "rrf_constant": rrf_constant,
-            "retrieval_triggered": retrieval_triggered,
-            "skip_reason": skip_reason,
-            "trace_hits": trace_hits or [],
-            "retrieval_latency_ms": retrieval_latency_ms,
-        }
-        await self.record_step("retrieval_trace", metadata=_sanitize_metadata(meta))
 
 
 def _sanitize_metadata(metadata: dict[str, Any]) -> dict[str, Any]:

@@ -112,15 +112,24 @@ async def handle_dingtalk_stream_via_graph(
         stream_mode=["messages", "updates", "custom"],
         durability="async",  # P2: async checkpoint for low-latency streaming
     ):
-        if chunk["type"] == "messages":
+        # LangGraph ≥1.2 对 list stream_mode 返回 tuple(mode, payload)；
+        # 兼容 dict 格式(旧版/单 mode 场景)。见 lessons #21。
+        if isinstance(chunk, tuple) and len(chunk) >= 2:
+            mode = chunk[0]
+            data = chunk[1]
+        elif isinstance(chunk, dict):
+            mode = chunk.get("type", "")
+            data = chunk.get("data")
+        else:
+            continue
+
+        if mode == "messages":
             # Token-by-token LLM output → card typing effect
-            msg_data = chunk["data"]
-            if hasattr(msg_data[0], "content"):
-                accumulated_text += msg_data[0].content or ""
+            if hasattr(data[0], "content"):
+                accumulated_text += data[0].content or ""
                 await card_sender.streaming_update(card_id, accumulated_text)
 
-        elif chunk["type"] == "updates":
-            data = chunk["data"]
+        elif mode == "updates":
             for node_name, node_output in data.items():
                 if isinstance(node_output, dict) and "answer_dict" in node_output:
                     final_answer = node_output["answer_dict"]
@@ -128,17 +137,16 @@ async def handle_dingtalk_stream_via_graph(
         # P1: Custom stream — log-only progress tracking
         #     Card content is updated exclusively by the messages handler
         #     to avoid race conditions on the DingTalk streaming API.
-        elif chunk["type"] == "custom":
-            custom_data = chunk["data"]
-            if isinstance(custom_data, dict):
-                phase = custom_data.get("phase", "")
+        elif mode == "custom":
+            if isinstance(data, dict):
+                phase = data.get("phase", "")
                 if phase:
                     logger.debug(
                         "Graph progress: phase=%s task=%s sources=%s latency=%s",
                         phase,
-                        custom_data.get("task_type", ""),
-                        custom_data.get("source_count", ""),
-                        custom_data.get("latency_ms", ""),
+                        data.get("task_type", ""),
+                        data.get("source_count", ""),
+                        data.get("latency_ms", ""),
                     )
 
     # 3. Finalize card

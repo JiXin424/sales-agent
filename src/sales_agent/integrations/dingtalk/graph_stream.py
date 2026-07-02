@@ -104,14 +104,22 @@ async def handle_dingtalk_stream_via_graph(
     # 2. Stream: messages, updates, and custom progress (P1)
     final_answer = None
     accumulated_text = ""
+    chunk_count = 0
 
     async for chunk in graph.astream(
         input_state,
         config,
         context={"db": db, "chat_model": chat_model},
-        stream_mode=["messages", "updates", "custom"],
-        durability="async",  # P2: async checkpoint for low-latency streaming
+        stream_mode=["messages", "updates", "custom"]
     ):
+        chunk_count += 1
+        if chunk_count <= 3:
+            logger.warning(
+                "GRAPH_CHUNK #%s type=%s keys=%s",
+                chunk_count,
+                type(chunk).__name__,
+                list(chunk[1].keys()) if isinstance(chunk, tuple) and isinstance(chunk[1], dict) else "N/A",
+            )
         # LangGraph ≥1.2 对 list stream_mode 返回 tuple(mode, payload)；
         # 兼容 dict 格式(旧版/单 mode 场景)。见 lessons #21。
         if isinstance(chunk, tuple) and len(chunk) >= 2:
@@ -149,6 +157,12 @@ async def handle_dingtalk_stream_via_graph(
                         data.get("latency_ms", ""),
                     )
 
+    logger.warning(
+        "GRAPH_DONE: total_chunks=%s final_answer_keys=%s accumulated_len=%s",
+        chunk_count,
+        list(final_answer.keys()) if final_answer else "None",
+        len(accumulated_text),
+    )
     # 3. Finalize card
     if final_answer is None:
         final_answer = {"summary": accumulated_text, "sections": []}

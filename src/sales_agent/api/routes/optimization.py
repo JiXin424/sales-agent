@@ -10,6 +10,7 @@ import json
 import logging
 from typing import Any
 
+from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, func
@@ -23,6 +24,9 @@ from sales_agent.api.optimization_auth import (
     require_human_principal,
     require_scope,
 )
+
+# Annotated dependency to avoid FastAPI treating OptimizationPrincipal as response field
+MCPPrincipal = Annotated[OptimizationPrincipal, Depends(get_optimization_principal)]
 from sales_agent.models.agent import Agent
 from sales_agent.models.optimization import (
     OptimizationIteration,
@@ -155,7 +159,7 @@ async def get_iteration(agent_id: str, iteration_id: str, db: DbSession):
     )
 
 
-@router.post("/iterations/{iteration_id}/cancel")
+@router.post("/iterations/{iteration_id}/cancel", response_model=None)
 async def cancel_iteration(agent_id: str, iteration_id: str, db: DbSession):
     """Cancel a running iteration."""
     agent = await _get_agent(db, agent_id)
@@ -168,13 +172,13 @@ async def cancel_iteration(agent_id: str, iteration_id: str, db: DbSession):
 
 # ── Approval and Publication ─────────────────────────────────────────────
 
-@router.post("/iterations/{iteration_id}/approve")
+@router.post("/iterations/{iteration_id}/approve", response_model=None)
 async def approve_iteration(
     agent_id: str,
     iteration_id: str,
     body: schemas.ApproveRequest,
     db: DbSession,
-    principal: OptimizationPrincipal = Depends(get_optimization_principal),
+    principal: MCPPrincipal,
 ):
     """Approve an iteration for publication."""
     require_human_principal(principal)
@@ -189,7 +193,7 @@ async def approve_iteration(
     return {"status": "approved", "iteration_id": iteration_id}
 
 
-@router.post("/iterations/{iteration_id}/reject")
+@router.post("/iterations/{iteration_id}/reject", response_model=None)
 async def reject_iteration(
     agent_id: str,
     iteration_id: str,
@@ -242,13 +246,13 @@ async def list_candidates(agent_id: str, iteration_id: str, db: DbSession):
     ]
 
 
-@router.post("/candidates/{candidate_id}/publish")
+@router.post("/candidates/{candidate_id}/publish", response_model=None)
 async def publish_candidate(
     agent_id: str,
     candidate_id: str,
     body: schemas.PublishRequest,
     db: DbSession,
-    principal: OptimizationPrincipal = Depends(get_optimization_principal),
+    principal: MCPPrincipal,
 ):
     """Publish an approved candidate, creating a new release and switching the binding."""
     require_human_principal(principal)
@@ -301,12 +305,12 @@ async def publish_candidate(
 
 # ── Rollback ─────────────────────────────────────────────────────────────
 
-@router.post("/releases/rollback")
+@router.post("/releases/rollback", response_model=None)
 async def rollback_release(
     agent_id: str,
     body: schemas.RollbackRequest,
     db: DbSession,
-    principal: OptimizationPrincipal = Depends(get_optimization_principal),
+    principal: MCPPrincipal,
 ):
     """Roll back to a previous release."""
     require_human_principal(principal)
@@ -363,7 +367,7 @@ async def rollback_release(
 
 # ── Checkpoints ──────────────────────────────────────────────────────────
 
-@router.get("/checkpoints")
+@router.get("/checkpoints", response_model=None)
 async def list_checkpoints(
     agent_id: str,
     db: DbSession,
@@ -394,7 +398,7 @@ async def list_checkpoints(
     ]
 
 
-@router.post("/checkpoints/{checkpoint_id}/fork")
+@router.post("/checkpoints/{checkpoint_id}/fork", response_model=None)
 async def fork_checkpoint(
     agent_id: str,
     checkpoint_id: str,

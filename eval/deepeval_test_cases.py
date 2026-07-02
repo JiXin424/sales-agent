@@ -145,16 +145,101 @@ def parse_ground_truth_json(path: str | Path | None = None) -> list[QuestionItem
     return items
 
 
+# ── Golden 文件解析（DeepEval Synthesizer 生成） ───────────────────
+
+
+def parse_golden_json(path: str | Path) -> list[QuestionItem]:
+    """解析 Synthesizer 生成的 goldens.json。"""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    items: list[QuestionItem] = []
+    for i, g in enumerate(data, 1):
+        inp = g.get("input", "")
+        exp = g.get("expected_output", "")
+        src = g.get("source_file", "")
+        items.append(QuestionItem(
+            id=f"golden_{i:04d}",
+            text=inp,
+            reference=exp,
+            has_reference=bool(exp),
+            source=f"goldens.json:{Path(src).name}" if src else "goldens.json",
+        ))
+    return items
+
+
+def parse_golden_csv(path: str | Path) -> list[QuestionItem]:
+    """解析 Synthesizer 生成的 goldens.csv。"""
+    import csv
+    items: list[QuestionItem] = []
+    with open(path, encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for i, row in enumerate(reader, 1):
+            inp = row.get("input", "") or row.get("问题", "")
+            exp = row.get("expected_output", "") or row.get("expected output", "") or row.get("参考答案", "")
+            items.append(QuestionItem(
+                id=f"csv_{i:04d}",
+                text=inp,
+                reference=exp,
+                has_reference=bool(exp),
+                source=f"goldens.csv",
+            ))
+    return items
+
+
+def parse_golden_md(path: str | Path) -> list[QuestionItem]:
+    """解析 Synthesizer 生成的 goldens.md（Markdown 格式）。"""
+    text = Path(path).read_text(encoding="utf-8")
+    items: list[QuestionItem] = []
+
+    # 匹配 ## 第 N 题 ... **问题**：... **参考答案**：...
+    sections = re.split(r"\n## 第 \d+ 题\n", text)
+    for i, sec in enumerate(sections):
+        if not sec.strip():
+            continue
+        # 提取问题
+        q_match = re.search(r"\*\*问题\*\*[：:]\s*(.+?)(?=\n\n|\n\*\*|$)", sec, re.DOTALL)
+        # 提取答案
+        a_match = re.search(r"\*\*参考答案\*\*[：:]\s*(.+?)(?=\n\n\*\*来源|$)", sec, re.DOTALL)
+        inp = q_match.group(1).strip() if q_match else ""
+        exp = a_match.group(1).strip() if a_match else ""
+        if inp:
+            items.append(QuestionItem(
+                id=f"md_{i:04d}",
+                text=inp,
+                reference=exp,
+                has_reference=bool(exp),
+                source="goldens.md",
+            ))
+    return items
+
+
+def parse_golden_file(path: str | Path) -> list[QuestionItem]:
+    """根据扩展名自动选择解析器。"""
+    p = Path(path)
+    suffix = p.suffix.lower()
+    if suffix == ".json":
+        return parse_golden_json(p)
+    elif suffix == ".csv":
+        return parse_golden_csv(p)
+    elif suffix in (".md", ".markdown"):
+        return parse_golden_md(p)
+    else:
+        raise ValueError(f"不支持的文件格式：{suffix}（支持 .json / .csv / .md）")
+
+
 # ── 问题集汇总 ─────────────────────────────────────────────────────
 
 
 def load_all_questions(
     include_questions_md: bool = True,
     include_ground_truth: bool = True,
+    golden_file: str | None = None,
     dedup: bool = True,
 ) -> list[QuestionItem]:
     """加载所有数据源的问题，可选的去重合并。"""
     all_items: list[QuestionItem] = []
+
+    if golden_file:
+        all_items.extend(parse_golden_file(golden_file))
 
     if include_questions_md:
         all_items.extend(parse_questions_markdown())
@@ -441,6 +526,7 @@ def build_llm_test_case(
         expected_output=question.reference,
         retrieval_context=sources,
         context=sources,
+        tools_called=[],
     )
 
 
@@ -452,6 +538,10 @@ __all__ = [
     "AgentResponse",
     "parse_questions_markdown",
     "parse_ground_truth_json",
+    "parse_golden_json",
+    "parse_golden_csv",
+    "parse_golden_md",
+    "parse_golden_file",
     "load_all_questions",
     "call_agent_pipeline",
     "build_llm_test_case",

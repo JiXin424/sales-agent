@@ -42,6 +42,23 @@ from deepeval_metrics import (
 )
 from deepeval_html_report import generate_html_report
 
+# ── Monkey-patch：修复 TaskCompletionMetric 模板变量名 bug ──────
+import deepeval.templates.resolver as _resolver
+_orig_get_base = _resolver.TemplateRegistry.get_base_templates
+
+def _patched_get_base(self, feature):
+    templates = _orig_get_base(self, feature)
+    if feature == "metrics":
+        for cls_name, methods in templates.items():
+            if isinstance(methods, dict):
+                for key in methods:
+                    if isinstance(methods[key], str) and "tools_called_formatted" in methods[key]:
+                        methods[key] = methods[key].replace("tools_called_formatted", "tools_called")
+    return templates
+
+_resolver.TemplateRegistry.get_base_templates = _patched_get_base
+_resolver._registry._compiled.clear()
+
 @dataclass
 class SingleResult:
     question_id: str; question: str; reference: str; kb_label: str; model: str
@@ -306,6 +323,8 @@ def main():
     p.add_argument("--output-dir", default=None)
     p.add_argument("--no-questions-md", action="store_true")
     p.add_argument("--no-ground-truth", action="store_true")
+    p.add_argument("--golden-file", default=None,
+                   help="从 Synthesizer 生成的 goldens.json/csv/md 加载题目")
     p.add_argument("--judge-model", default=None)
     p.add_argument("--judge-api-key", default=None)
     p.add_argument("--judge-base-url", default=None)
@@ -337,7 +356,9 @@ def main():
 
     questions = load_all_questions(
         include_questions_md=not args.no_questions_md,
-        include_ground_truth=False)
+        include_ground_truth=False,
+        golden_file=args.golden_file,
+    )
     if args.limit > 0: questions = questions[:args.limit]
     print(f"[INFO] Loaded {len(questions)} questions")
 

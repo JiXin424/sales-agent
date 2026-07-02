@@ -39,8 +39,11 @@ def main() -> None:
     logger = logging.getLogger(__name__)
     logger.info("Starting MCP server on %s:%s, API backend: %s", args.host, args.port, api_url)
 
-    # FastMCP uses uvicorn under the hood for Streamable HTTP
-    mcp.run(transport="streamable-http", host=args.host, port=args.port)
+    # FastMCP 1.28 uses uvicorn internally; host/port come from env or
+    # are passed through uvicorn.run directly on the Starlette app.
+    import uvicorn
+    app = mcp.streamable_http_app()
+    uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
 
 
 if __name__ == "__main__":

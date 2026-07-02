@@ -14,7 +14,10 @@
 #   # 3. 两租户对比
 #   bash eval/deepeval_run.sh compare taishan taishankaifa2
 #
-#   # 4. 自定义参数
+#   # 4. 用 Synthesizer 生成的 golden 文件评估
+#   bash eval/deepeval_run.sh golden taishan eval/datasets/taishankaifa2/goldens.md
+#
+#   # 5. 自定义参数
 #   bash eval/deepeval_run.sh eval taishan "qwen-plus" 10
 # ──────────────────────────────────────────────────────────────────
 
@@ -77,6 +80,7 @@ case "$MODE" in
         # 快速冒烟测试：5 题，验证流程是否跑通
         TENANT_ID="${2:-taishan}"
         LIMIT="${3:-5}"
+        export TENANT_ID="$TENANT_ID"
 
         info "Smoke test: $LIMIT questions against tenant=$TENANT_ID"
         "$VENV_PYTHON" "$SCRIPT_DIR/deepeval_eval.py" \
@@ -90,6 +94,7 @@ case "$MODE" in
     eval)
         # 单租户完整评估
         TENANT_ID="${2:?Usage: $0 eval <tenant-id> [models] [limit]}"
+        export TENANT_ID="$TENANT_ID"
         MODELS="${3:-all}"
         LIMIT="${4:-0}"
 
@@ -122,6 +127,41 @@ case "$MODE" in
             --tenant-id "$TENANT_ID" \
             --output-dir "$SCRIPT_DIR/results/risk/"
         ok "Risk eval done. Check eval/results/risk/"
+        ;;
+
+    golden)
+        # 用 Synthesizer 生成的 golden 文件评估
+        TENANT_ID="${2:?Usage: $0 golden <tenant-id> <golden-file> [models] [limit]}"
+        export TENANT_ID="$TENANT_ID"
+        GOLDEN_FILE="${3:?Usage: $0 golden <tenant-id> <golden-file> [models] [limit]}"
+        MODELS="${4:-all}"
+        LIMIT="${5:-0}"
+
+        if [ ! -f "$GOLDEN_FILE" ]; then
+            err "Golden file not found: $GOLDEN_FILE"
+            exit 1
+        fi
+
+        info "Golden eval: tenant=$TENANT_ID file=$GOLDEN_FILE"
+        info "Models: $MODELS, Limit: ${LIMIT:-all}"
+
+        if [ "$LIMIT" != "0" ] && [ -n "$LIMIT" ]; then
+            "$VENV_PYTHON" "$SCRIPT_DIR/deepeval_eval.py" \
+                --tenant-id "$TENANT_ID" \
+                --golden-file "$GOLDEN_FILE" \
+                --models "$MODELS" \
+                --limit "$LIMIT" \
+                --concurrency 3 \
+                --output-dir "$SCRIPT_DIR/results/deepeval/"
+        else
+            "$VENV_PYTHON" "$SCRIPT_DIR/deepeval_eval.py" \
+                --tenant-id "$TENANT_ID" \
+                --golden-file "$GOLDEN_FILE" \
+                --models "$MODELS" \
+                --concurrency 3 \
+                --output-dir "$SCRIPT_DIR/results/deepeval/"
+        fi
+        ok "Golden eval done. Check eval/results/deepeval/"
         ;;
 
     compare)
@@ -170,6 +210,11 @@ case "$MODE" in
         echo "  risk [tenant-id]"
         echo "      Evaluate risk detection (block/miss/false-alarm)"
         echo "      Example: $0 risk taishan"
+        echo ""
+        echo "  golden <tenant-id> <golden-file> [models] [limit]"
+        echo "      Evaluate using Synthesizer-generated golden file"
+        echo "      Supports .json / .csv / .md format"
+        echo "      Example: $0 golden taishan eval/datasets/taishankaifa2/goldens.md"
         echo ""
         echo "  compare <tenant-id-1> <tenant-id-2> [label1] [label2] [models] [limit]"
         echo "      Compare two tenants"

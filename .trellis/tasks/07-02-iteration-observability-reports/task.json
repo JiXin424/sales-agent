@@ -1,11 +1,11 @@
 {
-  "id": "knowledge-eval-iteration-loop",
-  "name": "knowledge-eval-iteration-loop",
-  "title": "Knowledge evaluation optimization loop",
+  "id": "iteration-observability-reports",
+  "name": "iteration-observability-reports",
+  "title": "Iteration observability and effect reports",
   "description": "",
   "status": "in_progress",
   "dev_type": null,
-  "scope": "eval, knowledge versioning, optimization workflow, console",
+  "scope": "optimization observability, PostgreSQL reports, API, CLI, console",
   "package": null,
   "priority": "P2",
   "creator": "gitea-admin",
@@ -18,11 +18,8 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [
-    "07-02-iteration-observability-reports",
-    "07-02-claude-code-mcp-monitoring"
-  ],
-  "parent": null,
+  "children": [],
+  "parent": "07-02-knowledge-eval-iteration-loop",
   "relatedFiles": [],
   "notes": "",
   "meta": {}

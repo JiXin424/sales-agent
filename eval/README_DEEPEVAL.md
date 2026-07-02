@@ -13,6 +13,7 @@ Sales Agent + DeepEval 集成 —— 直接走 ChatPipeline（与钉钉用户相
 DATABASE_URL=postgresql+asyncpg://sales_agent:sales_agent_dev@localhost:5432/sales_agent
 
 # === Agent 模型（评估脚本自己调 ChatPipeline）===
+MODEL_PROVIDER=openai_compatible
 MODEL_API_KEY=your-api-key
 MODEL_BASE_URL=https://api.example.com/v1
 MODEL_CHAT_MODEL=qwen-plus
@@ -20,9 +21,13 @@ MODEL_EMBEDDING_MODEL=text-embedding-v3
 
 # === 裁判 LLM（用于自动打分，独立于 Agent 模型）===
 OPENAI_API_KEY=sk-your-openai-key
-# 或用其他兼容模型：
-# DEEPEVAL_MODEL=qwen-plus
-# OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+DEEPEVAL_MODEL=gpt-4o
+OPENAI_BASE_URL=https://api.openai.com/v1
+
+# === 嵌入模型（Synthesizer 文档分块用，可与 LLM 不同 provider）===
+# EMBEDDING_API_KEY=sk-...
+# EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+# EMBEDDING_MODEL=text-embedding-v3
 ```
 
 ### 2. 一键命令
@@ -39,6 +44,9 @@ bash eval/deepeval_run.sh compare taishan taishankaifa2
 
 # 风险检测评估
 bash eval/deepeval_run.sh risk taishan
+
+# 从知识库自动出题 + 评估（端到端链路）
+bash eval/deepeval_run.sh golden <tenant-id> <golden-file> [models] [limit]
 
 # RAG vs Ontology 对比（改 KNOWLEDGE_ENGINE 分别跑）
 KNOWLEDGE_ENGINE=legacy_rag       python eval/deepeval_eval.py --tenant-id taishan --label "RAG" --limit 10
@@ -113,12 +121,21 @@ Agent Pipeline                         评估覆盖                指标
 | `deepeval_test_cases.py` | **管道调用** — `call_agent_pipeline()` 直连 ChatPipeline，`build_llm_test_case()` |
 | `deepeval_risk_eval.py` | **风险评估** — 15 道风险测试题，计算 Recall/Precision/F1 |
 | `deepeval_conversation_eval.py` | **多轮评估** — 从 DB 加载真实对话，Turn-level 指标 |
-| `deepeval_synthesize.py` | **数据生成** — 从产品文档自动生成 Golden 测试数据 |
+| `deepeval_synthesize.py` | **数据生成** — 从产品文档自动生成 Golden 测试数据，强制中文，输出 JSON/CSV/MD |
 | `deepeval_optimize.py` | **Prompt 优化** — GEPA/MIPROV2/COPRO/SIMBA 算法自动调优 |
 | `deepeval_dataset.py` | **数据集管理** — save/load CSV/JSON/JSONL |
 | `deepeval_pytest_plugin.py` | **Pytest fixture** — `eval_question()` 快捷函数 |
 | `deepeval_html_report.py` | **HTML 报告** — 自包含，浏览器打开，含图表/搜索/排序 |
-| `deepeval_run.sh` | **一键脚本** — 自动加载 .env |
+| `deepeval_run.sh` | **一键脚本** — 自动加载 .env + 命令分发 |
+| `optimizer/` | **迭代优化器** — LangGraph 闭环：出题→评估→诊断→调优→迭代 |
+| `optimizer/state.py` | 状态模型 — OptimizerState + MetricSnapshot + Diagnosis 等 |
+| `optimizer/graph.py` | LangGraph 图 — 7 节点 DAG + 条件路由 |
+| `optimizer/tools/triage.py` | 诊断分流 — 基于检索指标的确定性规则路由 |
+| `optimizer/tools/tune_retrieval.py` | Tool A — LLM 分析 + 建议检索参数 + 写入 DB |
+| `optimizer/tools/synthesize.py` | 子进程封装 — 调用 deepeval_synthesize.py |
+| `optimizer/tools/evaluate.py` | 子进程封装 — 调用 deepeval_eval.py + 解析结果 |
+| `optimizer/tools/judge.py` | 收敛判断 — pass_rate / 停滞检测 / 最大轮次 |
+| `optimizer/runner.py` | CLI 入口 — `python -m eval.optimizer.runner` |
 | `risk_test_questions.json` | 风险测试集（15 题，9 类型） |
 | `questions.md` | 评估问题（126 题，80 有参考答案） |
 
@@ -190,17 +207,57 @@ F1 Score:           94.1%
 python eval/deepeval_conversation_eval.py --tenant-id taishan --limit 20
 ```
 
-### 场景 6：自动生成测试数据
+### 场景 6：自动出题 + 评估（端到端链路）
+
+从知识库文档自动生成测试题 → 跑 Agent 回答 → DeepEval 裁判打分，一条命令搞定：
 
 ```bash
+# Step 1: 从知识库出题
 python eval/deepeval_synthesize.py \
-    --docs-dir data/taishan/documents \
-    --max-goldens 30
+    --docs-dir data/taishankaifa2/documents \
+    --limit-per-doc 5 \
+    --max-goldens 0 \
+    --output eval/datasets/taishankaifa2
+
+# 输出：goldens.json + goldens.csv + goldens.md（全中文）
+
+# Step 2: 用生成的题目跑评估
+bash eval/deepeval_run.sh golden taishankaifa2 eval/datasets/taishankaifa2/goldens.md all 10
 ```
 
-输出 `eval/datasets/goldens.json` + `eval/datasets/goldens.csv`。
+**生成参数说明**：
 
-### 场景 7：Prompt 优化
+| 参数 | 默认 | 说明 |
+|------|------|------|
+| `--docs-dir` | 必填 | 知识库文档目录（递归扫描 `.md/.txt/.pdf`） |
+| `--limit-per-doc` | 3 | 每篇文档最多生成几题 |
+| `--max-goldens` | 20 | 总题目上限（0 = 不限制） |
+| `--output` | `eval/datasets/` | 输出目录 |
+
+**特性**：
+- 所有题目和答案强制中文
+- 输出 JSON + CSV + **Markdown**（方便人读）
+- 支持 LLM 和 Embedding 使用不同 API provider（通过 `EMBEDDING_*` 环境变量）
+- 兼容中文文件名（自动 hash 绕开 ChromaDB 限制）
+
+### 场景 7：用 Golden 文件评估
+
+直接从 Synthesizer 生成的 `goldens.json/csv/md` 跑评估，不依赖 `questions.md`：
+
+```bash
+bash eval/deepeval_run.sh golden taishankaifa2 eval/datasets/taishankaifa2/goldens.md
+# 或
+bash eval/deepeval_run.sh golden taishankaifa2 eval/datasets/taishankaifa2/goldens.json
+# 或
+bash eval/deepeval_run.sh golden taishankaifa2 eval/datasets/taishankaifa2/goldens.csv
+```
+
+自动根据扩展名选解析器，三种格式随意。限制题数：末尾加数字即可：
+```bash
+bash eval/deepeval_run.sh golden taishankaifa2 eval/datasets/taishankaifa2/goldens.md all 5
+```
+
+### 场景 8：Prompt 优化
 
 ```bash
 python eval/deepeval_optimize.py \
@@ -209,7 +266,7 @@ python eval/deepeval_optimize.py \
     --limit 10
 ```
 
-### 场景 8：pytest 集成测试
+### 场景 9：pytest 集成测试
 
 ```bash
 # Agent 端到端评估
@@ -219,7 +276,7 @@ pytest tests/test_deepeval_agent.py -v
 pytest tests/test_deepeval_risk.py -v
 ```
 
-### 场景 9：无源码机跑 eval（image-deploy 目标机）
+### 场景 10：无源码机跑 eval（image-deploy 目标机）
 
 无源码机（host 上没有 `eval/`、没有 Python venv）通过薄壳 `scripts/run-eval.sh` 跑
 eval：实际在运行中的 `<tenant>-api` 容器内执行（依赖、`eval/`、`DATABASE_URL`/`MODEL_*`
@@ -239,6 +296,58 @@ scripts/run-eval.sh taishan retrieval -- --round 01 --mode hybrid
 
 结果默认从容器 `/app/eval/{results,rounds}` 拷回 host 的 `./eval-results/`（`--results-dir` 可改）。
 多机分别跑后用 `python eval/merge_results.py` 合并。
+
+### 场景 11：迭代闭环优化（Phase 1 — 检索调优）
+
+自动从知识库出题 → 评估 → 诊断 → 调检索配置 → 重新出题迭代：
+
+```bash
+python -m eval.optimizer.runner \
+    --tenant-id taishankaifa2 \
+    --docs-dir data/taishankaifa2/documents \
+    --max-rounds 5 \
+    --target-pass-rate 0.8 \
+    --eval-limit 20
+```
+
+**参数**：
+
+| 参数 | 默认 | 说明 |
+|------|------|------|
+| `--tenant-id` | 必填 | 租户 ID |
+| `--docs-dir` | 必填 | 知识库文档目录 |
+| `--max-rounds` | 5 | 最大迭代轮次 |
+| `--target-pass-rate` | 0.8 | 目标通过率，达到则收敛 |
+| `--eval-limit` | 20 | 每轮评估最多几题 |
+| `--output-dir` | `eval/datasets/optimizer/` | 输出根目录 |
+| `--no-checkpoint` | — | 禁用断点续传 |
+
+**工作流程**：
+
+```
+Synthesize → Evaluate → Triage → [Tool A: Tune Retrieval] → Judge → Loop/End
+                                   └─ [Tool B: Fix Docs] (Phase 2)
+```
+
+**分流逻辑**：
+
+| 条件 | 动作 |
+|------|------|
+| Recall < 0.3 AND Relevancy < 0.3 | 🔧 调检索（top_k / chunk_size / chunk_overlap） |
+| Recall < 0.3 AND Relevancy >= 0.5 | 📝 补文档（Phase 2） |
+| 连续 3 轮无改善 | 📝 转文档优化 |
+
+**输出结构**：
+
+```
+eval/datasets/optimizer/
+├── round_01/
+│   ├── goldens.json   # 本轮生成的题目
+│   └── results/       # 本轮评估结果
+├── round_02/
+│   └── ...
+└── ...
+```
 
 ---
 

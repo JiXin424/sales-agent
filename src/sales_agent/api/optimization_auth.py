@@ -7,13 +7,24 @@ operator principals with full access.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import HTTPException, Request
+from fastapi import Depends, Header, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from sales_agent.core.database import get_db
+
+from collections.abc import AsyncGenerator
+
+
+async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
+    """Yield a database session."""
+    async for session in get_db():
+        yield session
 
 from sales_agent.models.optimization_auth import OptimizationApiCredential
 from sales_agent.security.optimization_credentials import verify_token, utcnow
@@ -164,19 +175,11 @@ async def authenticate_bearer(
 
 
 async def get_optimization_principal(
-    request: Request, db: AsyncSession,
+    authorization: str | None = Header(default=None),
+    db: AsyncSession = Depends(get_db_session),
 ) -> OptimizationPrincipal:
-    """FastAPI dependency: resolve principal from request headers.
-
-    Falls back to operator if no bearer token is present. This allows
-    existing Web/CLI routes to work unchanged.
-    """
-    auth = request.headers.get("Authorization")
-    principal = await authenticate_bearer(db, auth)
-
+    """Resolve principal from Authorization header or fallback to operator."""
+    principal = await authenticate_bearer(db, authorization)
     if principal is not None:
         return principal
-
-    # No bearer token → operator (existing Web/CLI path)
-    # Tenant is derived from the agent lookup in each route
     return OptimizationPrincipal.operator(tenant_id="")

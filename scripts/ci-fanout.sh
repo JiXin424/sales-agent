@@ -76,9 +76,9 @@ while IFS='|' read -r user host port dir method local name has_source compose_fi
       # 失败不阻断后续部署(与下方 image-deploy 同款兜底)。
       # 注意 ssh 不带 -n:tar 流要经 stdin 传到远端解包;且此处 stdin 已被 tar 管道
       # 占用,不会读走外层 while 循环的 /tmp/ci-targets.txt(与其它分支的 ssh -n 不同)。
-      tar -C "${REPO_DIR}/scripts" -cf - stop-tenant.sh check-tenant.sh \
+      tar -C "${REPO_DIR}/scripts" -cf - stop-tenant.sh check-tenant.sh run-eval.sh \
         | ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p "$port" "${user}@${host}" \
-          "mkdir -p '${dir}/scripts' && tar -C '${dir}/scripts' -xf - && chmod +x '${dir}/scripts/stop-tenant.sh' '${dir}/scripts/check-tenant.sh'" \
+          "mkdir -p '${dir}/scripts' && tar -C '${dir}/scripts' -xf - && chmod +x '${dir}/scripts/stop-tenant.sh' '${dir}/scripts/check-tenant.sh' '${dir}/scripts/run-eval.sh'" \
         || echo "⚠️  [$name] 运维脚本同步失败，继续部署" >&2
 
       ssh -n -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p "$port" "${user}@${host}" \

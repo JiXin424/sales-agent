@@ -109,6 +109,57 @@ async def sample_feedback(db_session: AsyncSession, sample_tenant: str, sample_c
 
 
 @pytest_asyncio.fixture
+async def active_agent(db_session: AsyncSession, sample_tenant: str):
+    """Create a test Agent, return the Agent object."""
+    from sales_agent.models.agent import Agent
+
+    agent = Agent(
+        id="test_agent_001",
+        tenant_id=sample_tenant,
+        name="Test Agent",
+        status="active",
+        feature_flags_json="{}",
+    )
+    db_session.add(agent)
+    await db_session.flush()
+    return agent
+
+
+@pytest_asyncio.fixture
+async def other_agent(db_session: AsyncSession):
+    """Create a second test Agent in a different tenant."""
+    from sales_agent.models.tenant import Tenant
+    from sales_agent.models.agent import Agent
+    import json
+
+    tenant = Tenant(
+        id="test_tenant_002",
+        name="Other Tenant",
+        status="active",
+        config_json=json.dumps({
+            "model": {
+                "provider": "openai_compatible",
+                "base_url": "https://api.test.com/v1",
+                "chat_model": "test-model",
+                "embedding_model": "test-embedding",
+            },
+        }, ensure_ascii=False),
+    )
+    db_session.add(tenant)
+
+    agent = Agent(
+        id="test_agent_002",
+        tenant_id="test_tenant_002",
+        name="Other Agent",
+        status="active",
+        feature_flags_json="{}",
+    )
+    db_session.add(agent)
+    await db_session.flush()
+    return agent
+
+
+@pytest_asyncio.fixture
 async def sample_agent_run(db_session: AsyncSession, sample_tenant: str, sample_conversation: str):
     """创建一个测试 Agent Run，返回 agent_run 对象。"""
     run = AgentRun(

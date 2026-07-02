@@ -11,6 +11,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -416,7 +417,170 @@ async def fork_checkpoint(
     return {"status": "forked", "forked_checkpoint_id": forked.id, "thread_id": forked.thread_id}
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────
+# ── Events ───────────────────────────────────────────────────────────────────
+
+
+def _event_to_response(event: Any) -> schemas.EventResponse:
+    """Convert an IterationEvent ORM object to an API response."""
+    import json as _json
+    payload = {}
+    try:
+        payload = _json.loads(event.payload_json) if event.payload_json else {}
+    except (TypeError, ValueError):
+        pass
+    return schemas.EventResponse(
+        id=event.id,
+        sequence_no=event.sequence_no,
+        event_type=event.event_type,
+        stage=event.stage,
+        status=event.status,
+        progress_current=event.progress_current,
+        progress_total=event.progress_total,
+        message=event.message,
+        payload=payload,
+        actor_type=event.actor_type,
+        actor_id=event.actor_id,
+        created_at=event.created_at,
+    )
+
+
+@router.get(
+    "/iterations/{iteration_id}/events",
+    response_model=schemas.EventPageResponse,
+)
+async def list_events(
+    agent_id: str,
+    iteration_id: str,
+    db: DbSession,
+    after_sequence: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    """Replay events for an iteration after a given sequence cursor."""
+    agent = await _get_agent(db, agent_id)
+    iteration = await _get_iteration(db, agent.tenant_id, agent_id, iteration_id)
+
+    from sales_agent.optimization.event_service import IterationEventService
+
+    service = IterationEventService(db)
+    events = await service.list_after(
+        tenant_id=agent.tenant_id,
+        iteration_id=iteration.id,
+        after_sequence=after_sequence,
+        limit=limit,
+    )
+    next_seq = events[-1].sequence_no if events else after_sequence
+    terminal = iteration.status in ("completed", "cancelled", "failed", "rolled_back")
+
+    return schemas.EventPageResponse(
+        events=[_event_to_response(e) for e in events],
+        next_sequence=next_seq,
+        terminal=terminal,
+    )
+
+
+@router.get(
+    "/iterations/{iteration_id}/events/wait",
+    response_model=schemas.EventPageResponse,
+)
+async def wait_events(
+    agent_id: str,
+    iteration_id: str,
+    db: DbSession,
+    after_sequence: int = Query(default=0, ge=0),
+    timeout_seconds: int = Query(default=30, ge=1, le=30),
+    limit: int = Query(default=100, ge=1, le=200),
+):
+    """Long-poll for new events. Returns immediately if events are available,
+    otherwise waits up to *timeout_seconds*."""
+    agent = await _get_agent(db, agent_id)
+    iteration = await _get_iteration(db, agent.tenant_id, agent_id, iteration_id)
+
+    from sales_agent.optimization.event_service import IterationEventService
+
+    service = IterationEventService(db)
+    result = await service.wait_after(
+        tenant_id=agent.tenant_id,
+        iteration_id=iteration.id,
+        after_sequence=after_sequence,
+        timeout_seconds=timeout_seconds,
+        limit=limit,
+    )
+    return schemas.EventPageResponse(
+        events=[_event_to_response(e) for e in result.events],
+        next_sequence=result.next_sequence,
+        terminal=result.terminal,
+    )
+
+
+@router.get("/iterations/{iteration_id}/events/stream")
+async def stream_events(
+    agent_id: str,
+    iteration_id: str,
+    db: DbSession,
+    last_event_id: str = Query(default="", alias="Last-Event-ID"),
+):
+    """SSE endpoint for live event streaming.
+
+    Supports reconnect with ``Last-Event-ID`` header or query parameter.
+    Emits a heartbeat comment every 15 seconds and closes on terminal state.
+    """
+    import asyncio
+    import json as _json
+
+    agent = await _get_agent(db, agent_id)
+    iteration = await _get_iteration(db, agent.tenant_id, agent_id, iteration_id)
+
+    from sales_agent.optimization.event_service import IterationEventService, TERMINAL_STATES
+
+    async def event_generator():
+        cursor = 0
+        try:
+            cursor = int(last_event_id) if last_event_id else 0
+        except (ValueError, TypeError):
+            cursor = 0
+
+        heartbeat_interval = 15
+        last_heartbeat = time.monotonic()
+
+        while True:
+            service = IterationEventService(db)
+            events = await service.list_after(
+                tenant_id=agent.tenant_id,
+                iteration_id=iteration.id,
+                after_sequence=cursor,
+                limit=50,
+            )
+            for event in events:
+                resp = _event_to_response(event)
+                yield f"id: {event.sequence_no}\n"
+                yield f"data: {_json.dumps(resp.model_dump(), ensure_ascii=False)}\n\n"
+                cursor = event.sequence_no
+                last_heartbeat = time.monotonic()
+
+            # Check terminal
+            await db.refresh(iteration)
+            if iteration.status in TERMINAL_STATES and not events:
+                yield f"id: {cursor}\n"
+                yield f"data: {_json.dumps({'terminal': True})}\n\n"
+                return
+
+            # Heartbeat every 15 seconds
+            now = time.monotonic()
+            if now - last_heartbeat >= heartbeat_interval:
+                yield ": heartbeat\n\n"
+                last_heartbeat = now
+
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 async def _next_release_number(db: AsyncSession, tenant_id: str, agent_id: str) -> int:
     from sales_agent.models.runtime_release import OptimizationRelease

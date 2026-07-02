@@ -76,3 +76,27 @@ class EvalComparisonResponse(BaseModel):
     candidate_score: float | None = None
     delta: float | None = None
     is_regression: bool = False
+
+
+# ── Event schemas ────────────────────────────────────────────────────────────
+
+
+class EventResponse(BaseModel):
+    id: str
+    sequence_no: int
+    event_type: str
+    stage: str | None = None
+    status: str | None = None
+    progress_current: int | None = None
+    progress_total: int | None = None
+    message: str = ""
+    payload: Any = Field(default_factory=dict)
+    actor_type: str = "system"
+    actor_id: str | None = None
+    created_at: str | None = None
+
+
+class EventPageResponse(BaseModel):
+    events: list[EventResponse]
+    next_sequence: int
+    terminal: bool = False

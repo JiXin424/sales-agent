@@ -10,13 +10,19 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sales_agent.api.deps import DbSession
 from sales_agent.api import optimization_schemas as schemas
+from sales_agent.api.optimization_auth import (
+    OptimizationPrincipal,
+    get_optimization_principal,
+    require_human_principal,
+    require_scope,
+)
 from sales_agent.models.agent import Agent
 from sales_agent.models.optimization import (
     OptimizationIteration,
@@ -168,8 +174,10 @@ async def approve_iteration(
     iteration_id: str,
     body: schemas.ApproveRequest,
     db: DbSession,
+    principal: OptimizationPrincipal = Depends(get_optimization_principal),
 ):
     """Approve an iteration for publication."""
+    require_human_principal(principal)
     agent = await _get_agent(db, agent_id)
     iteration = await _get_iteration(db, agent.tenant_id, agent_id, iteration_id)
 
@@ -240,8 +248,10 @@ async def publish_candidate(
     candidate_id: str,
     body: schemas.PublishRequest,
     db: DbSession,
+    principal: OptimizationPrincipal = Depends(get_optimization_principal),
 ):
     """Publish an approved candidate, creating a new release and switching the binding."""
+    require_human_principal(principal)
     agent = await _get_agent(db, agent_id)
 
     candidate = await db.scalar(
@@ -296,8 +306,10 @@ async def rollback_release(
     agent_id: str,
     body: schemas.RollbackRequest,
     db: DbSession,
+    principal: OptimizationPrincipal = Depends(get_optimization_principal),
 ):
     """Roll back to a previous release."""
+    require_human_principal(principal)
     agent = await _get_agent(db, agent_id)
 
     release_service = ReleaseService(db)

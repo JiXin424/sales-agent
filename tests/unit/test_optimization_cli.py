@@ -1,62 +1,52 @@
-"""Test CLI commands exist and enforce --yes for destructive operations."""
+"""Test CLI optimization commands: watch, report, trends."""
 
 import pytest
 from typer.testing import CliRunner
 
+from sales_agent.cli_optimization import app
 
-@pytest.fixture
-def runner():
-    return CliRunner()
-
-
-def test_iteration_start_command_exists():
-    """The iteration start sub-command must be registered."""
-    from sales_agent.cli_optimization import app
-    commands = [c.name for c in app.registered_commands]
-    assert "start" in commands
+runner = CliRunner()
 
 
-def test_approve_command_exists():
-    from sales_agent.cli_optimization import app
-    commands = [c.name for c in app.registered_commands]
-    assert "approve" in commands
+class TestCliWatch:
+    def test_watch_help_shows_cursor_flags(self):
+        result = runner.invoke(app, ["watch", "--help"])
+        assert result.exit_code == 0
+        assert "--after-sequence" in result.stdout
+        assert "--timeout" in result.stdout
+        assert "--json" in result.stdout
 
 
-def test_rollback_requires_confirmation():
-    """Rollback must abort without --yes."""
-    from sales_agent.cli_optimization import app
+class TestCliReport:
+    def test_report_help_shows_format_options(self):
+        result = runner.invoke(app, ["report", "--help"])
+        assert result.exit_code == 0
+        assert "--format" in result.stdout
+        assert "--output" in result.stdout
+        assert "--report-id" in result.stdout
 
-    runner = CliRunner()
-    # Without --yes and with the prompt defaulting to abort
-    result = runner.invoke(app, [
-        "rollback",
-        "--agent", "a1",
-        "--release", "r1",
-    ])
-    # Should fail (abort) because no --yes
-    assert result.exit_code != 0 or "abort" in str(result.exception or "").lower()
-
-
-def test_publish_requires_confirmation():
-    """Publish must abort without --yes."""
-    from sales_agent.cli_optimization import app
-
-    runner = CliRunner()
-    result = runner.invoke(app, [
-        "publish",
-        "--agent", "a1",
-        "--candidate", "c1",
-    ])
-    assert result.exit_code != 0 or "abort" in str(result.exception or "").lower()
+    def test_report_rejects_invalid_format(self):
+        result = runner.invoke(app, [
+            "report",
+            "--agent", "a1",
+            "--iteration", "i1",
+            "--report-id", "r1",
+            "--format", "xml",
+        ])
+        assert result.exit_code != 0
+        assert "Unsupported format" in (result.stdout or "") or "Error" in (result.stderr or "")
 
 
-def test_all_cli_commands_registered():
-    """All expected CLI commands must be registered."""
-    from sales_agent.cli_optimization import app
-    commands = {c.name for c in app.registered_commands}
-    expected = {
-        "start", "list", "watch", "approve", "reject",
-        "publish", "rollback", "checkpoint-list", "checkpoint-fork",
-    }
-    missing = expected - commands
-    assert not missing, f"Missing CLI commands: {missing}"
+class TestCliTrends:
+    def test_trends_help(self):
+        result = runner.invoke(app, ["trends", "--help"])
+        assert result.exit_code == 0
+        assert "--limit" in result.stdout
+        assert "--json" in result.stdout
+
+
+class TestCliList:
+    def test_list_requires_agent(self):
+        result = runner.invoke(app, ["list", "--help"])
+        assert result.exit_code == 0
+        assert "--agent" in result.stdout

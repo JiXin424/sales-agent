@@ -71,11 +71,118 @@ def iteration_list(
 def iteration_watch(
     agent_id: str = typer.Option("--agent", "-a", help="Agent ID"),
     iteration_id: str = typer.Option("--iteration", "-i", help="Iteration ID"),
+    after_sequence: int = typer.Option(0, "--after-sequence", "-s", help="Event cursor to replay from"),
+    timeout: int = typer.Option(30, "--timeout", "-t", help="Long-poll timeout in seconds"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output raw JSON event stream"),
 ):
-    """Watch an iteration (poll status)."""
-    result = _fetch("GET", f"/agents/{agent_id}/optimization/iterations/{iteration_id}")
-    typer.echo(f"Status: {result.get('status')}")
-    typer.echo(f"Iteration #{result.get('iteration_no')}")
+    """Watch iteration events with cursor-based replay.
+
+    Use --after-sequence to replay from a saved cursor. Use --timeout
+    for long-poll mode. Ctrl-C prints the last sequence number.
+    """
+    import time as _time
+    last_sequence = after_sequence
+
+    try:
+        while True:
+            result = _fetch(
+                "GET",
+                f"/agents/{agent_id}/optimization/iterations/{iteration_id}/events/wait"
+                f"?after_sequence={last_sequence}&timeout_seconds={timeout}",
+            )
+            events = result.get("events", [])
+            terminal = result.get("terminal", False)
+
+            for ev in events:
+                seq = ev.get("sequence_no", 0)
+                if json_output:
+                    typer.echo(json.dumps(ev, ensure_ascii=False))
+                else:
+                    stage = ev.get("stage", "") or ""
+                    msg = ev.get("message", "") or ""
+                    typer.echo(f"[{seq}] {ev.get('event_type')} {stage} {msg}".strip())
+                last_sequence = max(last_sequence, seq)
+
+            if terminal:
+                typer.echo(f"Terminal state reached. Last sequence: {last_sequence}")
+                break
+    except KeyboardInterrupt:
+        typer.echo(f"\nStopped. Last sequence: {last_sequence}")
+        raise typer.Exit(0)
+
+
+# ── Report commands ─────────────────────────────────────────────────────────
+
+
+@app.command("report")
+def report_export(
+    agent_id: str = typer.Option("--agent", "-a", help="Agent ID"),
+    iteration_id: str = typer.Option("--iteration", "-i", help="Iteration ID"),
+    report_id: str = typer.Option("--report-id", "-r", help="Report ID"),
+    format: str = typer.Option("json", "--format", "-f", help="Output format: json, markdown, html, csv"),
+    output: str = typer.Option("", "--output", "-o", help="Output file path (stdout if empty)"),
+):
+    """Download a report artifact in the requested format."""
+    valid_formats = {"json", "markdown", "html", "csv"}
+    if format not in valid_formats:
+        typer.echo(f"Unsupported format: {format}. Choose from: {', '.join(valid_formats)}", err=True)
+        raise typer.Exit(code=1)
+
+    result = _fetch(
+        "GET",
+        f"/agents/{agent_id}/optimization/iterations/{iteration_id}/reports/{report_id}",
+    )
+    # For artifacts, we need to fetch the artifact endpoint
+    import urllib.request
+
+    url = _api_url(
+        f"/agents/{agent_id}/optimization/iterations/{iteration_id}/reports/{report_id}/artifacts/{format}"
+    )
+    req = urllib.request.Request(url, method="GET")
+
+    try:
+        with urllib.request.urlopen(req) as resp:
+            content = resp.read().decode("utf-8")
+            if output:
+                with open(output, "w") as f:
+                    f.write(content)
+                typer.echo(f"Report written to {output} ({len(content)} bytes)")
+            else:
+                typer.echo(content)
+    except urllib.error.HTTPError as e:
+        err_data = json.loads(e.read()) if e.fp else {"detail": str(e)}
+        typer.echo(f"Error {e.code}: {err_data.get('detail', str(e))}", err=True)
+        raise typer.Exit(code=1)
+
+
+# ── Trends command ─────────────────────────────────────────────────────────
+
+
+@app.command("trends")
+def trends_list(
+    agent_id: str = typer.Option("--agent", "-a", help="Agent ID"),
+    limit: int = typer.Option(10, "--limit", "-n", help="Number of recent reports (max 10)"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output raw JSON"),
+):
+    """Show trend of latest completed final reports."""
+    result = _fetch(
+        "GET",
+        f"/agents/{agent_id}/optimization/optimization/trends?limit={limit}",
+    )
+    if json_output:
+        typer.echo(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        trends = result.get("trends", [])
+        typer.echo(f"{'Report ID':<20} {'Iteration':<20} {'Delta':>8} {'Recommendation':<25}")
+        typer.echo("-" * 73)
+        for t in trends:
+            delta = t.get("effect_index_delta", 0) or 0
+            typer.echo(
+                f"{t.get('report_id', '')[:18]:<20} "
+                f"{t.get('iteration_id', '')[:18]:<20} "
+                f"{delta:>+8.2f} "
+                f"{t.get('recommendation', '')[:25]}"
+            )
 
 
 # ── Approval commands ────────────────────────────────────────────────────

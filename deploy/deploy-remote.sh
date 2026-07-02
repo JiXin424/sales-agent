@@ -19,9 +19,13 @@ PROJECT="${PROJECT:-sales-agent}"
 
 echo "[deploy-remote] env=${ENV} app=${APP_IMAGE} workspace=${WORKSPACE} project=${PROJECT}"
 
-# 1. pull app 镜像，retag 成 compose 引用的本地 tag sales-agent:latest
+# 1. pull app 镜像 + frontend 镜像，retag 成 compose 引用的本地 tag(compose 里用 sales-agent:latest / sales-agent-frontend:latest)
 docker pull "$APP_IMAGE"
 docker tag "$APP_IMAGE" sales-agent:latest
+if [ -n "${FRONTEND_IMAGE:-}" ]; then
+  docker pull "$FRONTEND_IMAGE"
+  docker tag "$FRONTEND_IMAGE" sales-agent-frontend:latest
+fi
 
 # 2. up：--project-directory 指向 workspace（compose 相对路径 ./data ./logs ./secrets 落在目标机数据上）；
 #    -p 匹配现有 project 名（复用现有容器/volume/network，避免重名冲突）；

@@ -68,7 +68,8 @@ while IFS='|' read -r user host port dir method local name has_source compose_fi
       docker pull "${DEPLOY_IMG}" \
         && docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
              -v /root/.docker:/root/.docker:ro -v "${dir}:/workspace" \
-             -e APP_IMAGE="${IMAGE}" "${DEPLOY_IMG}" "${env}" \
+             -e APP_IMAGE="${IMAGE}" -e FRONTEND_IMAGE="${FRONTEND_IMAGE:-}" \
+             "${DEPLOY_IMG}" "${env}" \
         || echo "⚠️  [$name] local image-deploy 失败，继续下一台" >&2
 
     elif [ "$has_source" = "True" ] && [ "$method" != "self-deploy" ]; then
@@ -102,7 +103,7 @@ while IFS='|' read -r user host port dir method local name has_source compose_fi
         || echo "⚠️  [$name] 运维脚本同步失败，继续部署" >&2
 
       ssh -n -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p "$port" "${user}@${host}" \
-        "docker pull '${DEPLOY_IMG}' && docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v /root/.docker:/root/.docker:ro -v '${dir}:/workspace' -e APP_IMAGE='${IMAGE}' '${DEPLOY_IMG}' '${env}'" \
+        "docker pull '${DEPLOY_IMG}' && docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v /root/.docker:/root/.docker:ro -v '${dir}:/workspace' -e APP_IMAGE='${IMAGE}' -e FRONTEND_IMAGE='${FRONTEND_IMAGE:-}' '${DEPLOY_IMG}' '${env}'" \
         || echo "⚠️  [$name] image-deploy 失败，继续下一台" >&2
     elif [ "$has_source" = "True" ]; then
       # 有源码目标:先 git sync 再执行部署脚本

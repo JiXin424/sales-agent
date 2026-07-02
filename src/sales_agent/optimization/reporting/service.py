@@ -37,6 +37,19 @@ from .types import ReportDecision, ReportType
 
 logger = logging.getLogger(__name__)
 
+
+def _to_bool(value: Any) -> bool | None:
+    """Coerce EvalRunResult.passed (Text \"true\"/\"false\") → bool."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in ("true", "1", "yes")
+    if isinstance(value, int):
+        return bool(value)
+    return None
+
 # Stable report version for this code path (bump when formula or classification
 # logic changes in a way that should create a new report version).
 REPORT_VERSION = 1
@@ -307,23 +320,24 @@ class IterationReportService:
 
         baseline_map: dict[str, EvalRunResult] = {}
         for row in baseline_rows:
-            if row.case_id:
-                baseline_map[row.case_id] = row
+            case_ref = getattr(row, "eval_case_id", None) or getattr(row, "case_id", None)
+            if case_ref:
+                baseline_map[case_ref] = row
 
         cases: list[CaseEffect] = []
         for crow in candidate_rows:
-            case_id = crow.case_id or ""
+            case_id = getattr(crow, "eval_case_id", None) or getattr(crow, "case_id", None) or ""
             brow = baseline_map.pop(case_id, None)
 
-            had_error = (crow.error_json and crow.error_json not in ("{}", ""))
+            had_error = (crow.error_code and crow.error_code not in ("", None)) if hasattr(crow, "error_code") else False
             is_new = brow is None
 
             effect = classify_case(
                 case_id=case_id,
-                before_pass=brow.passed if brow else None,
-                after_pass=crow.passed,
-                before_score=brow.score if brow else None,
-                after_score=crow.score,
+                before_pass=_to_bool(brow.passed) if brow else None,
+                after_pass=_to_bool(crow.passed),
+                before_score=None,  # score lives on EvalMetricResult, not EvalRunResult
+                after_score=None,
                 is_new_case=is_new,
                 had_error=bool(had_error),
             )

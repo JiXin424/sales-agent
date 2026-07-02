@@ -10,4 +10,5 @@ export * from './ontology';
 export * from './feedback';
 export * from './agents';
 export * from './instance';
+export * from './optimization';
 export { ApiError } from './client';

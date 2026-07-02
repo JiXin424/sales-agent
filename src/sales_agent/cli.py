@@ -383,3 +383,11 @@ def worker():
     os.environ["PROCESS_ROLE"] = "worker"
     from sales_agent.roles.worker_runner import main as _worker_main
     _worker_main()
+
+
+# ── Optimization sub-commands ──────────────────────────────────────────
+
+from sales_agent.cli_optimization import app as opt_app
+app.add_typer(opt_app, name="iteration", help="Knowledge optimization iteration operations")
+app.add_typer(opt_app, name="release", help="Release management operations")
+app.add_typer(opt_app, name="checkpoint", help="Checkpoint replay and fork operations")

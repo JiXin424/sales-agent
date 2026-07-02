@@ -1,1 +1,5 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/tasks/07-02-knowledge-eval-iteration-loop/prd.md","reason":"Verify all requirements and acceptance criteria are implemented."}
+{"file":".trellis/tasks/07-02-knowledge-eval-iteration-loop/design.md","reason":"Verify architecture boundaries, isolation, rollback, and persistence contracts."}
+{"file":".trellis/tasks/07-02-knowledge-eval-iteration-loop/implement.md","reason":"Verify completed tasks and required commands against the execution plan."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Check tenant-scoped query and migration consistency."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Run repository quality checks before completion."}

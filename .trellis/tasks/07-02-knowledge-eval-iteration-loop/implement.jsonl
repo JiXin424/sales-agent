@@ -1,1 +1,5 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file":".trellis/tasks/07-02-knowledge-eval-iteration-loop/prd.md","reason":"Authoritative requirements, acceptance criteria, release gates, and exclusions."}
+{"file":".trellis/tasks/07-02-knowledge-eval-iteration-loop/design.md","reason":"Approved architecture, PostgreSQL schema, attribution flow, versioning, UI, and rollback design."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Repository database conventions to follow when adding SQLAlchemy models and Alembic migrations."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Repository error-handling conventions for worker, API, and release operations."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Backend quality rules for implementation changes."}

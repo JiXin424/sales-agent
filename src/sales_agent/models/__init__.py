@@ -38,6 +38,7 @@ from .ingestion import IngestionJob
 from .agent_run import AgentRun, AgentRunStep
 from .feedback import Feedback
 from .review_item import ReviewItem
+from .knowledge_fact import KnowledgeFact
 from .knowledge_gap import KnowledgeGap
 from .eval import EvalSuite, EvalCase, EvalRun, EvalRunResult
 from .eval_trace import EvalMetricResult, RetrievalTrace, RetrievalTraceHit
@@ -117,6 +118,7 @@ __all__ = [
     "EvalRun",
     "EvalRunResult",
     "EvalMetricResult",
+    "KnowledgeFact",
     "RetrievalTrace",
     "RetrievalTraceHit",
     "OptimizationIteration",

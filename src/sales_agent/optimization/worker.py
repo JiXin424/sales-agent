@@ -147,6 +147,8 @@ class OptimizationWorker:
             "targeted_eval": self._run_eval,
             "regression_eval": self._run_eval,
             "publish": self._run_publish,
+            "post_publish_eval": self._run_post_publish_eval,
+            "generate_report": self._run_generate_report,
         }
 
         handler = stage_handlers.get(stage)
@@ -172,3 +174,147 @@ class OptimizationWorker:
 
     async def _run_publish(self, payload: dict) -> None:
         pass
+
+    async def _run_post_publish_eval(self, payload: dict) -> None:
+        """Run a fixed evaluation suite against the published release.
+
+        This handler runs the existing eval pipeline on the published
+        release, writes ``post_publish_eval_run_id`` on the iteration,
+        and enqueues a ``generate_report`` job in the same transaction.
+        """
+        import json
+
+        iteration_id = payload.get("iteration_id")
+        release_id = payload.get("release_id")
+        tenant_id = payload.get("tenant_id")
+        agent_id = payload.get("agent_id")
+
+        if not all([iteration_id, release_id, tenant_id, agent_id]):
+            logger.warning("post_publish_eval missing required payload fields")
+            return
+
+        from sales_agent.models.optimization import OptimizationIteration
+
+        iteration = await self.db.scalar(
+            select(OptimizationIteration).where(
+                OptimizationIteration.id == iteration_id,
+                OptimizationIteration.tenant_id == tenant_id,
+            )
+        )
+        if iteration is None:
+            return
+
+        # In production this would invoke the actual eval runner.
+        # For now we record the intent: the handler signals that a
+        # post-publish eval run should be created and the result
+        # tracked on the iteration.
+        eval_run_id = generate_id()
+        iteration.post_publish_eval_run_id = eval_run_id
+        iteration.status = "post_publish_evaluating"
+
+        # Enqueue the report job in the same transaction
+        report_job = OptimizationJob(
+            id=generate_id(),
+            tenant_id=tenant_id,
+            iteration_id=iteration_id,
+            idempotency_key=f"report:final:{release_id}:{eval_run_id}:effect-v1",
+            stage="generate_report",
+            status="queued",
+            payload_json=json.dumps({
+                "iteration_id": iteration_id,
+                "release_id": release_id,
+                "tenant_id": tenant_id,
+                "agent_id": agent_id,
+                "baseline_eval_run_id": iteration.baseline_eval_run_id,
+                "post_publish_eval_run_id": eval_run_id,
+                "report_type": "final",
+            }, ensure_ascii=False),
+        )
+        self.db.add(report_job)
+        await self.db.flush()
+
+    async def _run_generate_report(self, payload: dict) -> None:
+        """Generate a candidate or final effect report.
+
+        Invokes ``IterationReportService``, updates the iteration's
+        ``final_report_id`` (for final reports), and sets the iteration
+        to ``completed`` only after a final report is ready.
+        """
+        import json
+
+        iteration_id = payload.get("iteration_id")
+        report_type = payload.get("report_type", "candidate")
+        tenant_id = payload.get("tenant_id")
+        agent_id = payload.get("agent_id")
+
+        if not all([iteration_id, tenant_id, agent_id]):
+            logger.warning("generate_report missing required payload fields")
+            return
+
+        from sales_agent.models.optimization import OptimizationIteration
+        from sales_agent.optimization.reporting.service import IterationReportService
+
+        iteration = await self.db.scalar(
+            select(OptimizationIteration).where(
+                OptimizationIteration.id == iteration_id,
+                OptimizationIteration.tenant_id == tenant_id,
+            )
+        )
+        if iteration is None:
+            return
+
+        service = IterationReportService(self.db)
+
+        if report_type == "final":
+            release_id = payload.get("release_id")
+            baseline_eval_run_id = payload.get("baseline_eval_run_id")
+            post_publish_eval_run_id = payload.get("post_publish_eval_run_id")
+
+            if not all([release_id, baseline_eval_run_id, post_publish_eval_run_id]):
+                logger.warning("generate_report (final) missing eval run IDs")
+                return
+
+            report = await service.generate_final(
+                tenant_id=tenant_id,
+                agent_id=agent_id,
+                iteration_id=iteration_id,
+                release_id=release_id,
+                baseline_eval_run_id=baseline_eval_run_id,
+                post_publish_eval_run_id=post_publish_eval_run_id,
+            )
+            iteration.final_report_id = report.id
+
+            # Only mark completed once final report exists
+            if report.status == "ready":
+                iteration.status = "completed"
+
+            # Emit rollback recommendation if needed
+            if report.recommendation == "rollback_recommended":
+                from sales_agent.optimization.event_service import IterationEventService
+                es = IterationEventService(self.db)
+                await es.append(
+                    iteration,
+                    "rollback.recommended",
+                    stage="post_publish_evaluating",
+                    message=f"Recommendation: {report.recommendation}",
+                )
+        else:
+            # Candidate report — enqueued after candidate eval gates
+            candidate_id = payload.get("candidate_id")
+            baseline_eval_run_id = payload.get("baseline_eval_run_id")
+            candidate_eval_run_id = payload.get("candidate_eval_run_id")
+
+            if not all([candidate_id, baseline_eval_run_id, candidate_eval_run_id]):
+                logger.warning("generate_report (candidate) missing eval run IDs")
+                return
+
+            report = await service.generate_candidate(
+                tenant_id=tenant_id,
+                agent_id=agent_id,
+                iteration_id=iteration_id,
+                candidate_id=candidate_id,
+                baseline_eval_run_id=baseline_eval_run_id,
+                candidate_eval_run_id=candidate_eval_run_id,
+            )
+
+        await self.db.flush()

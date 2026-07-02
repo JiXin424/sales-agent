@@ -6,8 +6,6 @@ import json
 import logging
 from dataclasses import dataclass, field
 
-from deepeval.tracing import observe
-
 from sqlalchemy import select, text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -163,7 +161,6 @@ class Retriever:
                 error_message=str(e),
             )
 
-    @observe(type="retriever")
     async def retrieve_for_task(
         self,
         tenant_id: str,
@@ -337,7 +334,6 @@ class HybridRetriever:
             degraded=not sources,
         )
 
-    @observe(type="retriever")
     async def retrieve_for_task(
         self,
         tenant_id: str,

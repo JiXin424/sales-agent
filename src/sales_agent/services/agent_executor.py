@@ -9,8 +9,6 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
-from deepeval.tracing import observe
-
 from sales_agent.llm.base import ChatModel
 from sales_agent.prompts.system import SYSTEM_CONSTRAINT
 from sales_agent.services.prompt_defaults import BUILTIN_PROMPTS
@@ -129,7 +127,6 @@ def _parse_json_response(raw: str) -> dict[str, Any]:
     }
 
 
-@observe(type="llm")
 async def execute_agent(
     chat_model: ChatModel,
     task_type: str,

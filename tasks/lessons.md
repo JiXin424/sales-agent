@@ -312,3 +312,15 @@
   3. **`set -e` 脚本必须做一次「真实多分支调用」冒烟**（不只是 `bash -n` + `--help`），尤其走 `--` / 可选 flag 的路径——静态检查发现不了运行期 set -e 退出。
   4. 见 #8（`((n++))` 在 set -e 下旧值 0 杀脚本）、#19（`ssh -n` 与 stdin 管道互斥）同族——bash 隐式失败 + set -e 是反复踩的坑。
 - **检查范式**：写带 `set -euo pipefail` 的参数解析 → `--` 用 `shift; break` → 每个分支（含 `--`）都实跑一次冒烟。
+
+## 25. 第三方「追踪/观测」装饰器（deepeval `@observe`、各类 telemetry）在生产没配 key 时仍是纯负债——会算一堆 trace 再丢弃，且其序列化路径随时可能炸整个请求；上线前必须「无 key 也能安全 no-op」或直接移除
+
+- **场景**：全站 `/agent/chat` 500（prod2/prod3/test 所有租户），`RuntimeError: dictionary changed size during iteration`。排查发现根因是 `ChatPipeline.execute()` 上的 `@observe(type="agent")`（deepeval 追踪）：函数退出时 `Observer.__exit__` 序列化子 span 的 input，deepeval `_serialize` 迭代某嵌套对象的**活 `__dict__`**，序列化触发惰性字段写回同一 dict → 迭代中改大小 → 崩。聊天本身算完了，是装饰器收尾炸。整条链还散布 5 处 `@observe`（agent/tool/llm/retriever×2），潜伏自 `bb2b1eb`，某次对象形态变化后触发。
+- **关键认知**：prod **没设 `DEEPEVAL_*/Confident` key**，日志明写「Skipping trace posting」——trace 算了**全丢弃**。即这个装饰器在生产**零收益、纯风险**，却把每个请求搞 500。
+- **教训**：
+  1. **追踪/观测类装饰器上线前问一句：生产环境（无 key / 未启用）下它是 no-op 还是仍跑副作用？** 仍跑 = 负债。deepeval `@observe` 即使没 key 也照常建 span + 序列化，只是不 POST。
+  2. **第三方序列化路径（`make_json_serializable` / `vars(obj).items()` 这类「遍历活对象内部」）是定时炸弹**——你控不了用户对象何时新增惰性字段。能不用就不用；用了要能整体关掉。
+  3. **「容器在跑、/health 200」≠「业务通」**：这个 500 在 catch-all 里被包成 JSON 返回，traceback 还因日志配置没进 stdout（写文件/被吞），`docker logs` 完全看不到——**生产对 500 几乎零可见性**。健康检查必须覆盖真实业务路径（`/agent/chat` 冒烟），不能只 `/ready`。
+  4. **根因定位别只看自己的代码**：堆栈全在 `site-packages/deepeval/`，但触发点是自己的 `@observe` 装饰器。装饰器/中间件引入的第三方调用栈，要一路看到底。
+- **检查范式**：线上 500 但日志干净 → 怀疑被 catch-all 吞 + 日志没进 stdout → 直接 `curl` 复现拿 response.detail → 按 detail 串（如 "dictionary changed size"）反查装饰器/中间件序列化路径 → 无收益的观测装饰器直接移除。
+- **相关**：#15（看部署生效的 env_file 不是代码默认）、#20（跨层契约写死、跑 probe dump 真实对象）同族——「第三方/隐式序列化对不可控对象的处理」是反复踩的坑。

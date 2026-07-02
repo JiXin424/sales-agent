@@ -14,8 +14,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from deepeval.tracing import observe
-
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -182,7 +180,6 @@ class ChatPipeline:
             path_router_config=self.settings.path_router,
         )
 
-    @observe(type="agent")
     async def execute(
         self,
         *,

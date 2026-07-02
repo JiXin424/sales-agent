@@ -38,7 +38,13 @@ def _inventory(tmp_path, neo4j_cfg=None, tenant_env_text=""):
 
 def test_neo4j_rendered_when_enabled(tmp_path):
     mod = _load()
-    out = mod.render_compose(_inventory(tmp_path, {"enabled": True, "image": "registry.internal:5000/neo4j:5"}))
+    # render 的 neo4j 由 tenant knowledge_engine=ontology_neo4j 触发(非顶层 enabled),
+    # 故给租户 env 显式启用 neo4j,使 neo4j 服务块被渲染。
+    out = mod.render_compose(_inventory(
+        tmp_path,
+        {"enabled": True, "image": "registry.internal:5000/neo4j:5"},
+        tenant_env_text="KNOWLEDGE_ENGINE=ontology_neo4j\n",
+    ))
     # neo4j 服务块
     assert "  neo4j:" in out
     assert "registry.internal:5000/neo4j:5" in out
@@ -71,7 +77,12 @@ def test_neo4j_auto_detected_from_tenant_env(tmp_path):
 
 def test_neo4j_expose_ports_optional(tmp_path):
     mod = _load()
-    out = mod.render_compose(_inventory(tmp_path, {"enabled": True, "expose_ports": True}))
+    # neo4j 由 tenant knowledge_engine=ontology_neo4j 触发,expose_ports 控制是否暴露端口。
+    out = mod.render_compose(_inventory(
+        tmp_path,
+        {"enabled": True, "expose_ports": True},
+        tenant_env_text="KNOWLEDGE_ENGINE=ontology_neo4j\n",
+    ))
     assert '"7474:7474"' in out
     assert '"7687:7687"' in out
 

@@ -324,3 +324,14 @@
   4. **根因定位别只看自己的代码**：堆栈全在 `site-packages/deepeval/`，但触发点是自己的 `@observe` 装饰器。装饰器/中间件引入的第三方调用栈，要一路看到底。
 - **检查范式**：线上 500 但日志干净 → 怀疑被 catch-all 吞 + 日志没进 stdout → 直接 `curl` 复现拿 response.detail → 按 detail 串（如 "dictionary changed size"）反查装饰器/中间件序列化路径 → 无收益的观测装饰器直接移除。
 - **相关**：#15（看部署生效的 env_file 不是代码默认）、#20（跨层契约写死、跑 probe dump 真实对象）同族——「第三方/隐式序列化对不可控对象的处理」是反复踩的坑。
+
+## 26. `render-multitenant-deploy.py` 有副作用：默认会写 traefik 动态配置文件（`traefik.dynamic_output`）。本机 render「非本机 inventory」会**覆盖本机正在用的 traefik 路由** → 域名 502。本地 render 非本机 inventory 必须加 `--traefik-out /dev/null`
+
+- **场景**：C2 准备阶段，子代理在本机（prod2）本地验证 `render ... deploy/tenants.prod3.json`（prod3 的 songbai/taishanyanshi 路由），没加 `--traefik-out /dev/null`。render 默认按 inventory 的 `traefik.dynamic_output` 写文件 → 把 prod2 的 `/root/code/traefik/dynamic.d/generated-sales-agent.yml`（prod2 的 taishan/taishankaifa2 路由）**覆盖成 prod3 的路由**（指向 prod2 上不存在的 `sales-agent-songbai-frontend` 等后端）→ prod2 的 taishan/taishankaifa2 域名经 traefik 会 502 约 2-3 分钟。已用 prod2 tenants.json 重渲染恢复。
+- **根因**：`render-multitenant-deploy.py` 不是纯函数——除了写 compose，还按 `traefik.dynamic_output`（默认 `/root/code/traefik/dynamic.d/generated-sales-agent.yml`）写 traefik 动态配置。而 prod2 的 traefik 容器挂了 `/root/code/traefik → /etc/traefik` 且 `providers.file.directory: /etc/traefik/dynamic.d, watch: true`——**这个文件是活的、被监听的**，一改 traefik 立即重载。
+- **教训**：
+  1. **本机 render 任何「非本机 inventory」一律 `--traefik-out /dev/null`**（CI 的 deploy.yml 早就这么做了，本地手动 render 也必须）。同理 `--compose-out` 也别写到正在用的 compose 路径。
+  2. **render/生成器脚本要当「有副作用」对待**：先 grep 它写哪些文件（不止你传的 --compose-out），别假设它是纯生成。
+  3. **traefik `watch: true` + 动态目录 = 改文件即生效**：往那个目录写东西要极其小心，写错立刻影响线上域名。
+- **检查范式**：要在本机渲染别的环境 inventory → 命令必带 `--traefik-out /dev/null --compose-out /tmp/xxx.yml`；事后 `stat` 一下 `/root/code/traefik/dynamic.d/generated-sales-agent.yml` 的 mtime 确认没被自己改到。
+- **相关**：#22（跨机 rsync 覆盖 secrets/tenants.json）、#10（traefik 跨 network 502）同族——「每机的 traefik/网络/配置是本地的，跨机操作别覆盖」。

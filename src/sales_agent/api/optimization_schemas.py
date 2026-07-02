@@ -100,3 +100,63 @@ class EventPageResponse(BaseModel):
     events: list[EventResponse]
     next_sequence: int
     terminal: bool = False
+
+
+# ── Report schemas ───────────────────────────────────────────────────────────
+
+
+class ReportMetricResponse(BaseModel):
+    metric_name: str
+    group_name: str
+    direction: str
+    weight: float = 0.0
+    before_value: float | None = None
+    after_value: float | None = None
+    before_normalized: float | None = None
+    after_normalized: float | None = None
+    delta: float | None = None
+    applicable: bool = True
+    gate_result: str | None = None
+
+
+class ReportCaseResponse(BaseModel):
+    case_id: str
+    classification: str
+    cause: str | None = None
+    before_pass: bool | None = None
+    after_pass: bool | None = None
+    score_delta: float | None = None
+    rank_delta: int | None = None
+    latency_delta_ms: float | None = None
+    token_delta: int | None = None
+
+
+class ReportSummaryResponse(BaseModel):
+    id: str
+    tenant_id: str
+    agent_id: str
+    iteration_id: str
+    report_type: str
+    candidate_id: str | None = None
+    candidate_key: str
+    release_id: str | None = None
+    report_version: int
+    formula_version: str
+    status: str
+    recommendation: str | None = None
+    effect_index_before: float | None = None
+    effect_index_after: float | None = None
+    effect_index_delta: float | None = None
+    hard_gates: Any = Field(default_factory=dict)
+    data_snapshot_hash: str | None = None
+    created_at: str | None = None
+
+
+class ReportDetailResponse(ReportSummaryResponse):
+    groups: list[Any] = Field(default_factory=list)
+    cases: list[ReportCaseResponse] = Field(default_factory=list)
+
+
+class TrendResponse(BaseModel):
+    agent_id: str
+    trends: list[Any] = Field(default_factory=list)

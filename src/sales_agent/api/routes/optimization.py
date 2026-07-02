@@ -582,6 +582,296 @@ async def stream_events(
         },
     )
 
+
+# ── Reports ──────────────────────────────────────────────────────────────────
+
+
+def _report_to_summary(r: Any) -> schemas.ReportSummaryResponse:
+    hard_gates = {}
+    try:
+        hard_gates = json.loads(r.hard_gates_json) if r.hard_gates_json else {}
+    except (TypeError, ValueError):
+        pass
+    return schemas.ReportSummaryResponse(
+        id=r.id,
+        tenant_id=r.tenant_id,
+        agent_id=r.agent_id,
+        iteration_id=r.iteration_id,
+        report_type=r.report_type,
+        candidate_id=r.candidate_id,
+        candidate_key=r.candidate_key,
+        release_id=r.release_id,
+        report_version=r.report_version,
+        formula_version=r.formula_version,
+        status=r.status,
+        recommendation=r.recommendation,
+        effect_index_before=r.effect_index_before,
+        effect_index_after=r.effect_index_after,
+        effect_index_delta=r.effect_index_delta,
+        hard_gates=hard_gates,
+        data_snapshot_hash=r.data_snapshot_hash,
+        created_at=r.created_at,
+    )
+
+
+@router.get(
+    "/iterations/{iteration_id}/reports",
+    response_model=list[schemas.ReportSummaryResponse],
+)
+async def list_reports(agent_id: str, iteration_id: str, db: DbSession):
+    """List all reports for an iteration."""
+    agent = await _get_agent(db, agent_id)
+    iteration = await _get_iteration(db, agent.tenant_id, agent_id, iteration_id)
+
+    from sales_agent.models.iteration_observability import IterationReport
+
+    result = await db.execute(
+        select(IterationReport)
+        .where(
+            IterationReport.tenant_id == agent.tenant_id,
+            IterationReport.iteration_id == iteration_id,
+        )
+        .order_by(IterationReport.created_at.desc())
+    )
+    reports = result.scalars().all()
+    return [_report_to_summary(r) for r in reports]
+
+
+@router.get(
+    "/iterations/{iteration_id}/reports/{report_id}",
+    response_model=schemas.ReportDetailResponse,
+)
+async def get_report(agent_id: str, iteration_id: str, report_id: str, db: DbSession):
+    """Get a full report with metric groups and case classifications."""
+    agent = await _get_agent(db, agent_id)
+    await _get_iteration(db, agent.tenant_id, agent_id, iteration_id)
+
+    from sales_agent.models.iteration_observability import (
+        IterationReport, IterationReportMetric, IterationReportCase,
+    )
+
+    report = await db.scalar(
+        select(IterationReport).where(
+            IterationReport.id == report_id,
+            IterationReport.tenant_id == agent.tenant_id,
+        )
+    )
+    if report is None:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    metrics_result = await db.execute(
+        select(IterationReportMetric).where(
+            IterationReportMetric.report_id == report_id,
+        )
+    )
+    metric_rows = metrics_result.scalars().all()
+
+    cases_result = await db.execute(
+        select(IterationReportCase).where(
+            IterationReportCase.report_id == report_id,
+        )
+    )
+    case_rows = cases_result.scalars().all()
+
+    groups_map: dict[str, dict[str, Any]] = {}
+    for m in metric_rows:
+        g = groups_map.setdefault(m.group_name, {
+            "group_name": m.group_name,
+            "score_before": None,
+            "score_after": None,
+            "delta": None,
+            "coverage": 0,
+            "total_metrics": 0,
+            "metrics": [],
+        })
+        g["total_metrics"] += 1
+        if m.applicable:
+            g["coverage"] += 1
+        g["metrics"].append({
+            "metric_name": m.metric_name,
+            "direction": m.direction,
+            "weight": m.weight,
+            "before_value": m.before_value,
+            "after_value": m.after_value,
+            "before_normalized": m.before_normalized,
+            "after_normalized": m.after_normalized,
+            "delta": m.delta,
+            "applicable": m.applicable,
+            "gate_result": m.gate_result,
+        })
+
+    summary = _report_to_summary(report)
+    return schemas.ReportDetailResponse(
+        **summary.model_dump(),
+        groups=list(groups_map.values()),
+        cases=[
+            schemas.ReportCaseResponse(
+                case_id=c.case_id,
+                classification=c.classification,
+                cause=c.cause,
+                before_pass=c.before_pass,
+                after_pass=c.after_pass,
+                score_delta=c.score_delta,
+                rank_delta=c.rank_delta,
+                latency_delta_ms=c.latency_delta_ms,
+                token_delta=c.token_delta,
+            )
+            for c in case_rows
+        ],
+    )
+
+
+@router.get("/iterations/{iteration_id}/reports/{report_id}/artifacts/{format}")
+async def get_report_artifact(
+    agent_id: str, iteration_id: str, report_id: str, format: str, db: DbSession,
+):
+    """Download a report artifact in the requested format (json/markdown/html/csv)."""
+    from fastapi.responses import PlainTextResponse
+
+    if format not in ("json", "markdown", "html", "csv"):
+        raise HTTPException(status_code=400, detail=f"Unsupported format: {format}")
+
+    agent = await _get_agent(db, agent_id)
+    await _get_iteration(db, agent.tenant_id, agent_id, iteration_id)
+
+    from sales_agent.models.iteration_observability import (
+        IterationReport, IterationReportMetric, IterationReportCase,
+    )
+    from sales_agent.optimization.reporting.renderers import RENDERERS
+
+    report = await db.scalar(
+        select(IterationReport).where(
+            IterationReport.id == report_id,
+            IterationReport.tenant_id == agent.tenant_id,
+        )
+    )
+    if report is None:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    metrics_result = await db.execute(
+        select(IterationReportMetric).where(
+            IterationReportMetric.report_id == report_id,
+        )
+    )
+    metric_rows = metrics_result.scalars().all()
+
+    cases_result = await db.execute(
+        select(IterationReportCase).where(
+            IterationReportCase.report_id == report_id,
+        )
+    )
+    case_rows = cases_result.scalars().all()
+
+    hard_gates = {}
+    try:
+        hard_gates = json.loads(report.hard_gates_json) if report.hard_gates_json else {}
+    except (TypeError, ValueError):
+        pass
+
+    doc: dict[str, Any] = {
+        "report_id": report.id,
+        "report_type": report.report_type,
+        "recommendation": report.recommendation,
+        "effect_index_before": report.effect_index_before,
+        "effect_index_after": report.effect_index_after,
+        "effect_index_delta": report.effect_index_delta,
+        "hard_gates": hard_gates,
+        "formula_version": report.formula_version,
+        "data_snapshot_hash": report.data_snapshot_hash,
+        "created_at": report.created_at,
+        "groups": [
+            {
+                "group_name": m.group_name,
+                "weight": 0.0,
+                "score_before": None,
+                "score_after": None,
+                "delta": None,
+                "coverage": 0,
+                "total_metrics": 0,
+                "metrics": [],
+            }
+            for m in metric_rows
+        ],
+        "cases": [
+            {
+                "case_id": c.case_id,
+                "classification": c.classification,
+                "cause": c.cause,
+                "before_pass": c.before_pass,
+                "after_pass": c.after_pass,
+                "score_delta": c.score_delta,
+                "rank_delta": c.rank_delta,
+                "latency_delta_ms": c.latency_delta_ms,
+                "token_delta": c.token_delta,
+            }
+            for c in case_rows
+        ],
+    }
+
+    content = RENDERERS[format](doc)
+    media_types = {
+        "json": "application/json",
+        "markdown": "text/markdown; charset=utf-8",
+        "html": "text/html; charset=utf-8",
+        "csv": "text/csv; charset=utf-8",
+    }
+    return PlainTextResponse(
+        content=content,
+        media_type=media_types.get(format, "text/plain"),
+        headers={"Content-Disposition": f"inline; filename=report.{format}"},
+    )
+
+
+# ── Trends ───────────────────────────────────────────────────────────────────
+
+
+@router.get("/optimization/trends", response_model=schemas.TrendResponse)
+async def get_trends(
+    agent_id: str,
+    db: DbSession,
+    limit: int = Query(default=10, ge=1, le=10),
+):
+    """Return the latest completed final reports for trend analysis."""
+    agent = await _get_agent(db, agent_id)
+
+    from sales_agent.models.iteration_observability import IterationReport
+
+    result = await db.execute(
+        select(IterationReport)
+        .where(
+            IterationReport.tenant_id == agent.tenant_id,
+            IterationReport.agent_id == agent_id,
+            IterationReport.report_type == "final",
+            IterationReport.status == "ready",
+        )
+        .order_by(IterationReport.created_at.desc())
+        .limit(limit)
+    )
+    reports = result.scalars().all()
+
+    trends: list[dict[str, Any]] = []
+    for r in reports:
+        hard_gates = {}
+        try:
+            hard_gates = json.loads(r.hard_gates_json) if r.hard_gates_json else {}
+        except (TypeError, ValueError):
+            pass
+        trends.append({
+            "report_id": r.id,
+            "iteration_id": r.iteration_id,
+            "recommendation": r.recommendation,
+            "effect_index_before": r.effect_index_before,
+            "effect_index_after": r.effect_index_after,
+            "effect_index_delta": r.effect_index_delta,
+            "hard_gates": hard_gates,
+            "created_at": r.created_at,
+        })
+
+    return schemas.TrendResponse(agent_id=agent_id, trends=trends)
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────
+
 async def _next_release_number(db: AsyncSession, tenant_id: str, agent_id: str) -> int:
     from sales_agent.models.runtime_release import OptimizationRelease
     max_rel = await db.scalar(

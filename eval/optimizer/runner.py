@@ -88,9 +88,16 @@ def main() -> None:
         "round": 1,
         "history": [],
         "retrieval_config": {
+            # RAG 参数
             "top_k": 5,
             "chunk_size": 700,
             "chunk_overlap": 120,
+            # Ontology 参数（运行时立即生效）
+            "entity_limit": 15,
+            "facts_per_entity": 20,
+            "max_entities_for_prompt": 10,
+            "max_facts_for_prompt": 25,
+            "vector_fallback_top_k": 5,
         },
         "convergence_reason": "",
         "best_pass_rate": 0.0,
@@ -122,27 +129,30 @@ def main() -> None:
             # 每轮评估完后打印关键指标
             if node_name == "evaluate":
                 state_data = step[node_name]
-                metrics = state_data.get("_metrics")
-                if metrics:
-                    logger.info(
-                        "  pass_rate=%.1f%%  recall=%.2f  relevancy=%.2f  "
-                        "faithfulness=%.2f  correctness=%.2f",
-                        metrics.pass_rate * 100,
-                        metrics.avg_contextual_recall,
-                        metrics.avg_contextual_relevancy,
-                        metrics.avg_faithfulness,
-                        metrics.avg_correctness,
-                    )
+                if state_data:
+                    metrics = state_data.get("_metrics")
+                    if metrics:
+                        logger.info(
+                            "  pass_rate=%.1f%%  recall=%.2f  relevancy=%.2f  "
+                            "faithfulness=%.2f  correctness=%.2f",
+                            metrics.pass_rate * 100,
+                            metrics.avg_contextual_recall,
+                            metrics.avg_contextual_relevancy,
+                            metrics.avg_faithfulness,
+                            metrics.avg_correctness,
+                        )
             elif node_name == "triage":
                 state_data = step[node_name]
-                diag = state_data.get("_diagnosis")
-                if diag:
-                    logger.info("  action=%s  issue=%s", diag.action.value, diag.primary_issue)
+                if state_data:
+                    diag = state_data.get("_diagnosis")
+                    if diag:
+                        logger.info("  action=%s  issue=%s", diag.action.value, diag.primary_issue)
             elif node_name == "judge":
                 state_data = step[node_name]
-                reason = state_data.get("convergence_reason", "")
-                if reason:
-                    logger.info("  ✅ 收敛: %s", reason)
+                if state_data:
+                    reason = state_data.get("convergence_reason", "")
+                    if reason:
+                        logger.info("  ✅ 收敛: %s", reason)
 
             final_state = step
 

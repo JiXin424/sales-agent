@@ -122,6 +122,12 @@ ontology:
   vision_model: "qwen-vl-plus"
   # 图片视觉解读开关
   vision_enabled: false
+  # ── 运行时可控的检索参数（优化器可调） ──
+  entity_limit: 15
+  facts_per_entity: 20
+  max_entities_for_prompt: 10
+  max_facts_for_prompt: 25
+  vector_fallback_top_k: 5
 
 neo4j:
   uri: ""

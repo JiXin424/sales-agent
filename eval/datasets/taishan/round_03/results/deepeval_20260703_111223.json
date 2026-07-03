@@ -1,0 +1,309 @@
+{
+  "meta": {
+    "timestamp": "2026-07-03T03:12:23.224693+00:00",
+    "total_questions": 5,
+    "targets": [
+      {
+        "tenant_id": "taishan",
+        "label": "taishan",
+        "agent_id": null
+      }
+    ],
+    "models": [
+      "(default)"
+    ]
+  },
+  "summaries": {
+    "taishan": {
+      "label": "taishan",
+      "model": "(default)",
+      "total": 5,
+      "success": 5,
+      "errors": 0,
+      "avg_latency_ms": 5180.4,
+      "avg_ttft_ms": 108.0,
+      "total_prompt_tokens": 20196,
+      "total_completion_tokens": 1689,
+      "total_tokens": 21885,
+      "avg_scores": {
+        "Answer Relevancy": 0.7973,
+        "AnswerRecall (回答召回率)": 1.0,
+        "Contextual Precision": 0.0,
+        "Contextual Recall": 0.0,
+        "Contextual Relevancy": 0.1273,
+        "Faithfulness": 0.9667,
+        "Task Completion": 0.52,
+        "完整性 (Completeness) [GEval]": 0.46,
+        "正确性 (Correctness) [GEval]": 0.4
+      },
+      "pass_rates": {
+        "Answer Relevancy": 0.8,
+        "AnswerRecall (回答召回率)": 1.0,
+        "Contextual Precision": 0.0,
+        "Contextual Recall": 0.0,
+        "Contextual Relevancy": 0.2,
+        "Faithfulness": 1.0,
+        "Task Completion": 0.6,
+        "完整性 (Completeness) [GEval]": 0.6,
+        "正确性 (Correctness) [GEval]": 0.6
+      }
+    }
+  },
+  "details": [
+    {
+      "question_id": "golden_0200",
+      "question": "福多多核心客户群是哪些组织？小企业能否受益？",
+      "reference": "根据上下文，福多多主要服务政府机构、事业单位、央国企及200人以上的大中型企业，这类客户更注重安全合规与员工满意度。针对小型企业，同样有标准产品可用，但平台的核心优势在满足大型组织复杂的福利管理需求时体现得更为明显。",
+      "kb_label": "taishan",
+      "model": "(default)",
+      "answer": "直接说结论：福多多的核心客户群是**100人以上的企业/工会**，但小企业（50人以下）同样能受益，只是切入点和价值点不同。\n\n**核心客户群画像（根据客户画像库，置信度75%）：**\n- **规模**：100-5000人的中大型企业，尤其是国企、央企、事业单位、大型民企\n- **决策人**：工会主席、HR负责人、行政总监\n- **典型需求**：合规发放福利、提升员工满意度、减轻HR/工会事务性工作\n- **场景**：年节慰问、生日福利、观影活动、员工体检、团建活动\n\n**小企业（50人以下）受益点：**\n- **成本可控**：福多多支持按需采购，没有最低消费门槛，小企业可以只买10张电影票、5张蛋糕券\n- **省心省力**：小企业HR通常身兼多职，福多多一站式解决选品、采购、发放、售后，不用自己对接多个供应商\n- **提升竞争力**：小企业靠福利留人，福多多提供大企业同款福利方案（如电影通兑、蛋糕配送），让员工觉得\"公司虽然小，但福利不输大厂\"\n- **零风险**：假一赔三、差价赔付，小企业不用承担采购风险\n\n**小企业销售策略建议：**\n- **不要谈\"系统\"\"平台\"**，小企业不需要复杂的管理后台\n- **直接给\"套餐\"**：比如\"50人以下企业，推荐年节礼包+观影券，人均200元，全年总预算1万，我帮你配好方案\"\n- **强调\"灵活\"**：可以按季度、按节日单次采购，不用签年框\n\n**一句话总结：** 大企业谈合规和效率，小企业谈省心和员工体验。你手头有小企业客户，直接推\"轻量级福利套餐\"就行。",
+      "rendered": "直接说结论：福多多的核心客户群是**100人以上的企业/工会**，但小企业（50人以下）同样能受益，只是切入点和价值点不同。\n\n**核心客户群画像（根据客户画像库，置信度75%）：**\n- **规模**：100-5000人的中大型企业，尤其是国企、央企、事业单位、大型民企\n- **决策人**：工会主席、HR负责人、行政总监\n- **典型需求**：合规发放福利、提升员工满意度、减轻HR/工会事务性工作\n- **场景**：年节慰问、生日福利、观影活动、员工体检、团建活动\n\n**小企业（50人以下）受益点：**\n- **成本可控**：福多多支持按需采购，没有最低消费门槛，小企业可以只买10张电影票、5张蛋糕券\n- **省心省力**：小企业HR通常身兼多职，福多多一站式解决选品、采购、发放、售后，不用自己对接多个供应商\n- **提升竞争力**：小企业靠福利留人，福多多提供大企业同款福利方案（如电影通兑、蛋糕配送），让员工觉得\"公司虽然小，但福利不输大厂\"\n- **零风险**：假一赔三、差价赔付，小企业不用承担采购风险\n\n**小企业销售策略建议：**\n- **不要谈\"系统\"\"平台\"**，小企业不需要复杂的管理后台\n- **直接给\"套餐\"**：比如\"50人以下企业，推荐年节礼包+观影券，人均200元，全年总预算1万，我帮你配好方案\"\n- **强调\"灵活\"**：可以按季度、按节日单次采购，不用签年框\n\n**一句话总结：** 大企业谈合规和效率，小企业谈省心和员工体验。你手头有小企业客户，直接推\"轻量级福利套餐\"就行。\n\n来源：\n1. 《北京福多多科技有限公司 - 企查查》\n2. 《深圳福多多科技有限公司》\n3. 《北京福多多信息咨询有限公司主要人员_董事_监事 - 天眼查》\n（共 5 条来源）",
+      "task_type": "general_sales_coaching",
+      "risk_level": "none",
+      "sources_count": 5,
+      "latency_ms": 6136,
+      "ttft_ms": 162,
+      "prompt_tokens": 3824,
+      "completion_tokens": 417,
+      "total_tokens": 4241,
+      "error": "",
+      "metric_scores": {
+        "正确性 (Correctness) [GEval]": 0.6,
+        "完整性 (Completeness) [GEval]": 0.9,
+        "Contextual Recall": 0.0,
+        "Contextual Precision": 0.0,
+        "Contextual Relevancy": 0.6364,
+        "Faithfulness": 1.0,
+        "Answer Relevancy": 1.0,
+        "AnswerRecall (回答召回率)": 1.0,
+        "Task Completion": 0.9
+      },
+      "metric_success": {
+        "正确性 (Correctness) [GEval]": true,
+        "完整性 (Completeness) [GEval]": true,
+        "Contextual Recall": false,
+        "Contextual Precision": false,
+        "Contextual Relevancy": true,
+        "Faithfulness": true,
+        "Answer Relevancy": true,
+        "AnswerRecall (回答召回率)": true,
+        "Task Completion": true
+      },
+      "metric_reasons": {
+        "正确性 (Correctness) [GEval]": "The Actual Output incorrectly states the core customer group as '100+ employees' while the Expected Output specifies '200+ employees' for large organizations, a factual discrepancy. It also omits the Expected Output's mention of government institutions and the emphasis on complex welfare management for large organizations. However, the Actual Output is more complete and practically useful for sales, providing actionable strategies for small businesses, which the Expected Output only briefly acknowledges. The score reflects the trade-off between the factual error and the enhanced practical utility.",
+        "完整性 (Completeness) [GEval]": "The Actual Output covers the core customer segments (large enterprises, government, state-owned) and mentions small businesses as a secondary group, aligning with the Expected Output. However, it introduces specific details like '100-5000 people', '75% confidence', and detailed sales strategies that are not in the Expected Output, but these do not contradict it. The main gap is that the Expected Output emphasizes '200+ person enterprises' and 'complex welfare management' as the core advantage, while the Actual Output focuses more on small business benefits and tactics, slightly shifting emphasis. All key points from the Expected Output are present, so the score is high.",
+        "Contextual Recall": "The score is 0.00 because none of the sentences in the expected output can be attributed to any node in the retrieval context. For example, sentence 1 mentions 福多多's target customers, but the nodes only contain company registration details; sentence 2 discusses customer preferences like security compliance, which is absent from the nodes; sentence 3 refers to standard products for small enterprises, not found in any node; and sentence 4 describes platform advantages for large organizations, also missing from the nodes. No node supports any part of the expected output.",
+        "Contextual Precision": "The score is 0.00 because all nodes in the retrieval contexts are irrelevant to the input. The first node is about '北京福多多科技有限公司的企业信息' and does not address the core customer groups or small business benefits. The second node discusses '深圳福多多科技有限公司的信息', which is unrelated. The third node covers '北京福多多信息咨询有限公司的信息', also irrelevant. The fourth node pertains to '北京福多多生活超市有限公司的信息', again not relevant. The fifth node describes '福多多集团及其旗下业务' but still fails to mention core customer groups or small business benefits. Since no relevant nodes exist, the ranking of relevant nodes higher than irrelevant nodes cannot be achieved, resulting in the lowest score.",
+        "Contextual Relevancy": "The score is 0.64 because the retrieval context contains some relevant statements, such as '福多多是一家小微企业' and '福多多集团是一家以互联网为基础...大型综合性集团企业', which partially address the input's query about core customer groups and small business benefits, but many statements are irrelevant, e.g., '成立日期、法定代表人、地址、状态' and '近7天的访问量趋势', leading to a moderate score.",
+        "Faithfulness": "The score is 1.00 because there are no contradictions between the actual output and the retrieval context. The actual output is perfectly faithful to the provided information. Great job maintaining consistency!",
+        "Answer Relevancy": "The score is 1.00 because the actual output contains no irrelevant statements and fully addresses the input question about 福多多's core customer groups and whether small businesses can benefit.",
+        "AnswerRecall (回答召回率)": "检索内容为空，无法评估召回率",
+        "Task Completion": "The actual outcome directly addresses the user's request by identifying core customer groups and providing specific, actionable advantages for small businesses. It does not miss key information and maintains a professional tone consistent with a sales coach. However, it could be slightly more comprehensive in covering all possible user concerns, hence a 0.9 rather than 1.0."
+      }
+    },
+    {
+      "question_id": "golden_0131",
+      "question": "比较网票福多多服务的总客户数与拥有10年以上重复购买记录的客户数。",
+      "reference": "根据上下文信息，网票福多多已累计服务超过30000家企业，其中复购超过10年的客户达500家以上。",
+      "kb_label": "taishan",
+      "model": "(default)",
+      "answer": "直接说结论：**知识库里没有\"10年以上重复购买记录客户数\"这个具体数据，没法直接比。** 但我知道总客户数——**超过30000家**（根据产品知识库《公司介绍》（置信度90%））。\n\n你真正想问的，我猜是\"老客户粘性到底怎么样\"。这个有更直接的证据：\n\n**明天跟客户聊时，直接甩这三个事实，比任何数字都有说服力：**\n\n1. **零诉讼、零外债**——20年经营，3000万实缴注册资本，没有一家客户跟福多多打过官司。这比\"重复购买率\"更能说明问题。\n\n2. **服务超2000万员工**——如果产品不行、服务拉胯，不可能有这么多企业持续续费。\n\n3. **自营客服7×12小时，24小时极速响应**——这是留住老客户的核心能力，不是外包客服能比的。\n\n**如果客户非要一个\"老客户占比\"的数据，别编，直接说：** \"这个具体数字我回去跟总部确认一下，明天发你。不过我可以先给你看看我们服务了10年以上的几个客户案例，比如XX公司（举一个你手头知道的案例），他们从201X年就开始用我们了。\"\n\n**你手头有没有服务了5年以上的老客户案例？有的话直接拿来用，比任何数据都管用。**",
+      "rendered": "直接说结论：**知识库里没有\"10年以上重复购买记录客户数\"这个具体数据，没法直接比。** 但我知道总客户数——**超过30000家**（根据产品知识库《公司介绍》（置信度90%））。\n\n你真正想问的，我猜是\"老客户粘性到底怎么样\"。这个有更直接的证据：\n\n**明天跟客户聊时，直接甩这三个事实，比任何数字都有说服力：**\n\n1. **零诉讼、零外债**——20年经营，3000万实缴注册资本，没有一家客户跟福多多打过官司。这比\"重复购买率\"更能说明问题。\n\n2. **服务超2000万员工**——如果产品不行、服务拉胯，不可能有这么多企业持续续费。\n\n3. **自营客服7×12小时，24小时极速响应**——这是留住老客户的核心能力，不是外包客服能比的。\n\n**如果客户非要一个\"老客户占比\"的数据，别编，直接说：** \"这个具体数字我回去跟总部确认一下，明天发你。不过我可以先给你看看我们服务了10年以上的几个客户案例，比如XX公司（举一个你手头知道的案例），他们从201X年就开始用我们了。\"\n\n**你手头有没有服务了5年以上的老客户案例？有的话直接拿来用，比任何数据都管用。**\n\n来源：\n1. 《站长工具 - 福利多多-网票福多多-福多多福利-企业员工福利平台,提供企业员工福利集采定制服务duoduofuli.cc的SEO综合查询》\n2. 《投诉网票福多多作废预存卡、侵害消费者权益_演唱会投诉、电影票投诉_黑猫投诉_新浪网》\n3. 《阖木堂:今天来讲讲复购率-卖家网》\n（共 5 条来源）",
+      "task_type": "general_sales_coaching",
+      "risk_level": "none",
+      "sources_count": 5,
+      "latency_ms": 4905,
+      "ttft_ms": 165,
+      "prompt_tokens": 3828,
+      "completion_tokens": 294,
+      "total_tokens": 4122,
+      "error": "",
+      "metric_scores": {
+        "正确性 (Correctness) [GEval]": 0.1,
+        "完整性 (Completeness) [GEval]": 0.2,
+        "Contextual Recall": 0.0,
+        "Contextual Precision": 0.0,
+        "Contextual Relevancy": 0.0,
+        "Faithfulness": 0.8333,
+        "Answer Relevancy": 0.32,
+        "AnswerRecall (回答召回率)": 1.0,
+        "Task Completion": 0.4
+      },
+      "metric_success": {
+        "正确性 (Correctness) [GEval]": false,
+        "完整性 (Completeness) [GEval]": false,
+        "Contextual Recall": false,
+        "Contextual Precision": false,
+        "Contextual Relevancy": false,
+        "Faithfulness": true,
+        "Answer Relevancy": false,
+        "AnswerRecall (回答召回率)": true,
+        "Task Completion": false
+      },
+      "metric_reasons": {
+        "正确性 (Correctness) [GEval]": "The Actual Output does not contain the key fact from the Expected Output that '复购超过10年的客户达500家以上', and instead states that this data is not available in the knowledge base. This is a direct factual mismatch, failing Step 1. It also omits a critical point (the 500+ figure), so completeness (Step 2) is poor. While the response offers alternative sales guidance, it does not provide the specific comparison requested, reducing practical usefulness for the exact query (Step 3). Overall alignment is very low.",
+        "完整性 (Completeness) [GEval]": "The Expected Output states that there are over 500 customers with repeat purchases over 10 years, but the Actual Output explicitly says this specific data is not in the knowledge base and cannot be compared. This is a major omission of a key fact. The Actual Output provides other relevant information about total customers (over 30,000) and qualitative evidence of customer loyalty, but fails to cover the core data point of 500+ customers with 10+ year repeat purchase records.",
+        "Contextual Recall": "The score is 0.00 because the expected output contains specific claims about '网票福多多' serving over 30,000 enterprises and having over 500 customers with over 10 years of repurchase, but none of the nodes in retrieval context provide this information. The first node only mentions '网票福多多' in keywords without these figures, and the other nodes are unrelated or lack the specific numbers, so no node supports the sentence.",
+        "Contextual Precision": "The score is 0.00 because all nodes in the retrieval contexts are irrelevant to the input, which asks for comparing the total number of customers of 网票福多多 with those who have repurchased for over 10 years. The first node discusses keyword search data, the second node is about complaints, the third node covers general e-commerce repurchase strategies, the fourth node talks about customer definitions, and the fifth node is about a different platform. Since no relevant nodes exist, the ranking of relevant versus irrelevant nodes cannot be evaluated, resulting in the lowest score.",
+        "Contextual Relevancy": "The score is 0.00 because the retrieval context contains no statements relevant to comparing the total customer count of Wangpiao Fuduo service with customers having over 10 years of repeat purchase records. All provided statements either describe platform services, consumer complaints, or general customer retention concepts, but none include the specific data required, as noted in reasons like 'does not contain any information about total customer count or customers with over 10 years of repeat purchase records' and '该语句讨论的是30日重复购买率和客户回头率，而非总客户数或10年以上重复购买记录的客户数'.",
+        "Faithfulness": "The score is 0.83 because the actual output claims '零诉讼、没有一家客户跟福多多打过官司', but the retrieval context includes a contradiction: a user complaint (投诉编号17392219261) about 网票福多多 invalidating prepaid cards and engaging in false/misleading advertising, which directly contradicts the claim of zero lawsuits.",
+        "Answer Relevancy": "The score is 0.32 because the actual output contains many statements that are irrelevant to the input's request to compare total customer count with customers having 10+ years of repeat purchase records, such as subjective evaluations, unrelated company details, and strategic suggestions, which significantly lower relevancy; however, it is not 0 because the output likely includes some initial acknowledgment or attempt to address the comparison, albeit insufficiently.",
+        "AnswerRecall (回答召回率)": "检索内容为空，无法评估召回率",
+        "Task Completion": "系统未能直接回应用户关于'10年以上重复购买记录客户数'的具体问题，而是提供了总客户数的信息，这属于答非所问；同时未提供可操作的具体销售建议或信息，且遗漏了用户问题中的关键信息点。虽然语气符合专业角色，但整体完成度较低。"
+      }
+    },
+    {
+      "question_id": "golden_0130",
+      "question": "合同中包含由质量保证金支持的零风险承诺，如何确保采购安全？",
+      "reference": "根据上下文，零风险承诺被正式写入合同，并设立质保金机制，通过关键条款的硬性保障（如正品授权、差价赔付、兑换可靠性等），确保企业采购稳定可靠、安全合规，实现真正意义上的零风险采购。",
+      "kb_label": "taishan",
+      "model": "(default)",
+      "answer": "这个问题我得确认一下，别误导你。目前知识库中没有关于\"质量保证金支持的零风险承诺\"的具体条款内容。\n\n不过我可以给你两个方向性的建议：\n\n1. **直接问运营支持**：让区域运营或法务同事把合同中关于\"质量保证金\"和\"零风险承诺\"的具体条款发给你，这是最准确的。\n\n2. **销售话术上**：如果客户问到这个，你可以先坦诚说\"这个条款我需要跟公司确认一下具体细节\"，然后快速找内部确认。别硬答，客户反而会觉得你专业。\n\n建议你联系区域销售负责人或运营支持，拿到最新合同条款后再回复客户。",
+      "rendered": "这个问题我得确认一下，别误导你。目前知识库中没有关于\"质量保证金支持的零风险承诺\"的具体条款内容。\n\n不过我可以给你两个方向性的建议：\n\n1. **直接问运营支持**：让区域运营或法务同事把合同中关于\"质量保证金\"和\"零风险承诺\"的具体条款发给你，这是最准确的。\n\n2. **销售话术上**：如果客户问到这个，你可以先坦诚说\"这个条款我需要跟公司确认一下具体细节\"，然后快速找内部确认。别硬答，客户反而会觉得你专业。\n\n建议你联系区域销售负责人或运营支持，拿到最新合同条款后再回复客户。\n\n来源：\n1. 《【京东外卖】业务介绍-2025.11.12-优化.md》\n2. 《【京东外卖】业务介绍-2025.11.12-优化.md》\n3. 《【京东外卖】业务介绍-2025.11.12-优化.md》\n（共 5 条来源）",
+      "task_type": "knowledge_qa",
+      "risk_level": "none",
+      "sources_count": 5,
+      "latency_ms": 2446,
+      "ttft_ms": 204,
+      "prompt_tokens": 4324,
+      "completion_tokens": 135,
+      "total_tokens": 4459,
+      "error": "",
+      "metric_scores": {
+        "正确性 (Correctness) [GEval]": 0.0,
+        "完整性 (Completeness) [GEval]": 0.0,
+        "Contextual Recall": 0.0,
+        "Contextual Precision": 0.0,
+        "Contextual Relevancy": 0.0,
+        "Faithfulness": 1.0,
+        "Answer Relevancy": 0.6667,
+        "AnswerRecall (回答召回率)": 1.0,
+        "Task Completion": 0.6
+      },
+      "metric_success": {
+        "正确性 (Correctness) [GEval]": false,
+        "完整性 (Completeness) [GEval]": false,
+        "Contextual Recall": false,
+        "Contextual Precision": false,
+        "Contextual Relevancy": false,
+        "Faithfulness": true,
+        "Answer Relevancy": true,
+        "AnswerRecall (回答召回率)": true,
+        "Task Completion": true
+      },
+      "metric_reasons": {
+        "正确性 (Correctness) [GEval]": "The Actual Output does not address the core facts from the Expected Output, which describes a formal zero-risk commitment with a quality guarantee fund and specific hard guarantees (authentic authorization, price difference compensation, exchange reliability). Instead, the Actual Output admits lack of knowledge and offers generic sales advice, missing all critical points. Completeness is very low as no essential information from the Expected Output is covered. The response is not useful for a sales scenario requiring concrete policy details, only suggesting internal follow-up. Score 0 reflects no alignment with the evaluation steps.",
+        "完整性 (Completeness) [GEval]": "The Actual Output does not convey any of the key points from the Expected Output. It states that the knowledge base lacks specific terms about the 'quality assurance supported zero-risk commitment', whereas the Expected Output explicitly describes that the zero-risk commitment is formally written into the contract with a quality assurance fund mechanism and key guarantees. The Actual Output instead offers generic advice to consult internal teams, missing all core facts such as the contract inclusion, the guarantee mechanism, and the specific protections (authenticity, price difference compensation, exchange reliability). Therefore, almost none of the expected key points are covered.",
+        "Contextual Recall": "The score is 0.00 because none of the nodes in retrieval context contain any information related to the expected output, which discusses formal contractual zero-risk commitments, quality assurance deposit mechanisms, and hard guarantees on key terms. The context nodes are entirely empty or irrelevant, providing no support for any part of the sentence.",
+        "Contextual Precision": "The score is 0.00 because all nodes in the retrieval contexts are irrelevant to the input. The first node is a file name with no content about contracts, quality assurance, or procurement safety, and the same applies to the second, third, fourth, and fifth nodes. Since no relevant nodes exist, the ranking cannot be considered precise, resulting in the lowest score.",
+        "Contextual Relevancy": "The score is 0.00 because the retrieval context contains only a file name '【京东外卖】业务介绍-2025.11.12-优化.md' and no actual statements or content related to the input about contract zero-risk guarantees and procurement safety. As noted in the reasons, 'No statements found in provided context' and 'the context only contains a file name and no actual content or statements related to the input.'",
+        "Faithfulness": "The score is 1.00 because there are no contradictions between the actual output and the retrieval context. The actual output perfectly aligns with the information provided, demonstrating excellent faithfulness. Great job!",
+        "Answer Relevancy": "The score is 0.67 because the actual output contains statements that are not directly relevant to the input question about ensuring procurement safety with a zero-risk guarantee backed by a quality deposit. Specifically, it mentions missing knowledge base content, suggests asking operational support, and references sales scripts without providing concrete methods or answers. However, the score is not lower because some parts of the output may still address the topic partially.",
+        "AnswerRecall (回答召回率)": "检索内容为空，无法评估召回率",
+        "Task Completion": "系统没有直接回应用户关于合同具体条款的问题，而是建议用户联系其他同事获取信息，这在一定程度上偏离了直接提供可操作销售建议的要求。不过，系统给出了具体的后续行动建议（联系区域运营或法务），并提供了销售话术建议（坦诚需要确认细节），这符合专业销售教练的角色。但未能满足用户对具体条款的直接需求，因此得分中等。"
+      }
+    },
+    {
+      "question_id": "golden_0199",
+      "question": "FDD的365天自助服务团队和7x12小时热线如何确保当日问题解决？",
+      "reference": "福多多的自营客服团队提供365天支持，通过7×12小时热线和7×24小时VIP专线，确保客户问题当天闭环。这意味着无论何时遇到问题，都能快速联系到客服，并在当天内得到解决，同时配套多重补偿方案和书面保障，让采购负责人无需“背锅”。",
+      "kb_label": "taishan",
+      "model": "(default)",
+      "answer": "直接说结论：**365天自助服务和7x12小时热线，核心是\"自营客服+分级响应\"机制，确保当日问题不隔夜。**\n\n根据产品知识库《客服部介绍文档》（置信度90%），这套体系是这样运转的：\n\n- **自营客服团队**：不是外包，400余人专业团队，7x12小时（早8点到晚8点）在线，覆盖工作日和节假日。客户遇到问题，电话或在线渠道直接找到的是福多多自己的人，不是第三方，响应速度和专业度有保障。\n- **分级响应机制**：简单问题（如查余额、改地址）客服当场解决；复杂问题（如订单异常、技术故障）升级到二线技术或运营团队，**24小时内极速响应**。这个\"24小时\"不是指拖到第二天，而是当天内必须给客户一个明确答复或处理方案。\n- **365天覆盖**：春节、国庆等长假期间，自助平台（福利商城、电影票兑换等）完全在线，客户可以自助操作；热线和在线客服也保持值班，确保紧急问题有人接。\n\n**你明天就能用的动作**：跟客户介绍时，别只说\"我们有客服\"，要说\"**我们自营客服团队7x12小时在线，365天不打烊，当天问题当天清。你员工遇到任何福利使用问题，一个电话或在线留言，我们的人直接处理，不用等周一、不用等节后。**\" 这句话，就是打消HR对\"福利出问题没人管\"顾虑的杀手锏。",
+      "rendered": "直接说结论：**365天自助服务和7x12小时热线，核心是\"自营客服+分级响应\"机制，确保当日问题不隔夜。**\n\n根据产品知识库《客服部介绍文档》（置信度90%），这套体系是这样运转的：\n\n- **自营客服团队**：不是外包，400余人专业团队，7x12小时（早8点到晚8点）在线，覆盖工作日和节假日。客户遇到问题，电话或在线渠道直接找到的是福多多自己的人，不是第三方，响应速度和专业度有保障。\n- **分级响应机制**：简单问题（如查余额、改地址）客服当场解决；复杂问题（如订单异常、技术故障）升级到二线技术或运营团队，**24小时内极速响应**。这个\"24小时\"不是指拖到第二天，而是当天内必须给客户一个明确答复或处理方案。\n- **365天覆盖**：春节、国庆等长假期间，自助平台（福利商城、电影票兑换等）完全在线，客户可以自助操作；热线和在线客服也保持值班，确保紧急问题有人接。\n\n**你明天就能用的动作**：跟客户介绍时，别只说\"我们有客服\"，要说\"**我们自营客服团队7x12小时在线，365天不打烊，当天问题当天清。你员工遇到任何福利使用问题，一个电话或在线留言，我们的人直接处理，不用等周一、不用等节后。**\" 这句话，就是打消HR对\"福利出问题没人管\"顾虑的杀手锏。\n\n来源：\n1. 《Dedicated 24-hour hotline set up for foreign domestic helpers》\n2. 《Dedicated 24-hour hotline set up for foreign domestic helpers》\n3. 《服务内容》\n（共 5 条来源）",
+      "task_type": "general_sales_coaching",
+      "risk_level": "none",
+      "sources_count": 5,
+      "latency_ms": 5147,
+      "ttft_ms": 6,
+      "prompt_tokens": 3830,
+      "completion_tokens": 328,
+      "total_tokens": 4158,
+      "error": "",
+      "metric_scores": {
+        "正确性 (Correctness) [GEval]": 0.7,
+        "完整性 (Completeness) [GEval]": 0.6,
+        "Contextual Recall": 0.0,
+        "Contextual Precision": 0.0,
+        "Contextual Relevancy": 0.0,
+        "Faithfulness": 1.0,
+        "Answer Relevancy": 1.0,
+        "AnswerRecall (回答召回率)": 1.0,
+        "Task Completion": 0.0
+      },
+      "metric_success": {
+        "正确性 (Correctness) [GEval]": true,
+        "完整性 (Completeness) [GEval]": true,
+        "Contextual Recall": false,
+        "Contextual Precision": false,
+        "Contextual Relevancy": false,
+        "Faithfulness": true,
+        "Answer Relevancy": true,
+        "AnswerRecall (回答召回率)": true,
+        "Task Completion": false
+      },
+      "metric_reasons": {
+        "正确性 (Correctness) [GEval]": "The Actual Output correctly identifies the 365-day self-service and 7x12 hotline, and emphasizes same-day resolution, which aligns with the Expected Output's core facts. However, it omits several critical points from the Expected Output: the 7x24 VIP hotline, multiple compensation plans, and written guarantees that protect the procurement manager. These missing elements reduce completeness. The output is highly actionable for sales scenarios, providing a ready-to-use pitch. Overall, the response is strong on practical usefulness but incomplete on key policy details.",
+        "完整性 (Completeness) [GEval]": "The Actual Output covers the key points of 365-day support, 7x12-hour hotline, self-operated customer service team, and same-day issue resolution. However, it omits the 7x24-hour VIP hotline, multiple compensation plans, and written guarantees mentioned in the Expected Output. These are significant omissions that reduce alignment.",
+        "Contextual Recall": "The score is 0.00 because none of the sentences in the expected output can be attributed to any node in retrieval context. For example, sentence 1 mentions '福多多' and '自营客服团队', but no node in retrieval context contains these terms; sentence 2 mentions '7×12小时热线' and '7×24小时VIP专线', but nodes only discuss 24/7 hotlines for unrelated entities; sentence 3 mentions '当天闭环' and '快速联系到客服', but nodes lack same-day resolution guarantees; sentence 4 mentions '多重补偿方案' and '书面保障', which are absent from all nodes. Thus, no support exists from any node in retrieval context.",
+        "Contextual Precision": "The score is 0.00 because all five nodes in the retrieval contexts are irrelevant to the input, as they discuss unrelated companies or services (e.g., 'The context discusses a dedicated 24-hour hotline for foreign domestic helpers, not related to FDD's 365-day self-service team or 7x12-hour hotline for customer issue resolution.'). Since no relevant nodes exist, the ranking of relevant nodes higher than irrelevant nodes is impossible, resulting in the lowest score.",
+        "Contextual Relevancy": "The score is 0.00 because the retrieval context contains no statements relevant to the input; all statements discuss unrelated services (e.g., foreign domestic helpers, FTD customer service, remote support) and none mention FDD's 365-day self-service team or 7x12-hour hotline for same-day issue resolution, as noted in reasons like 'The statement is about a hotline for foreign domestic helpers, not about FDD's 365-day self-service team' and 'The statement refers to FTD customer service, not FDD'.",
+        "Faithfulness": "The score is 1.00 because there are no contradictions between the actual output and the retrieval context. The actual output perfectly aligns with the information provided, demonstrating excellent faithfulness. Great job!",
+        "Answer Relevancy": "The score is 1.00 because the actual output contains no irrelevant statements and fully addresses the input question about how FDD's 365-day self-service team and 7x12-hour hotline ensure same-day issue resolution.",
+        "AnswerRecall (回答召回率)": "检索内容为空，无法评估召回率",
+        "Task Completion": "用户请求是评估销售教练Agent是否成功完成请求，但实际输出仅描述了客服团队和响应机制，未涉及任何销售教练相关的建议、指导或问题回答，完全偏离了任务要求。"
+      }
+    },
+    {
+      "question_id": "golden_0132",
+      "question": "比较网票福多多的零风险采购保障与其实际购买力及售后服务。",
+      "reference": "网票福多多的零风险采购保障、实际购买力与售后服务三者相辅相成，共同构成其核心价值：\n\n- **零风险采购保障**：平台将“零风险承诺”正式写入合同，设立质保金机制，涵盖正品授权、差价赔付、兑换可靠性等关键条款，并提供零外债、零诉讼记录备查，确保采购安全合规、经得起审计。\n\n- **实际购买力领先**：在同等预算下，电影票价格不高于猫眼零售价，商城商品杜绝隐形加价，让员工实际到手价值更高；同时通过合同明确服务保障，节省企业运营与售后精力，减少员工投诉成本。\n\n- **高品质售后服务**：自营客服团队结合AI工单系统，提供7×12小时热线和7×24小时VIP专线，问题承诺当天闭环，全年365天支持，让采购负责人省心、员工满意。\n\n综上，零风险保障为采购安全兜底，实际购买力提升福利价值，高效售后确保体验无忧，三者共同实现稳定可靠、安全合规的零风险采购。",
+      "kb_label": "taishan",
+      "model": "(default)",
+      "answer": "这个问题知识库里没有\"零风险采购保障\"的完整定义，我基于现有信息给你拆开讲。\n\n**先说事实部分（根据知识图谱检索结果，置信度80%）：**\n\n福多多的售后服务和正品保障是实打实的，不是空话。\n\n- **正品承诺**：全部商品享受唯品会官方正品保障和售后服务体系（来源：知识图谱检索结果，置信度80%）\n- **售后服务**：遇到问题既可联系唯品会客服，也可通过福多多平台客服协调处理（来源：同上）\n- **退换货**：商品签收后15天内，若出现质量问题需要退换货，福多多提供免费上门取件服务（来源：同上）\n\n**再说策略建议（基于我的销售经验）：**\n\n你问这个问题，我猜你是在跟客户聊的时候，客户拿\"零风险\"和\"实际购买力/售后\"来对比，想看看是不是噱头。我的建议是这么打：\n\n1. **把\"零风险\"翻译成客户听得懂的话**。别光说\"零风险采购保障\"这个名词，直接说：**\"我们承诺正品假一赔三，蛋糕不高于官方正价（差价双倍赔付），电影票不高于猫眼零售价（差价三倍赔付）。这些不是空话，是写在合同里的。\"**\n\n2. **用售后案例堵住客户的嘴**。客户最怕的是\"买了东西出问题没人管\"。你就告诉他：**\"我们自营客服团队，7x12小时在线，24小时内极速响应。而且像唯品会这种大平台，商品出问题你找唯品会客服也行，找我们福多多客服也行，双保险。\"**\n\n3. **把\"购买力\"和\"零风险\"绑在一起说**。客户觉得\"你价格有优势，但会不会服务跟不上？\"你就说：**\"我们20年零诉讼、零外债，实缴注册资本3000万。能活20年还零诉讼的企业，你觉得服务会差吗？购买力强是因为我们体量大、供应链强，服务好是因为我们把这当命根子。\"**\n\n**一句话总结**：零风险不是口号，是写在合同里的承诺；购买力不是虚的，是20年积累的供应链能力；售后不是摆设，是自营团队+平台双保险。这三件事是一体的，缺一个都撑不起\"最值得信赖\"这四个字。",
+      "rendered": "这个问题知识库里没有\"零风险采购保障\"的完整定义，我基于现有信息给你拆开讲。\n\n**先说事实部分（根据知识图谱检索结果，置信度80%）：**\n\n福多多的售后服务和正品保障是实打实的，不是空话。\n\n- **正品承诺**：全部商品享受唯品会官方正品保障和售后服务体系（来源：知识图谱检索结果，置信度80%）\n- **售后服务**：遇到问题既可联系唯品会客服，也可通过福多多平台客服协调处理（来源：同上）\n- **退换货**：商品签收后15天内，若出现质量问题需要退换货，福多多提供免费上门取件服务（来源：同上）\n\n**再说策略建议（基于我的销售经验）：**\n\n你问这个问题，我猜你是在跟客户聊的时候，客户拿\"零风险\"和\"实际购买力/售后\"来对比，想看看是不是噱头。我的建议是这么打：\n\n1. **把\"零风险\"翻译成客户听得懂的话**。别光说\"零风险采购保障\"这个名词，直接说：**\"我们承诺正品假一赔三，蛋糕不高于官方正价（差价双倍赔付），电影票不高于猫眼零售价（差价三倍赔付）。这些不是空话，是写在合同里的。\"**\n\n2. **用售后案例堵住客户的嘴**。客户最怕的是\"买了东西出问题没人管\"。你就告诉他：**\"我们自营客服团队，7x12小时在线，24小时内极速响应。而且像唯品会这种大平台，商品出问题你找唯品会客服也行，找我们福多多客服也行，双保险。\"**\n\n3. **把\"购买力\"和\"零风险\"绑在一起说**。客户觉得\"你价格有优势，但会不会服务跟不上？\"你就说：**\"我们20年零诉讼、零外债，实缴注册资本3000万。能活20年还零诉讼的企业，你觉得服务会差吗？购买力强是因为我们体量大、供应链强，服务好是因为我们把这当命根子。\"**\n\n**一句话总结**：零风险不是口号，是写在合同里的承诺；购买力不是虚的，是20年积累的供应链能力；售后不是摆设，是自营团队+平台双保险。这三件事是一体的，缺一个都撑不起\"最值得信赖\"这四个字。\n\n来源：\n1. 《【京东外卖】业务介绍-2025.11.12-优化.md》\n2. 《【盒马】业务介绍-2025.11.12-优化.md》\n3. 《【盒马】业务介绍-2025.11.12-优化.md》\n（共 5 条来源）",
+      "task_type": "knowledge_qa",
+      "risk_level": "none",
+      "sources_count": 5,
+      "latency_ms": 7268,
+      "ttft_ms": 3,
+      "prompt_tokens": 4390,
+      "completion_tokens": 515,
+      "total_tokens": 4905,
+      "error": "",
+      "metric_scores": {
+        "正确性 (Correctness) [GEval]": 0.6,
+        "完整性 (Completeness) [GEval]": 0.6,
+        "Contextual Recall": 0.0,
+        "Contextual Precision": 0.0,
+        "Contextual Relevancy": 0.0,
+        "Faithfulness": 1.0,
+        "Answer Relevancy": 1.0,
+        "AnswerRecall (回答召回率)": 1.0,
+        "Task Completion": 0.7
+      },
+      "metric_success": {
+        "正确性 (Correctness) [GEval]": true,
+        "完整性 (Completeness) [GEval]": true,
+        "Contextual Recall": false,
+        "Contextual Precision": false,
+        "Contextual Relevancy": false,
+        "Faithfulness": true,
+        "Answer Relevancy": true,
+        "AnswerRecall (回答召回率)": true,
+        "Task Completion": true
+      },
+      "metric_reasons": {
+        "正确性 (Correctness) [GEval]": "The Actual Output covers the core facts about after-sales service and purchase power, but it lacks the formal definition of '零风险采购保障' (zero-risk procurement guarantee) as a contractual commitment with a quality assurance fund, which is a key element in the Expected Output. The response is practically useful for sales scenarios, providing conversational strategies, but it is incomplete regarding the structured policy description. Therefore, it aligns partially but misses critical points.",
+        "完整性 (Completeness) [GEval]": "The Actual Output covers the core concepts of zero-risk procurement, purchasing power, and after-sales service, but it omits several key details from the Expected Output: the '质保金机制' (quality assurance deposit mechanism), the explicit mention of '零外债、零诉讼记录备查' (zero external debt, zero litigation records for reference), the 'AI工单系统' (AI ticket system), the '7×24小时VIP专线' (7x24 VIP hotline), and the '问题承诺当天闭环' (same-day issue closure). These are important points that define the completeness and professionalism of the expected description. The Actual Output adds extra strategic advice and sales language, which does not reduce the score but does not compensate for the missing key facts. Therefore, several important points are missing, placing the coverage in the 0.5–0.6 range.",
+        "Contextual Recall": "The score is 0.00 because none of the nodes in retrieval context contain any information related to the expected output, including the platform name '网票福多多', its core value components (零风险采购保障, 实际购买力领先, 高品质售后服务), or their supporting details. All five sentences in the expected output lack any attribution to the retrieval context.",
+        "Contextual Precision": "The score is 0.00 because all nodes in the retrieval contexts are irrelevant to the input query about '网票福多多' (Wangpiao Fuduo). The first node is about '京东外卖' (JD Delivery), and the second through fifth nodes are about '盒马' (Hema), none of which address the zero-risk procurement guarantee, purchasing power, or after-sales service of '网票福多多'. Since there are no relevant nodes to rank higher, the contextual precision cannot be positive.",
+        "Contextual Relevancy": "The score is 0.00 because the retrieval context only contains a file name '【京东外卖】业务介绍-2025.11.12-优化.md' and no actual content or statements about 网票福多多's zero-risk procurement guarantee, purchasing power, or after-sales service, as noted in the reasons for irrelevancy.",
+        "Faithfulness": "The score is 1.00 because there are no contradictions between the actual output and the retrieval context. The actual output perfectly aligns with the information provided, demonstrating excellent faithfulness. Great job!",
+        "Answer Relevancy": "The score is 1.00 because the actual output contains no irrelevant statements; it directly addresses the input's request to compare the zero-risk procurement guarantee, actual purchasing power, and after-sales service of Wangpiao Fuduoduo. The response is fully relevant and focused.",
+        "AnswerRecall (回答召回率)": "检索内容为空，无法评估召回率",
+        "Task Completion": "系统直接回应用户关于福多多的正品承诺、售后服务和退换货政策的问题，并提供了基于销售经验的策略建议，符合专业销售教练角色。但未明确说明是否调用了工具或知识图谱检索的细节，且未完全确认用户问题中是否包含其他关键信息点（如具体产品类型或场景），因此存在一定信息遗漏风险。"
+      }
+    }
+  ]
+}

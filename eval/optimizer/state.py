@@ -97,10 +97,16 @@ class Diagnosis:
 @dataclass
 class RetrievalTuning:
     """检索配置调优建议（Tool A 输出）。"""
-    # 调整建议
+    # RAG 参数（legacy_rag 引擎用）
     top_k: int | None = None
     chunk_size: int | None = None
     chunk_overlap: int | None = None
+    # Ontology 参数（ontology_neo4j / hybrid 引擎用，均为运行时参数，立即生效）
+    entity_limit: int | None = None              # Cypher 返回的最多实体数（默认 15）
+    facts_per_entity: int | None = None          # 每个实体的最多 fact 数（默认 20）
+    max_entities_for_prompt: int | None = None   # 塞给 LLM 的最多实体数（默认 10）
+    max_facts_for_prompt: int | None = None      # 塞给 LLM 的最多 fact 数（默认 25）
+    vector_fallback_top_k: int | None = None     # 向量回退返回数（默认 5）
     # 推理
     reasoning: str = ""
     expected_improvement: str = ""
@@ -120,7 +126,7 @@ class RoundAction:
 # ── LangGraph State ──────────────────────────────────────────────────
 
 
-class OptimizerState(TypedDict):
+class OptimizerState(TypedDict, total=False):
     """LangGraph 图的状态。
 
     各节点读写这个 dict，LangGraph 负责持久化和恢复。
@@ -145,3 +151,8 @@ class OptimizerState(TypedDict):
     convergence_reason: str   # 空 = 未收敛
     best_pass_rate: float     # 历史最佳
     rounds_without_improvement: int
+
+    # ── 节点间传递数据 ──
+    _metrics: Any             # node_evaluate 产出
+    _diagnosis: Any           # node_triage 产出
+    _tuning: Any              # node_tune 产出

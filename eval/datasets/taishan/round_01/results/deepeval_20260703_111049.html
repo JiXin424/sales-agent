@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sales Agent DeepEval 评估报告</title>
+<style>
+/* ── Reset & Base ── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f7fa;color:#1a1a2e;line-height:1.6}
+.container{max-width:1400px;margin:0 auto;padding:24px}
+
+/* ── Header ── */
+.header{background:linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%);color:#fff;padding:32px 40px;border-radius:12px;margin-bottom:24px}
+.header h1{font-size:28px;font-weight:700;margin-bottom:8px}
+.header .subtitle{opacity:0.7;font-size:14px}
+
+/* ── Summary Cards ── */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-bottom:24px}
+.card{background:#fff;border-radius:10px;padding:20px 24px;box-shadow:0 1px 3px rgba(0,0,0,0.08)}
+.card .label{font-size:12px;text-transform:uppercase;color:#888;margin-bottom:4px;letter-spacing:0.5px}
+.card .value{font-size:28px;font-weight:700;color:#1a1a2e}
+.card .sub{font-size:12px;color:#999;margin-top:4px}
+.card.good .value{color:#10b981}
+.card.warn .value{color:#f59e0b}
+.card.bad .value{color:#ef4444}
+
+/* ── KB Comparison ── */
+.section{background:#fff;border-radius:10px;padding:24px;margin-bottom:24px;box-shadow:0 1px 3px rgba(0,0,0,0.08)}
+.section h2{font-size:20px;margin-bottom:16px;color:#1a1a2e;border-bottom:2px solid #e5e7eb;padding-bottom:8px}
+.comparison-table{width:100%;border-collapse:collapse;font-size:14px}
+.comparison-table th{background:#f8fafc;padding:10px 14px;text-align:left;font-weight:600;border-bottom:2px solid #e5e7eb;white-space:nowrap}
+.comparison-table td{padding:10px 14px;border-bottom:1px solid #f1f5f9}
+.comparison-table tr:hover{background:#f8fafc}
+.diff-positive{color:#10b981;font-weight:600}
+.diff-negative{color:#ef4444;font-weight:600}
+.diff-neutral{color:#6b7280}
+
+/* ── Bar Chart ── */
+.bar-chart{margin:16px 0}
+.bar-row{display:flex;align-items:center;margin:8px 0;gap:12px}
+.bar-label{width:140px;font-size:13px;text-align:right;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bar-track{flex:1;background:#f1f5f9;border-radius:4px;height:24px;overflow:hidden;position:relative}
+.bar-fill{height:100%;border-radius:4px;transition:width 0.5s ease;display:flex;align-items:center;padding-left:8px;font-size:11px;font-weight:600;color:#fff;min-width:40px}
+.bar-fill.kb0{background:linear-gradient(90deg,#3b82f6,#2563eb)}
+.bar-fill.kb1{background:linear-gradient(90deg,#8b5cf6,#7c3aed)}
+
+/* ── Search & Filter ── */
+.toolbar{display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;align-items:center}
+.toolbar input,.toolbar select{padding:8px 14px;border:1px solid #e5e7eb;border-radius:6px;font-size:13px;outline:none}
+.toolbar input:focus,.toolbar select:focus{border-color:#3b82f6;box-shadow:0 0 0 2px rgba(59,130,246,0.15)}
+.toolbar input{flex:1;min-width:200px}
+.toolbar select{min-width:140px}
+.toolbar .count{font-size:13px;color:#888;white-space:nowrap}
+.toolbar .count button{margin:0 2px;padding:2px 8px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;font-size:12px}
+.toolbar .count button:hover:not(:disabled){background:#eef2ff;border-color:#3b82f6}
+.toolbar .count button:disabled{opacity:0.3;cursor:default}
+
+/* ── Question Table ── */
+.q-table{width:100%;border-collapse:collapse;font-size:13px}
+.q-table th{background:#f8fafc;padding:8px 10px;text-align:left;font-weight:600;border-bottom:2px solid #e5e7eb;cursor:pointer;user-select:none;white-space:nowrap;position:sticky;top:0}
+.q-table th:hover{background:#eef2ff}
+.q-table th .sort-icon{margin-left:4px;font-size:10px;opacity:0.4}
+.q-table th.sorted .sort-icon{opacity:1}
+.q-table td{padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+.q-table tr:hover{background:#f8fafc}
+.q-table .q-text{max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+.q-table .q-text.expanded{white-space:normal;max-width:none}
+.q-table .a-text{max-width:400px;max-height:80px;overflow:hidden;cursor:pointer;color:#555;font-size:12px}
+.q-table .a-text.expanded{max-height:none}
+.score-badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.score-badge.pass{background:#d1fae5;color:#065f46}
+.score-badge.fail{background:#fee2e2;color:#991b1b}
+.score-badge.na{background:#f3f4f6;color:#9ca3af}
+
+/* ── Expandable Detail ── */
+.detail-row{display:none}
+.detail-row.open{display:table-row}
+.detail-content{padding:12px 16px;background:#fafbfc;border-bottom:2px solid #e5e7eb}
+.detail-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+.detail-item{font-size:13px}
+.detail-item .k{color:#888;font-size:11px;text-transform:uppercase}
+.detail-item .v{color:#1a1a2e;margin-top:2px;word-break:break-word}
+.reason-box{background:#fff;border:1px solid #e5e7eb;border-radius:6px;padding:10px 14px;font-size:12px;color:#555;white-space:pre-wrap;max-height:120px;overflow-y:auto;margin-top:8px}
+
+/* ── Responsive ── */
+@media (max-width:768px){
+    .header{padding:20px}
+    .cards{grid-template-columns:1fr 1fr}
+    .toolbar{flex-direction:column}
+    .toolbar input{width:100%}
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <h1>📊 Sales Agent DeepEval 评估报告</h1>
+        <div class="subtitle">生成时间: 2026-07-03T03:10:49.605817+00:00</div>
+    </div>
+
+    <div class="cards" id="summary-cards"></div>
+
+    <div class="section">
+        <h2>📈 KB 指标对比</h2>
+        <table class="comparison-table" id="kb-compare"><thead></thead><tbody></tbody></table>
+        <div class="bar-chart" id="bar-chart"></div>
+    </div>
+
+    <div class="section">
+        <h2>📋 逐题评估详情</h2>
+        <div class="toolbar">
+            <input type="text" id="search" placeholder="🔍 搜索问题..." oninput="renderTable()">
+            <select id="kb-filter" onchange="renderTable()">
+                <option value="all">全部 KB</option>
+            </select>
+            <select id="score-filter" onchange="renderTable()">
+                <option value="all">全部通过状态</option>
+                <option value="pass">✅ 全部通过</option>
+                <option value="partial">⚠️ 部分通过</option>
+                <option value="fail">❌ 全部未通过</option>
+                <option value="error">💥 错误</option>
+            </select>
+            <select id="task-filter" onchange="renderTable()">
+                <option value="all">全部任务类型</option>
+            </select>
+            <span class="count" id="result-count"></span>
+        </div>
+        <div style="overflow-x:auto">
+            <table class="q-table" id="q-table"><thead></thead><tbody></tbody></table>
+        </div>
+    </div>
+</div>
+
+<script>
+// ── Data ──
+const RESULTS = [{"question_id": "golden_0200", "question": "福多多核心客户群是哪些组织？小企业能否受益？", "reference": "根据上下文，福多多主要服务政府机构、事业单位、央国企及200人以上的大中型企业，这类客户更注重安全合规与员工满意度。针对小型企业，同样有标准产品可用，但平台的核心优势在满足大型组织复杂的福利管理需求时体现得更为明显。", "kb_label": "taishan", "model": "(default)", "answer": "直接说结论：福多多的核心客户群是**100人以上的企业、工会和HR**，但小企业（50人以下）同样能受益，而且切入方式不同。\n\n**核心客户群画像（根据客户画像库，置信度75%）：**\n- **规模**：100-5000人的中型企业，HR或工会负责人是决策人\n- **行业**：互联网、金融、制造、教育、医疗等有稳定福利预算的行业\n- **痛点**：员工福利管理效率低、员工满意度差、需要合规且灵活的解决方案\n- **场景**：年节慰问、生日礼遇、观影文娱、福利商城、企业餐补\n\n**小企业（50人以下）怎么受益？**\n小企业预算有限、人员少，但福利需求同样存在。你明天可以做的三件事：\n\n1. **主推\"轻量级\"产品**：电影通兑卡或生日蛋糕卡，单价低、门槛低，员工感知强。比如10-20人团队，每人一张电影卡，总成本几百块，但员工觉得\"公司有心了\"\n2. **打\"省心牌\"**：小企业HR往往身兼多职，没精力管福利。话术：\"您不用自己选品、不用管配送、不用处理售后，我们一站式搞定，您省下时间干正事\"\n3. **用\"员工满意度\"撬动**：小企业留人更难，福利是软实力。话术：\"您花几百块给员工发张电影卡，员工觉得公司有温度，比涨工资还管用\"\n\n**关键区别**：大企业谈\"效率提升\"和\"合规\"，小企业谈\"省心省力\"和\"员工感受\"。别用一套话术打天下。", "rendered": "直接说结论：福多多的核心客户群是**100人以上的企业、工会和HR**，但小企业（50人以下）同样能受益，而且切入方式不同。\n\n**核心客户群画像（根据客户画像库，置信度75%）：**\n- **规模**：100-5000人的中型企业，HR或工会负责人是决策人\n- **行业**：互联网、金融、制造、教育、医疗等有稳定福利预算的行业\n- **痛点**：员工福利管理效率低、员工满意度差、需要合规且灵活的解决方案\n- **场景**：年节慰问、生日礼遇、观影文娱、福利商城、企业餐补\n\n**小企业（50人以下）怎么受益？**\n小企业预算有限、人员少，但福利需求同样存在。你明天可以做的三件事：\n\n1. **主推\"轻量级\"产品**：电影通兑卡或生日蛋糕卡，单价低、门槛低，员工感知强。比如10-20人团队，每人一张电影卡，总成本几百块，但员工觉得\"公司有心了\"\n2. **打\"省心牌\"**：小企业HR往往身兼多职，没精力管福利。话术：\"您不用自己选品、不用管配送、不用处理售后，我们一站式搞定，您省下时间干正事\"\n3. **用\"员工满意度\"撬动**：小企业留人更难，福利是软实力。话术：\"您花几百块给员工发张电影卡，员工觉得公司有温度，比涨工资还管用\"\n\n**关键区别**：大企业谈\"效率提升\"和\"合规\"，小企业谈\"省心省力\"和\"员工感受\"。别用一套话术打天下。\n\n来源：\n1. 《北京福多多科技有限公司 - 企查查》\n2. 《深圳福多多科技有限公司》\n3. 《北京福多多信息咨询有限公司主要人员_董事_监事 - 天眼查》\n（共 5 条来源）", "task_type": "general_sales_coaching", "risk_level": "none", "sources_count": 5, "latency_ms": 5921, "ttft_ms": 168, "prompt_tokens": 3824, "completion_tokens": 376, "total_tokens": 4200, "error": "", "metric_scores": {"正确性 (Correctness) [GEval]": 0.5, "完整性 (Completeness) [GEval]": 0.3, "Contextual Recall": 0.0, "Contextual Precision": 0.0, "Contextual Relevancy": 0.6667, "Faithfulness": 1.0, "Answer Relevancy": 1.0, "AnswerRecall (回答召回率)": 1.0, "Task Completion": 0.9}, "metric_success": {"正确性 (Correctness) [GEval]": true, "完整性 (Completeness) [GEval]": false, "Contextual Recall": false, "Contextual Precision": false, "Contextual Relevancy": true, "Faithfulness": true, "Answer Relevancy": true, "AnswerRecall (回答召回率)": true, "Task Completion": true}, "metric_reasons": {"正确性 (Correctness) [GEval]": "The Actual Output redefines the core customer base as 100+ person enterprises, unions, and HR, while the Expected Output specifies government agencies, public institutions, state-owned enterprises, and 200+ person companies—a significant factual mismatch. The Actual Output also omits key points like government/state-owned enterprise focus and the platform's strength in complex large-organization needs. However, it provides detailed, actionable sales guidance for small businesses, which is practically useful. The completeness is lacking because critical expected elements are missing.", "完整性 (Completeness) [GEval]": "The Actual Output shifts the core customer focus to 100+ person enterprises, HR, and unions, while the Expected Output specifies government agencies, public institutions, state-owned enterprises, and 200+ person large/mid-sized enterprises. The Actual Output also omits the emphasis on security/compliance as a primary concern for large clients and the idea that the platform's core advantage is more evident for complex large-organization needs. Although the Actual Output covers small business benefits, it misses several key points from the Expected Output, resulting in a low coverage score.", "Contextual Recall": "The score is 0.00 because none of the sentences in the expected output can be attributed to any node in the retrieval context. Specifically, sentence 1 (about 福多多 serving government agencies, institutions, and large enterprises) and sentence 2 (about standard products for small enterprises and core advantages in complex welfare management) are unsupported, as the retrieval context lacks any mention of these details.", "Contextual Precision": "The score is 0.00 because all nodes in the retrieval contexts are irrelevant to the input. The first node discusses Beijing Fuduoduo Technology's company info but '未提及福多多核心客户群或小企业能否受益的问题，因此不相关', the second node covers Shenzhen Fuduoduo Technology's business scope and is '与客户群或小企业受益问题无关', the third node is about Beijing Fuduoduo Information Consulting and '未涉及核心客户群或小企业受益的内容', the fourth node describes Beijing Fuduoduo Life Supermarket and is '与客户群或小企业受益问题无关', and the fifth node introduces Fuduoduo Group but '未具体说明核心客户群是哪些组织，也未提及小企业能否受益，因此不直接相关'. Since no relevant nodes exist, the ranking of relevant nodes higher than irrelevant nodes is impossible, resulting in the lowest score.", "Contextual Relevancy": "The score is 0.67 because the retrieval context contains some relevant statements about 福多多 being a small enterprise (e.g., '福多多是一家小微企业') and its business scope, which partially addresses whether small businesses can benefit, but many statements are irrelevant to the input's specific question about core customer groups and small business benefits, such as general company details and unrelated information about other companies.", "Faithfulness": "The score is 1.00 because there are no contradictions between the actual output and the retrieval context. The actual output perfectly aligns with the information provided, demonstrating excellent faithfulness. Great job!", "Answer Relevancy": "The score is 1.00 because the actual output contains no irrelevant statements and fully addresses the input question about 福多多's core customer groups and whether small businesses can benefit.", "AnswerRecall (回答召回率)": "检索内容为空，无法评估召回率", "Task Completion": "The actual outcome directly addresses the user's request by identifying core customer groups and providing specific, actionable sales advice for different segments (e.g., promoting lightweight products, emphasizing convenience). It does not miss key information and maintains a professional tone consistent with a sales coach. However, it could be slightly improved by explicitly linking the advice to a concrete user question or scenario, hence the 0.9 rather than 1.0."}}, {"question_id": "golden_0131", "question": "比较网票福多多服务的总客户数与拥有10年以上重复购买记录的客户数。", "reference": "根据上下文信息，网票福多多已累计服务超过30000家企业，其中复购超过10年的客户达500家以上。", "kb_label": "taishan", "model": "(default)", "answer": "直接说结论：根据现有知识库，**没有\"10年以上重复购买记录客户数\"这个维度的具体统计数据**，所以没法直接做这个对比。\n\n但这个问题背后，我猜你想问的是：**福多多的客户粘性到底怎么样？老客户续约率高不高？**\n\n那我给你几个能用的判断依据：\n\n1. **客户总量是3万+**（根据产品知识库《公司介绍v2.0》，置信度90%），这个数字是明确的。\n2. **公司成立于2005年，至今20年**，服务过超2000万员工。能活20年、零诉讼零外债，本身就说明老客户留存不会差——如果客户做一单就跑，早撑不住了。\n3. **你要证明客户粘性，可以用这个角度**：跟客户聊的时候，不用纠结\"10年以上\"这个精确数字，而是说——\"我们服务了3万多家企业，其中很多客户从我们成立初期就一直合作到现在，因为福利采购不是一锤子买卖，客户每年续约，说明我们交付稳定、服务靠谱。\"\n\n**明天就能用的动作**：如果你手头有某个老客户的案例（比如合作5年、8年的），把这个案例提炼成一句话，下次拜访新客户时直接甩出来，比任何数字都有说服力。", "rendered": "直接说结论：根据现有知识库，**没有\"10年以上重复购买记录客户数\"这个维度的具体统计数据**，所以没法直接做这个对比。\n\n但这个问题背后，我猜你想问的是：**福多多的客户粘性到底怎么样？老客户续约率高不高？**\n\n那我给你几个能用的判断依据：\n\n1. **客户总量是3万+**（根据产品知识库《公司介绍v2.0》，置信度90%），这个数字是明确的。\n2. **公司成立于2005年，至今20年**，服务过超2000万员工。能活20年、零诉讼零外债，本身就说明老客户留存不会差——如果客户做一单就跑，早撑不住了。\n3. **你要证明客户粘性，可以用这个角度**：跟客户聊的时候，不用纠结\"10年以上\"这个精确数字，而是说——\"我们服务了3万多家企业，其中很多客户从我们成立初期就一直合作到现在，因为福利采购不是一锤子买卖，客户每年续约，说明我们交付稳定、服务靠谱。\"\n\n**明天就能用的动作**：如果你手头有某个老客户的案例（比如合作5年、8年的），把这个案例提炼成一句话，下次拜访新客户时直接甩出来，比任何数字都有说服力。\n\n来源：\n1. 《站长工具 - 福利多多-网票福多多-福多多福利-企业员工福利平台,提供企业员工福利集采定制服务duoduofuli.cc的SEO综合查询》\n2. 《投诉网票福多多作废预存卡、侵害消费者权益_演唱会投诉、电影票投诉_黑猫投诉_新浪网》\n3. 《阖木堂:今天来讲讲复购率-卖家网》\n（共 5 条来源）", "task_type": "general_sales_coaching", "risk_level": "none", "sources_count": 5, "latency_ms": 4594, "ttft_ms": 162, "prompt_tokens": 3828, "completion_tokens": 275, "total_tokens": 4103, "error": "", "metric_scores": {"正确性 (Correctness) [GEval]": 0.2, "完整性 (Completeness) [GEval]": 0.0, "Contextual Recall": 0.0, "Contextual Precision": 0.0, "Contextual Relevancy": 0.0, "Faithfulness": 1.0, "Answer Relevancy": 0.6957, "AnswerRecall (回答召回率)": 1.0, "Task Completion": 0.2}, "metric_success": {"正确性 (Correctness) [GEval]": false, "完整性 (Completeness) [GEval]": false, "Contextual Recall": false, "Contextual Precision": false, "Contextual Relevancy": false, "Faithfulness": true, "Answer Relevancy": true, "AnswerRecall (回答召回率)": true, "Task Completion": false}, "metric_reasons": {"正确性 (Correctness) [GEval]": "The Actual Output does not provide the specific statistic requested (number of customers with 10+ year repeat purchase records) and instead states that data is unavailable, while the Expected Output explicitly gives that figure (500+). This is a direct factual mismatch. The Actual Output also omits the key point from the Expected Output about 500+ customers with 10+ year repeat purchases, making it incomplete. Although the Actual Output offers alternative talking points for sales, it fails to deliver the core data needed for the comparison, reducing its practical usefulness for the specific query. Overall, the response does not align with the required facts or completeness.", "完整性 (Completeness) [GEval]": "The Expected Output states a specific statistic: '复购超过10年的客户达500家以上'. The Actual Output explicitly says no such statistic exists ('没有...具体统计数据'), and instead provides indirect reasoning about customer retention. This is a direct contradiction on the key factual point, meaning the core meaning is not preserved. No key points from the Expected Output are present. Score is 0 because the required fact is missing entirely.", "Contextual Recall": "The score is 0.00 because the expected output contains specific statistics about '网票福多多' serving over 30,000 enterprises and having over 500 customers with repeat purchases exceeding 10 years, but none of the nodes in retrieval context provide these figures. The 1st node only mentions the entity in keyword lists and service descriptions, while the 2nd, 3rd, 4th, and 5th nodes discuss unrelated complaints or general e-commerce concepts, leaving the entire sentence unsupported.", "Contextual Precision": "The score is 0.00 because all nodes in the retrieval contexts are irrelevant to the input, which asks for comparing the total customer count of 网票福多多 with the count of customers who have made repeat purchases for over 10 years. The first node's reason states '该文档主要列出关键词和搜索热度，没有提及网票福多多的总客户数或复购超过10年的客户数，与问题无关。', the second node's reason says '该文档是关于网票福多多的投诉，涉及预存卡作废和消费者权益问题，没有提供总客户数或复购超过10年的客户数信息。', the third node's reason indicates '该文档讨论的是电商复购率和老客户维护的一般性策略，没有提及网票福多多的具体客户数据。', the fourth node's reason notes '该文档讨论老客户的定义和维护老客户的好处，但未提供网票福多多的总客户数或复购超过10年的客户数。', and the fifth node's reason explains '该文档是关于拼多多现金大转盘活动的投诉，与网票福多多无关，不包含所需数据。' Since no relevant nodes exist, the ranking of relevant nodes higher than irrelevant nodes cannot be achieved, resulting in the lowest possible score.", "Contextual Relevancy": "The score is 0.00 because the retrieval context contains no information about total customer count or customers with over 10 years of repeat purchase records for 网票福多多服务, as evidenced by reasons such as 'The statement contains only keyword lists and does not provide any information about total customer count or repeat purchase data' and 'The statement discusses general concepts of repeat purchase rate and customer return rate, but does not provide specific data'.", "Faithfulness": "The score is 1.00 because there are no contradictions between the actual output and the retrieval context. The actual output perfectly aligns with the information provided, demonstrating excellent faithfulness. Great job!", "Answer Relevancy": "The score is 0.70 because the actual output includes several statements about company founding year, years of operation, total employees, business status, nature of welfare procurement, delivery and service, and suggested actions for tomorrow, which are all irrelevant to comparing total customer count with customers having over 10 years of repeat purchase history. The score is not higher due to these irrelevant statements, but it is at 0.70 because the output likely still contains some relevant information addressing the comparison.", "AnswerRecall (回答召回率)": "检索内容为空，无法评估召回率", "Task Completion": "系统未能直接回应用户的具体问题（未提供10年以上重复购买记录客户数的统计数据），也未提供可操作的销售建议或信息，遗漏了用户问题中的关键信息点，且回答语气不符合专业销售教练的角色要求。"}}, {"question_id": "golden_0130", "question": "合同中包含由质量保证金支持的零风险承诺，如何确保采购安全？", "reference": "根据上下文，零风险承诺被正式写入合同，并设立质保金机制，通过关键条款的硬性保障（如正品授权、差价赔付、兑换可靠性等），确保企业采购稳定可靠、安全合规，实现真正意义上的零风险采购。", "kb_label": "taishan", "model": "(default)", "answer": "这个我得确认一下，别误导你。目前知识库中关于\"质量保证金支持的零风险承诺\"的具体条款和操作细节没有详细记录，我无法给你一个确切的答案。\n\n不过，根据公司已有的零风险承诺体系，我可以给你几个方向性的建议：\n\n1. **直接找合同条款**：你手头的合同里如果有\"质量保证金\"相关条款，直接看具体约定——比如保证金金额、触发条件、赔付流程。这是最准的。\n\n2. **问法务或运营支持**：这个属于合同执行层面的细节，建议你直接联系公司法务或区域运营支持，让他们把质量保证金的具体保障机制讲清楚。\n\n3. **拿现有承诺做背书**：即使质量保证金条款暂时没搞明白，公司已有的零风险承诺（正品假一赔三、蛋糕差价双倍赔、电影票差价三倍赔）本身就是强有力的采购安全保障。你可以先跟客户说：\"我们20年零诉讼、零外债，实缴注册资本3000万，这些比任何保证金都硬。\"\n\n建议你确认一下最新信息，别在客户面前说没把握的话。", "rendered": "这个我得确认一下，别误导你。目前知识库中关于\"质量保证金支持的零风险承诺\"的具体条款和操作细节没有详细记录，我无法给你一个确切的答案。\n\n不过，根据公司已有的零风险承诺体系，我可以给你几个方向性的建议：\n\n1. **直接找合同条款**：你手头的合同里如果有\"质量保证金\"相关条款，直接看具体约定——比如保证金金额、触发条件、赔付流程。这是最准的。\n\n2. **问法务或运营支持**：这个属于合同执行层面的细节，建议你直接联系公司法务或区域运营支持，让他们把质量保证金的具体保障机制讲清楚。\n\n3. **拿现有承诺做背书**：即使质量保证金条款暂时没搞明白，公司已有的零风险承诺（正品假一赔三、蛋糕差价双倍赔、电影票差价三倍赔）本身就是强有力的采购安全保障。你可以先跟客户说：\"我们20年零诉讼、零外债，实缴注册资本3000万，这些比任何保证金都硬。\"\n\n建议你确认一下最新信息，别在客户面前说没把握的话。\n\n来源：\n1. 《【京东外卖】业务介绍-2025.11.12-优化.md》\n2. 《【京东外卖】业务介绍-2025.11.12-优化.md》\n3. 《【京东外卖】业务介绍-2025.11.12-优化.md》\n（共 5 条来源）", "task_type": "knowledge_qa", "risk_level": "none", "sources_count": 5, "latency_ms": 3917, "ttft_ms": 209, "prompt_tokens": 4324, "completion_tokens": 233, "total_tokens": 4557, "error": "", "metric_scores": {"正确性 (Correctness) [GEval]": 0.2, "完整性 (Completeness) [GEval]": 0.2, "Contextual Recall": 0.0, "Contextual Precision": 0.0, "Contextual Relevancy": 0.0, "Faithfulness": 0.8571, "Answer Relevancy": 0.9091, "AnswerRecall (回答召回率)": 1.0, "Task Completion": 0.4}, "metric_success": {"正确性 (Correctness) [GEval]": false, "完整性 (Completeness) [GEval]": false, "Contextual Recall": false, "Contextual Precision": false, "Contextual Relevancy": false, "Faithfulness": true, "Answer Relevancy": true, "AnswerRecall (回答召回率)": true, "Task Completion": false}, "metric_reasons": {"正确性 (Correctness) [GEval]": "The Actual Output does not match the core facts of the Expected Output, which states that the zero-risk commitment is formally written into the contract with a quality guarantee mechanism ensuring procurement safety. Instead, the Actual Output admits lack of knowledge and provides generic advice, omitting the key policy details and assurance mechanisms. Completeness is poor because critical points from the Expected Output are absent. For sales scenarios, the Actual Output is cautious but lacks the concrete, confident information needed to reassure a customer, reducing its practical usefulness.", "完整性 (Completeness) [GEval]": "The Expected Output states that the zero-risk commitment is formally written into the contract with a quality assurance fund mechanism and key hard guarantees (genuine product authorization, price difference compensation, exchange reliability). The Actual Output does not confirm that the zero-risk commitment is in the contract or that a quality assurance fund mechanism exists; instead it says the specific terms are not recorded in the knowledge base and suggests checking the contract or asking legal. It also lists different guarantees (e.g., genuine product fake-one-pay-three, cake price difference double compensation) but does not match the core claim of a formal contractual zero-risk commitment with a quality assurance fund. Several key information items from the Expected Output are missing, resulting in a low score.", "Contextual Recall": "The score is 0.00 because none of the nodes in retrieval context contain any information related to the expected output, which discusses formalizing a zero-risk commitment in a contract, establishing a quality assurance deposit mechanism, and hard guarantees through key clauses. The retrieval context nodes are from a JD Waimai business introduction file but lack any actual content to support the sentence.", "Contextual Precision": "The score is 0.00 because all nodes in the retrieval contexts are irrelevant to the input, as they are file names with no content about contracts, quality assurance, or procurement safety. Since there are no relevant nodes to rank higher, the contextual precision is zero.", "Contextual Relevancy": "The score is 0.00 because the retrieval context only contains a file name '【京东外卖】业务介绍-2025.11.12-优化.md' and no actual statements, as noted in the reasons: 'The context only contains a file name and no actual content or statements related to the input about zero-risk guarantees and procurement safety.'", "Faithfulness": "The score is 0.86 because the actual output includes specific zero-risk commitments like '正品假一赔三', '蛋糕差价双倍赔', and '电影票差价三倍赔', which are not supported by the retrieval context. The context only provides a general business introduction for JD.com's food delivery service, leading to a minor contradiction that slightly reduces faithfulness.", "Answer Relevancy": "The score is 0.91 because the actual output contains two statements that are not directly helpful in addressing how to ensure procurement safety, such as stating the knowledge base lacks relevant information and that no exact answer can be given. These statements slightly reduce relevancy, but the majority of the output still addresses the input, so the score remains high.", "AnswerRecall (回答召回率)": "检索内容为空，无法评估召回率", "Task Completion": "系统未能直接回应用户的具体问题，而是给出了方向性建议，没有提供可操作的具体销售建议或信息，且遗漏了用户问题中的关键信息点。回答的语气和风格虽符合专业角色，但整体完成度较低。"}}, {"question_id": "golden_0199", "question": "FDD的365天自助服务团队和7x12小时热线如何确保当日问题解决？", "reference": "福多多的自营客服团队提供365天支持，通过7×12小时热线和7×24小时VIP专线，确保客户问题当天闭环。这意味着无论何时遇到问题，都能快速联系到客服，并在当天内得到解决，同时配套多重补偿方案和书面保障，让采购负责人无需“背锅”。", "kb_label": "taishan", "model": "(default)", "answer": "直接回答你：**365天自助服务和7×12小时热线，核心靠的是\"自营团队+分级响应机制\"来确保当日问题解决，不是外包或机器人糊弄。**\n\n具体拆解成三个动作，你下次跟客户聊服务保障时可以直接用：\n\n1. **自营客服团队，不是外包**：福多多有400多人专业团队，客服全部自营，7×12小时（早8点到晚8点）热线在线。客户遇到问题打进来，一线客服能当场解决的当场解决，解决不了的直接升级到二线技术或运营团队，**不走工单流转过夜**。根据员工案例库《王菲销售业务分享》（置信度80%），内部要求是\"24小时内极速响应\"，但实际大部分问题当天闭环。\n\n2. **自助服务覆盖高频场景**：福利商城、电影票兑换、蛋糕配送这些高频问题，客户在APP或小程序里走自助流程就能完成——查订单、改地址、申请售后。自助解决不了的，才转人工。这样人工热线不会被低效问题占满，能集中精力处理真正需要人工介入的复杂情况。\n\n3. **分级响应，不积压**：简单问题（比如查余额、改密码）一线客服直接处理；复杂问题（比如批量订单异常、对账差异）30分钟内转给对应业务负责人，**当天必须给客户一个明确答复**，哪怕只是\"我们正在排查，明天上午10点前给您最终结果\"。客户要的不是秒回，而是\"有人管、有进度、有结果\"。\n\n**你明天跟客户聊服务时，直接说这句话**：\"我们客服不是外包的，400多人自己养着，7×12小时在线，当天问题当天清，解决不了也会给你一个明确的时间节点，不会让你干等。\" 客户最怕的就是\"提交工单后石沉大海\"，你把\"当天闭环\"这个点讲透，信任感直接拉满。", "rendered": "直接回答你：**365天自助服务和7×12小时热线，核心靠的是\"自营团队+分级响应机制\"来确保当日问题解决，不是外包或机器人糊弄。**\n\n具体拆解成三个动作，你下次跟客户聊服务保障时可以直接用：\n\n1. **自营客服团队，不是外包**：福多多有400多人专业团队，客服全部自营，7×12小时（早8点到晚8点）热线在线。客户遇到问题打进来，一线客服能当场解决的当场解决，解决不了的直接升级到二线技术或运营团队，**不走工单流转过夜**。根据员工案例库《王菲销售业务分享》（置信度80%），内部要求是\"24小时内极速响应\"，但实际大部分问题当天闭环。\n\n2. **自助服务覆盖高频场景**：福利商城、电影票兑换、蛋糕配送这些高频问题，客户在APP或小程序里走自助流程就能完成——查订单、改地址、申请售后。自助解决不了的，才转人工。这样人工热线不会被低效问题占满，能集中精力处理真正需要人工介入的复杂情况。\n\n3. **分级响应，不积压**：简单问题（比如查余额、改密码）一线客服直接处理；复杂问题（比如批量订单异常、对账差异）30分钟内转给对应业务负责人，**当天必须给客户一个明确答复**，哪怕只是\"我们正在排查，明天上午10点前给您最终结果\"。客户要的不是秒回，而是\"有人管、有进度、有结果\"。\n\n**你明天跟客户聊服务时，直接说这句话**：\"我们客服不是外包的，400多人自己养着，7×12小时在线，当天问题当天清，解决不了也会给你一个明确的时间节点，不会让你干等。\" 客户最怕的就是\"提交工单后石沉大海\"，你把\"当天闭环\"这个点讲透，信任感直接拉满。\n\n来源：\n1. 《Dedicated 24-hour hotline set up for foreign domestic helpers》\n2. 《Dedicated 24-hour hotline set up for foreign domestic helpers》\n3. 《服务内容》\n（共 5 条来源）", "task_type": "general_sales_coaching", "risk_level": "none", "sources_count": 5, "latency_ms": 6424, "ttft_ms": 4, "prompt_tokens": 3830, "completion_tokens": 411, "total_tokens": 4241, "error": "", "metric_scores": {"正确性 (Correctness) [GEval]": 0.6, "完整性 (Completeness) [GEval]": 0.6, "Contextual Recall": 0.0, "Contextual Precision": 0.0, "Contextual Relevancy": 0.1071, "Faithfulness": 1.0, "Answer Relevancy": 1.0, "AnswerRecall (回答召回率)": 1.0, "Task Completion": 0.0}, "metric_success": {"正确性 (Correctness) [GEval]": true, "完整性 (Completeness) [GEval]": true, "Contextual Recall": false, "Contextual Precision": false, "Contextual Relevancy": false, "Faithfulness": true, "Answer Relevancy": true, "AnswerRecall (回答召回率)": true, "Task Completion": false}, "metric_reasons": {"正确性 (Correctness) [GEval]": "The Actual Output covers the core fact of a self-operated team ensuring same-day resolution, but it omits the 7×24 VIP hotline, compensation plans, and written guarantees mentioned in the Expected Output. While it provides actionable sales guidance, it is incomplete regarding key policy details, leading to a moderate score.", "完整性 (Completeness) [GEval]": "The Actual Output covers the key points of a self-operated customer service team, 7×12 hour hotline, and same-day issue resolution. However, it omits the 7×24 hour VIP hotline, multiple compensation plans, and written guarantees mentioned in the Expected Output. These are significant omissions that reduce alignment.", "Contextual Recall": "The score is 0.00 because none of the sentences in the expected output can be attributed to any node in retrieval context. For example, sentence 1 mentions '福多多' and '自营客服团队', but no node in retrieval context references this company or team. Sentence 2 mentions '7×12小时热线' and '7×24小时VIP专线', but nodes only discuss general 24/7 hotlines without these specifics. Sentence 3 mentions '当天闭环' and '快速联系到客服', but nodes lack same-day resolution guarantees. Sentence 4 mentions '多重补偿方案' and '书面保障', but nodes do not cover compensation or written guarantees. Sentence 5 mentions '采购负责人无需背锅', but nodes do not address procurement or liability. Thus, no support exists from any node in retrieval context.", "Contextual Precision": "The score is 0.00 because all five nodes in the retrieval contexts are irrelevant to the input. The first node discusses a 'dedicated 24-hour hotline for foreign domestic helpers', the second node is 'about a hotline for foreign domestic helpers', the third node mentions '全年365天、每周7x24小时 电话热线' but is about a different company (FID BLOWER), the fourth node describes '24/7 phone and remote support for technical services' for Fosber Asia, and the fifth node provides 'customer service hours for FTD'. None of these nodes address FDD's 365-day self-service team or 7x12-hour hotline, so there are no relevant nodes to rank higher than irrelevant ones, resulting in the lowest possible score.", "Contextual Relevancy": "The score is 0.11 because the retrieval context contains only a few statements about 24/7 remote support and monitoring (e.g., '佛斯伯亚洲提供免费的全天候 (24/7) 电话和远程设备技术支持服务'), but the vast majority of statements are irrelevant, focusing on foreign domestic helpers, FTD services, or unrelated support details, and none specifically address FDD's 365-day self-service team or 7x12 hotline ensuring same-day problem resolution.", "Faithfulness": "The score is 1.00 because there are no contradictions between the actual output and the retrieval context. The actual output perfectly aligns with the provided information, demonstrating excellent faithfulness.", "Answer Relevancy": "The score is 1.00 because the actual output contains no irrelevant statements and fully addresses the input question about how FDD's 365-day self-service team and 7x12-hour hotline ensure same-day issue resolution.", "AnswerRecall (回答召回率)": "检索内容为空，无法评估召回率", "Task Completion": "The actual outcome does not address the user's request at all. The user asked for an evaluation of a sales coach agent's performance, but the system provided a detailed explanation of a customer service model (365-day self-service and 7×12 hotline) unrelated to the task. It fails to respond to the specific question, offers no sales advice, and does not align with the role of a professional sales coach."}}, {"question_id": "golden_0132", "question": "比较网票福多多的零风险采购保障与其实际购买力及售后服务。", "reference": "网票福多多的零风险采购保障、实际购买力与售后服务三者相辅相成，共同构成其核心价值：\n\n- **零风险采购保障**：平台将“零风险承诺”正式写入合同，设立质保金机制，涵盖正品授权、差价赔付、兑换可靠性等关键条款，并提供零外债、零诉讼记录备查，确保采购安全合规、经得起审计。\n\n- **实际购买力领先**：在同等预算下，电影票价格不高于猫眼零售价，商城商品杜绝隐形加价，让员工实际到手价值更高；同时通过合同明确服务保障，节省企业运营与售后精力，减少员工投诉成本。\n\n- **高品质售后服务**：自营客服团队结合AI工单系统，提供7×12小时热线和7×24小时VIP专线，问题承诺当天闭环，全年365天支持，让采购负责人省心、员工满意。\n\n综上，零风险保障为采购安全兜底，实际购买力提升福利价值，高效售后确保体验无忧，三者共同实现稳定可靠、安全合规的零风险采购。", "kb_label": "taishan", "model": "(default)", "answer": "这个问题知识库里没有\"零风险采购保障\"的完整定义和对比数据，我没办法给你一个全面的对比分析，这个我得确认一下，别误导你。建议你咨询区域销售负责人或运营支持获取最新信息。\n\n不过，基于图谱里已有的信息，我可以给你拆开来看：\n\n**关于售后服务（根据知识图谱，置信度80%）：**\n福多多福利卡的售后服务是双通道的。员工遇到问题，既可以联系合作平台（比如唯品会）的客服，也可以通过福多多平台客服协调处理。而且商品签收后15天内出现质量问题，福多多提供免费上门取件服务。这说明售后不是单一依赖第三方，福多多自己有兜底机制。\n\n**关于实际购买力（根据知识图谱，置信度80%）：**\n购买力取决于具体绑定的平台。比如在盒马，需要首次使用前在盒马APP内完成授权绑定，将福多多福利卡账户与盒马账户关联，退款也是原路退回至福多多福利卡账户。在唯品会，全部商品享受唯品会官方正品保障和售后服务体系。这说明购买力是\"平台级\"的——员工在哪个平台用，就享受那个平台的商品池和价格体系。\n\n**我的建议：**\n你现在要跟客户讲清楚\"零风险采购保障\"，最稳妥的做法是：\n1. 直接找运营要一份《零风险承诺》的正式文档，里面通常包含正品保障、差价赔付、售后服务时效等具体条款。\n2. 把\"零风险\"拆成三个客户最关心的点来讲：**正品怎么保**（假一赔三）、**价格怎么保**（差价赔付）、**售后怎么保**（双通道+15天免费上门取件）。\n3. 别自己编数字，拿到正式文件再跟客户聊，这样更有底气。", "rendered": "这个问题知识库里没有\"零风险采购保障\"的完整定义和对比数据，我没办法给你一个全面的对比分析，这个我得确认一下，别误导你。建议你咨询区域销售负责人或运营支持获取最新信息。\n\n不过，基于图谱里已有的信息，我可以给你拆开来看：\n\n**关于售后服务（根据知识图谱，置信度80%）：**\n福多多福利卡的售后服务是双通道的。员工遇到问题，既可以联系合作平台（比如唯品会）的客服，也可以通过福多多平台客服协调处理。而且商品签收后15天内出现质量问题，福多多提供免费上门取件服务。这说明售后不是单一依赖第三方，福多多自己有兜底机制。\n\n**关于实际购买力（根据知识图谱，置信度80%）：**\n购买力取决于具体绑定的平台。比如在盒马，需要首次使用前在盒马APP内完成授权绑定，将福多多福利卡账户与盒马账户关联，退款也是原路退回至福多多福利卡账户。在唯品会，全部商品享受唯品会官方正品保障和售后服务体系。这说明购买力是\"平台级\"的——员工在哪个平台用，就享受那个平台的商品池和价格体系。\n\n**我的建议：**\n你现在要跟客户讲清楚\"零风险采购保障\"，最稳妥的做法是：\n1. 直接找运营要一份《零风险承诺》的正式文档，里面通常包含正品保障、差价赔付、售后服务时效等具体条款。\n2. 把\"零风险\"拆成三个客户最关心的点来讲：**正品怎么保**（假一赔三）、**价格怎么保**（差价赔付）、**售后怎么保**（双通道+15天免费上门取件）。\n3. 别自己编数字，拿到正式文件再跟客户聊，这样更有底气。\n\n来源：\n1. 《【京东外卖】业务介绍-2025.11.12-优化.md》\n2. 《【盒马】业务介绍-2025.11.12-优化.md》\n3. 《【盒马】业务介绍-2025.11.12-优化.md》\n（共 5 条来源）", "task_type": "knowledge_qa", "risk_level": "none", "sources_count": 5, "latency_ms": 5680, "ttft_ms": 5, "prompt_tokens": 4390, "completion_tokens": 383, "total_tokens": 4773, "error": "", "metric_scores": {"正确性 (Correctness) [GEval]": 0.3, "完整性 (Completeness) [GEval]": 0.1, "Contextual Recall": 0.0, "Contextual Precision": 0.0, "Contextual Relevancy": 0.0, "Faithfulness": 1.0, "Answer Relevancy": 1.0, "AnswerRecall (回答召回率)": 1.0, "Task Completion": 0.4}, "metric_success": {"正确性 (Correctness) [GEval]": false, "完整性 (Completeness) [GEval]": false, "Contextual Recall": false, "Contextual Precision": false, "Contextual Relevancy": false, "Faithfulness": true, "Answer Relevancy": true, "AnswerRecall (回答召回率)": true, "Task Completion": false}, "metric_reasons": {"正确性 (Correctness) [GEval]": "The Actual Output explicitly states it lacks the full definition and comparison data for '零风险采购保障', which is a core fact in the Expected Output. It does not cover key points like the contractual zero-risk guarantee, quality assurance fund, price difference compensation, or the specific 7×12/7×24 customer service hours. While it provides some useful sales advice and partial information on after-sales and purchasing power, it omits critical elements such as the zero-debt/zero-litigation records and the overall integrated value proposition. This incompleteness and lack of core facts significantly reduce alignment with the Expected Output, making it less actionable for a salesperson needing a comprehensive comparison.", "完整性 (Completeness) [GEval]": "The Actual Output does not cover the key points from the Expected Output: it lacks any mention of '零风险采购保障' being written into a contract with a quality assurance fund, the specific terms (正品授权, 差价赔付, 兑换可靠性, 零外债, 零诉讼记录), the claim that movie ticket prices are not higher than Maoyan retail prices, the absence of hidden markups, the self-operated customer service team with AI ticketing system, 7×12/7×24 hotline, same-day closure promise, or the integrated summary. Instead, it states the knowledge base lacks the definition and data, then provides partial information on after-sales and purchasing power from a different perspective, and suggests consulting sales or operations. This results in almost none of the expected key points being covered, leading to a score in the 0.0-0.2 range.", "Contextual Recall": "The score is 0.00 because none of the nodes in retrieval context contain any information related to the expected output, including the platform name '网票福多多', its core value components (零风险采购保障, 实际购买力领先, 高品质售后服务), or any of the specific details such as contract clauses, price comparisons, or customer service descriptions.", "Contextual Precision": "The score is 0.00 because all nodes in the retrieval contexts are irrelevant to the input query about '网票福多多' (Wangpiao Fuduoduo). For example, the first node is about '京东外卖' (JD Delivery), and the second through fifth nodes are about '盒马' (Hema), none of which address the zero-risk procurement, purchasing power, or after-sales service of '网票福多多'. Since there are no relevant nodes to rank higher, the contextual precision cannot be positive.", "Contextual Relevancy": "The score is 0.00 because the retrieval context contains only a file name and no actual statements about '网票福多多' or its zero-risk procurement guarantee, purchasing power, or after-sales service, as noted in the reasons for irrelevancy: 'The context contains only a file name and no actual content or statements about 网票福多多 or its zero-risk procurement guarantee, purchasing power, or after-sales service.'", "Faithfulness": "The score is 1.00 because there are no contradictions between the actual output and the retrieval context. The actual output perfectly aligns with the information provided, demonstrating excellent faithfulness. Great job!", "Answer Relevancy": "The score is 1.00 because the actual output contains no irrelevant statements; it directly addresses the comparison of 网票福多多's zero-risk procurement guarantee with its actual purchasing power and after-sales service as requested in the input.", "AnswerRecall (回答召回率)": "检索内容为空，无法评估召回率", "Task Completion": "系统未能直接回应用户的具体问题，仅提供了部分信息，且遗漏了关键对比分析的要求；虽然提供了一些可操作的建议，但整体回答不完整，且语气不够专业，未能充分体现销售教练的角色。"}}];
+const SUMMARIES = {"taishan": {"label": "taishan", "model": "(default)", "total": 5, "success": 5, "errors": 0, "avg_latency_ms": 5307.2, "avg_ttft_ms": 109.6, "total_prompt_tokens": 20196, "total_completion_tokens": 1678, "total_tokens": 21874, "avg_scores": {"Answer Relevancy": 0.9209, "AnswerRecall (回答召回率)": 1.0, "Contextual Precision": 0.0, "Contextual Recall": 0.0, "Contextual Relevancy": 0.1548, "Faithfulness": 0.9714, "Task Completion": 0.38, "完整性 (Completeness) [GEval]": 0.24, "正确性 (Correctness) [GEval]": 0.36}, "pass_rates": {"Answer Relevancy": 1.0, "AnswerRecall (回答召回率)": 1.0, "Contextual Precision": 0.0, "Contextual Recall": 0.0, "Contextual Relevancy": 0.2, "Faithfulness": 1.0, "Task Completion": 0.2, "完整性 (Completeness) [GEval]": 0.2, "正确性 (Correctness) [GEval]": 0.4}}};
+const META = {"timestamp": "2026-07-03T03:10:49.605817+00:00", "total_questions": 5, "targets": [{"tenant_id": "taishan", "label": "taishan", "agent_id": null}], "models": ["(default)"]};
+
+const KB_LIST = Object.keys(SUMMARIES);
+const METRIC_NAMES = (() => {
+    const names = new Set();
+    RESULTS.forEach(r => {
+        if (r.metric_scores) Object.keys(r.metric_scores).forEach(k => names.add(k));
+    });
+    return [...names];
+})();
+
+// ── Summary Cards ──
+function renderSummaryCards() {
+    const container = document.getElementById('summary-cards');
+    const totalQuestions = META.total_questions || RESULTS.length;
+    let html = `
+        <div class="card">
+            <div class="label">总问题数</div>
+            <div class="value">${totalQuestions}</div>
+            <div class="sub">${META.targets ? META.targets.length : 1} 个 KB 实例</div>
+        </div>`;
+
+    KB_LIST.forEach(name => {
+        const s = SUMMARIES[name];
+        if (!s) return;
+        const passRate = s.total > 0 ? (s.success / s.total * 100).toFixed(1) : 'N/A';
+        html += `
+        <div class="card">
+            <div class="label">${name} — 成功率</div>
+            <div class="value">${passRate}%</div>
+            <div class="sub">${s.success}/${s.total} 成功, ${s.errors} 错误</div>
+        </div>`;
+    });
+
+    // 平均分数卡片
+    METRIC_NAMES.forEach(m => {
+        const scores = KB_LIST.map(n => SUMMARIES[n]?.avg_scores?.[m] || 0);
+        const avg = scores.length > 0 ? scores.reduce((a,b)=>a+b,0)/scores.length : 0;
+        const cls = avg >= 0.7 ? 'good' : avg >= 0.5 ? 'warn' : 'bad';
+        html += `
+        <div class="card ${cls}">
+            <div class="label">平均 ${m}</div>
+            <div class="value">${avg.toFixed(2)}</div>
+            <div class="sub">${KB_LIST.map((n,i) => `${n}: ${scores[i].toFixed(2)}`).join(' / ')}</div>
+        </div>`;
+    });
+
+    container.innerHTML = html;
+}
+
+// ── KB Comparison Table ──
+function renderKBCompare() {
+    const thead = document.querySelector('#kb-compare thead');
+    const tbody = document.querySelector('#kb-compare tbody');
+
+    thead.innerHTML = `<tr>
+        <th>指标</th>
+        ${KB_LIST.map(n => `<th>${n} 均分</th><th>${n} 通过率</th>`).join('')}
+        ${KB_LIST.length >= 2 ? '<th>差异</th>' : ''}
+    </tr>`;
+
+    tbody.innerHTML = METRIC_NAMES.map(m => {
+        const scores = KB_LIST.map(n => SUMMARIES[n]?.avg_scores?.[m]);
+        const passes = KB_LIST.map(n => SUMMARIES[n]?.pass_rates?.[m]);
+        let diffHtml = '';
+        if (KB_LIST.length >= 2 && scores[0] != null && scores[1] != null) {
+            const diff = scores[0] - scores[1];
+            const cls = diff > 0.05 ? 'diff-positive' : diff < -0.05 ? 'diff-negative' : 'diff-neutral';
+            const arrow = diff > 0.05 ? '← KB1 更好' : diff < -0.05 ? '← KB2 更好' : '持平';
+            diffHtml = `<td class="${cls}">${(diff>0?'+':'')}${diff.toFixed(3)} ${arrow}</td>`;
+        }
+        return `<tr>
+            <td><strong>${m}</strong></td>
+            ${KB_LIST.map((n,i) => `
+                <td>${scores[i] != null ? scores[i].toFixed(3) : '—'}</td>
+                <td>${passes[i] != null ? (passes[i]*100).toFixed(0)+'%' : '—'}</td>
+            `).join('')}
+            ${diffHtml}
+        </tr>`;
+    }).join('');
+}
+
+// ── Bar Chart ──
+function renderBarChart() {
+    const container = document.getElementById('bar-chart');
+    let html = '<h3 style="font-size:15px;margin:20px 0 12px;color:#555">平均分数可视化</h3>';
+
+    METRIC_NAMES.forEach(m => {
+        html += `<div class="bar-row"><div class="bar-label">${m}</div>`;
+        KB_LIST.forEach((n, i) => {
+            const score = SUMMARIES[n]?.avg_scores?.[m] || 0;
+            html += `<div class="bar-track" style="margin-right:4px">
+                <div class="bar-fill kb${i}" style="width:${Math.max(score*100,3)}%">${(score*100).toFixed(0)}%</div>
+            </div>`;
+        });
+        html += '</div>';
+    });
+    container.innerHTML = html;
+}
+
+// ── Question Table ──
+let currentSort = {col: 'question_id', asc: true};
+let expandedRows = new Set();
+let expandedAnswers = new Set();
+
+function sortResults(col, asc) {
+    return [...RESULTS].sort((a,b) => {
+        let va = a[col] ?? '', vb = b[col] ?? '';
+        if (col === 'latency_ms' || col === 'sources_count' || col === 'total_tokens') {
+            va = Number(va); vb = Number(vb);
+        }
+        if (typeof va === 'string') va = va.toLowerCase();
+        if (typeof vb === 'string') vb = vb.toLowerCase();
+        if (va < vb) return asc ? -1 : 1;
+        if (va > vb) return asc ? 1 : -1;
+        return 0;
+    });
+}
+
+function getPassStatus(r) {
+    if (r.error) return 'error';
+    if (!r.metric_success || Object.keys(r.metric_success).length === 0) return 'na';
+    const vals = Object.values(r.metric_success);
+    if (vals.every(v => v)) return 'pass';
+    if (vals.some(v => v)) return 'partial';
+    return 'fail';
+}
+
+const PAGE_SIZE = 50;
+let currentPage = 1;
+
+function goPage(n) { currentPage = n; renderTable(); window.scrollTo(0, 300); }
+
+function renderTable() {
+    const search = (document.getElementById('search').value || '').toLowerCase();
+    const kbFilter = document.getElementById('kb-filter').value;
+    const scoreFilter = document.getElementById('score-filter').value;
+
+    const taskFilter = document.getElementById('task-filter').value;
+
+    let filtered = RESULTS.filter(r => {
+        if (kbFilter !== 'all' && r.kb_label !== kbFilter) return false;
+        if (taskFilter !== 'all' && (r.task_type||'') !== taskFilter) return false;
+        const status = getPassStatus(r);
+        if (scoreFilter !== 'all' && status !== scoreFilter) return false;
+        if (search && !(r.question||'').toLowerCase().includes(search) && !(r.question_id||'').toLowerCase().includes(search)) return false;
+        return true;
+    });
+
+    filtered = sortResults(currentSort.col, currentSort.asc).filter(r => filtered.includes(r));
+
+    const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
+    if (currentPage > totalPages) currentPage = totalPages || 1;
+    const pageItems = filtered.slice((currentPage-1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
+    document.getElementById('result-count').innerHTML = `显示 ${filtered.length} / ${RESULTS.length} 条` +
+        (totalPages > 1 ? ` | 第 ${currentPage}/${totalPages} 页` +
+        ` <button onclick="goPage(1)" ${currentPage<=1?'disabled':''}>«</button>` +
+        ` <button onclick="goPage(${currentPage-1})" ${currentPage<=1?'disabled':''}>‹</button>` +
+        ` <button onclick="goPage(${currentPage+1})" ${currentPage>=totalPages?'disabled':''}>›</button>` +
+        ` <button onclick="goPage(${totalPages})" ${currentPage>=totalPages?'disabled':''}>»</button>` : '');
+
+    // KB filter options
+    const kbSelect = document.getElementById('kb-filter');
+    if (kbSelect.options.length <= 1) {
+        kbSelect.innerHTML = '<option value="all">全部 KB</option>' + KB_LIST.map(n => `<option value="${n}">${n}</option>`).join('');
+    }
+
+    // Task type filter options
+    const taskSelect = document.getElementById('task-filter');
+    if (taskSelect.options.length <= 1) {
+        const types = [...new Set(RESULTS.map(r => r.task_type || '(空)'))].sort();
+        taskSelect.innerHTML = '<option value="all">全部任务类型</option>' + types.map(t => `<option value="${t}">${t}</option>`).join('');
+    }
+
+    // Headers
+    const cols = ['question_id','kb_label','question','task_type','latency_ms','ttft_ms','total_tokens','risk_level'];
+    const thead = document.querySelector('#q-table thead');
+    thead.innerHTML = `<tr>
+        ${cols.map(c => {
+            const labels = {question_id:'ID',kb_label:'KB',question:'问题',task_type:'任务类型',latency_ms:'延迟',ttft_ms:'TTFT',total_tokens:'Token',risk_level:'风险'};
+            const sorted = currentSort.col === c ? ' sorted' : '';
+            const arrow = sorted ? (currentSort.asc ? '▲' : '▼') : '↕';
+            return `<th class="${sorted}" onclick="currentSort={col:'${c}',asc:currentSort.col==='${c}'?!currentSort.asc:true};renderTable()">${labels[c]||c} <span class="sort-icon">${arrow}</span></th>`;
+        }).join('')}
+        ${METRIC_NAMES.map(m => `<th onclick="currentSort={col:'${m}',asc:currentSort.col==='${m}'?!currentSort.asc:true};renderTable()">${m} <span class="sort-icon">↕</span></th>`).join('')}
+        <th>状态</th>
+    </tr>`;
+
+    // Rows
+    const tbody = document.querySelector('#q-table tbody');
+    tbody.innerHTML = pageItems.map((r, i) => {
+        const status = getPassStatus(r);
+        const statusIcon = {pass:'✅',partial:'⚠️',fail:'❌',error:'💥',na:'—'}[status] || '—';
+        const qid = r.question_id || '';
+        const qText = (r.question || '').substring(0, 80);
+        const isExpanded = expandedRows.has(qid + r.kb_label);
+
+        const ttft = r.ttft_ms ? r.ttft_ms + 'ms' : '—';
+        const tok = r.total_tokens ? (r.prompt_tokens||0)+'/'+(r.completion_tokens||0)+'/'+(r.total_tokens||0) : '—';
+
+        let row = `<tr>
+            <td>${qid}</td>
+            <td>${r.kb_label||''}</td>
+            <td class="q-text ${isExpanded?'expanded':''}" onclick="toggleExpand('${qid}','${r.kb_label}')" title="${(r.question||'').replace(/"/g,'&quot;')}">${isExpanded ? (r.question||'') : qText}</td>
+            <td>${r.task_type||''}</td>
+            <td>${r.latency_ms||0}ms</td>
+            <td>${ttft}</td>
+            <td>${tok}</td>
+            <td>${r.risk_level||'none'}</td>
+            ${METRIC_NAMES.map(m => {
+                const score = r.metric_scores?.[m];
+                const success = r.metric_success?.[m];
+                const cls = score == null ? 'na' : success ? 'pass' : 'fail';
+                return `<td><span class="score-badge ${cls}">${score != null ? score.toFixed(2) : '—'}</span></td>`;
+            }).join('')}
+            <td><span class="score-badge ${status==='pass'?'pass':status==='error'?'fail':status==='partial'?'fail':'na'}">${statusIcon}</span></td>
+        </tr>`;
+
+        // Expandable detail row
+        if (isExpanded) {
+            row += `<tr class="detail-row open"><td colspan="${8 + METRIC_NAMES.length}" class="detail-content">
+                <div class="detail-grid">
+                    <div class="detail-item"><div class="k">完整回答</div><div class="v">${(r.answer||'(无)').replace(/</g,'&lt;').replace(/>/g,'&gt;').substring(0, 2000)}</div></div>
+                    ${r.reference ? `<div class="detail-item"><div class="k">参考答案</div><div class="v">${r.reference.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div></div>` : ''}
+                    <div class="detail-item"><div class="k">性能指标</div><div class="v">延迟: ${r.latency_ms||0}ms | TTFT: ${r.ttft_ms||0}ms | Token: 入${r.prompt_tokens||0}/出${r.completion_tokens||0}/总${r.total_tokens||0}</div></div>
+                    <div class="detail-item"><div class="k">指标详情</div><div class="v">
+                        ${METRIC_NAMES.map(m => {
+                            const reason = r.metric_reasons?.[m] || '';
+                            return `<div style="margin:4px 0"><strong>${m}:</strong> ${(r.metric_scores?.[m]||0).toFixed(2)}${reason ? `<div class="reason-box">${reason.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>` : ''}</div>`;
+                        }).join('')}
+                    </div></div>
+                    ${r.error ? `<div class="detail-item"><div class="k">错误</div><div class="v" style="color:#ef4444">${r.error}</div></div>` : ''}
+                </div>
+            </td></tr>`;
+        }
+
+        return row;
+    }).join('');
+}
+
+window.toggleExpand = function(qid, kb) {
+    const key = qid + kb;
+    if (expandedRows.has(key)) expandedRows.delete(key);
+    else expandedRows.add(key);
+    renderTable();
+};
+
+// ── Init ──
+renderSummaryCards();
+renderKBCompare();
+renderBarChart();
+renderTable();
+</script>
+</body>
+</html>

@@ -12,6 +12,20 @@ from pathlib import Path
 from eval.optimizer.state import MetricSnapshot, RoundMetrics
 
 
+def _resolve_knowledge_engine(tenant_id: str, cwd: str | Path | None = None) -> str:
+    """从 deploy/tenants.json 解析租户对应的 knowledge_engine。"""
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent
+    tenants_file = repo_root / "deploy" / "tenants.json"
+    try:
+        data = json.loads(tenants_file.read_text(encoding="utf-8"))
+        for t in data.get("tenants", []):
+            if t.get("id") == tenant_id:
+                return t.get("knowledge_engine", "legacy_rag")
+    except Exception:
+        pass
+    return "legacy_rag"
+
+
 def run_evaluate(
     tenant_id: str,
     golden_file: str,
@@ -47,24 +61,31 @@ def run_evaluate(
     if limit > 0:
         cmd.extend(["--limit", str(limit)])
 
-    # 加载 .env
+    # 加载 .env + 租户 secrets（Neo4j 等配置）
     env_file = Path(cwd) / ".env"
-    env = None
-    if env_file.is_file():
-        env = {}
-        for line in env_file.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if "=" in line:
-                k, _, v = line.partition("=")
-                env[k.strip()] = v.strip().strip('"').strip("'")
-        # 合并当前环境
+    env: dict[str, str] = {}
+    for ef in [env_file, Path(cwd) / "secrets" / f"{tenant_id}.env"]:
+        if ef.is_file():
+            for line in ef.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    k, _, v = line.partition("=")
+                    env[k.strip()] = v.strip().strip('"').strip("'")
+    if env:
         import os
         full_env = os.environ.copy()
         full_env.update(env)
-        # 设 TENANT_ID
+        # 设 TENANT_ID + 覆盖 KNOWLEDGE_ENGINE（从 tenants.json 读取）
         full_env["TENANT_ID"] = tenant_id
+        _engine = _resolve_knowledge_engine(tenant_id, cwd)
+        if _engine:
+            full_env["KNOWLEDGE_ENGINE"] = _engine
+        # 修正 Docker 内部 hostname → localhost（宿主机运行 eval 时）
+        neo4j_uri = full_env.get("NEO4J_URI", "")
+        if neo4j_uri and "://neo4j:" in neo4j_uri:
+            full_env["NEO4J_URI"] = neo4j_uri.replace("://neo4j:", "://localhost:")
         env = full_env
 
     result = subprocess.run(
@@ -102,9 +123,9 @@ def _parse_eval_result(json_path: str) -> RoundMetrics:
     """解析 DeepEval 结果 JSON，提取汇总指标和逐题指标。"""
     data = json.loads(Path(json_path).read_text(encoding="utf-8"))
 
-    # data 可能是 list[dict] 或 {"results": [...]}
+    # data 可能是 list[dict] 或 {"details": [...]} 或 {"results": [...]}
     if isinstance(data, dict):
-        results_list = data.get("results", [])
+        results_list = data.get("details") or data.get("results") or []
     else:
         results_list = data
 
@@ -144,7 +165,14 @@ def _parse_eval_result(json_path: str) -> RoundMetrics:
 
     # 汇总指标
     scores = _compute_avg_scores(per_question, total)
-    pass_rate = success / total if total > 0 else 0.0
+    # 质量 pass_rate：生成质量为主（Correctness + Faithfulness），检索质量为辅
+    quality_pass = (
+        scores.get("avg_correctness", 0) * 0.40
+        + scores.get("avg_faithfulness", 0) * 0.30
+        + scores.get("avg_contextual_recall", 0) * 0.15
+        + scores.get("avg_contextual_relevancy", 0) * 0.15
+    )
+    pass_rate = quality_pass
 
     return RoundMetrics(
         round=0,  # 由调用者设置

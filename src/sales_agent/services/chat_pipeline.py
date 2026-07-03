@@ -515,83 +515,153 @@ class ChatPipeline:
 
             try:
                 # =============================================
-                # 9. RAG 检索（条件化）
+                # 9. 检索（支持 hybrid: ontology + RAG 并行）
                 # =============================================
                 sources: list[dict] = []
                 retrieval_result = None
                 retrieval_info: dict[str, Any] = {}
                 skip_generation = False
+                ontology_graph_evidence: Any = None  # hybrid 模式下的图谱证据
+                ontology_context_text: str = ""      # hybrid 模式下的图谱上下文
 
-                if path_result.needs_retrieval and self.settings.ontology.knowledge_engine == "ontology_neo4j":
-                    # 知识图谱路径：路由到 OntologyAnswerService，跳过后续 agent 生成
-                    timings.start("ontology_answer")
-                    # 解析 ontology 回答 prompt（DB 版本管理，三级回退）
-                    from sales_agent.services.prompt_registry import PromptRegistry
-                    _onto_prompt = None
-                    try:
-                        _onto_prompt = await PromptRegistry(self.db).resolve_prompt(
-                            "ontology", "answer", tenant_id, resolved_agent_id,
-                        )
-                    except Exception:
-                        pass  # 回退到内置 ONTOLOGY_RESPONSE_PROMPT
-                    ontology_answer_service = _build_ontology_answer_service(self.settings, model_provider)
-                    ontology_result = await ontology_answer_service.answer_for_task(
-                        tenant_id=tenant_id,
-                        agent_id=resolved_agent_id,
-                        task_type=task_type,
-                        message=message,
-                        prompt_text=_onto_prompt,
-                    )
-                    answer_dict = ontology_result.answer
-                    sources = ontology_result.sources
-                    retrieval_info = {
-                        "called": True,
-                        "provider": "ontology_neo4j",
-                        "graph_evidence": ontology_result.graph_evidence.to_dict(),
-                    }
-                    timings.end("ontology_answer")
-                    await tracer.record_step(
-                        "ontology_answer",
-                        latency_ms=int(timings.stages.get("ontology_answer", 0)),
-                        metadata=retrieval_info,
-                    )
-                    retrieval_result = None
-                    skip_generation = True
-                elif path_result.needs_retrieval:
-                    timings.start("retrieval")
-                    retriever = _build_retriever(self.db, model_provider.embedding)
-                    retrieval_result = await retriever.retrieve_for_task(
-                        tenant_id=tenant_id,
-                        message=message,
-                        task_type=task_type,
-                        needs_retrieval=needs_retrieval,
-                        allowed_document_ids=allowed_doc_ids,
-                        knowledge_version_id=pinned_knowledge_version_id,
-                    )
-                    sources = [s.to_source_item() for s in retrieval_result.sources]
-                    retrieval_info = {
-                        "called": True,
-                        "top_k": self.settings.retrieval.top_k,
-                        "source_count": len(sources),
-                        "skip_reason": "",
-                    }
-                    timings.end("retrieval")
-                    await tracer.record_step(
-                        "retrieval",
-                        latency_ms=int(timings.stages.get("retrieval", 0)),
-                        metadata=retrieval_info,
-                    )
-                    # Record structured retrieval trace with per-channel hits
-                    await tracer.record_retrieval_trace(
-                        original_query=message,
-                        top_k=self.settings.retrieval.top_k,
-                        vector_weight=1.0 - self.settings.retrieval.keyword_weight,
-                        keyword_weight=self.settings.retrieval.keyword_weight,
-                        rrf_constant=self.settings.retrieval.rrf_k,
-                        retrieval_triggered=True,
-                        trace_hits=getattr(retrieval_result, "trace_hits", []),
-                        retrieval_latency_ms=retrieval_result.retrieval_latency_ms,
-                    )
+                if path_result.needs_retrieval:
+                    use_hybrid = self.settings.ontology.hybrid_retrieval
+                    engine = self.settings.ontology.knowledge_engine
+                    use_onto = use_hybrid or engine == "ontology_neo4j"
+                    use_rag = use_hybrid or engine != "ontology_neo4j"
+
+                    # 并行执行 ontology + RAG（asyncio.gather）
+                    async def _run_ontology():
+                        """运行 ontology 检索（仅获取 GraphEvidence，不生成答案）。"""
+                        nonlocal ontology_graph_evidence, ontology_context_text
+                        from sales_agent.ontology.answer_service import graph_evidence_to_sources
+                        try:
+                            ontology_service = _build_ontology_answer_service(
+                                self.settings, model_provider,
+                            )
+                            evidence = await ontology_service.retrieval.retrieve(
+                                tenant_id=tenant_id,
+                                agent_id=resolved_agent_id,
+                                question=message,
+                            )
+                            ontology_graph_evidence = evidence
+                            onto_sources = graph_evidence_to_sources(evidence)
+                            ontology_context_text = evidence.to_context_text()
+                            return ("ontology", onto_sources, evidence)
+                        except Exception as e:
+                            logger.warning("Ontology retrieval failed (hybrid fallback): %s", e)
+                            return ("ontology_error", [], None)
+
+                    async def _run_rag():
+                        """运行 RAG 检索。"""
+                        try:
+                            retriever = _build_retriever(self.db, model_provider.embedding)
+                            rr = await retriever.retrieve_for_task(
+                                tenant_id=tenant_id,
+                                message=message,
+                                task_type=task_type,
+                                needs_retrieval=needs_retrieval,
+                                allowed_document_ids=allowed_doc_ids,
+                                knowledge_version_id=pinned_knowledge_version_id,
+                            )
+                            rag_sources = [s.to_source_item() for s in rr.sources]
+                            return ("rag", rag_sources, rr)
+                        except Exception as e:
+                            logger.warning("RAG retrieval failed (hybrid fallback): %s", e)
+                            return ("rag_error", [], None)
+
+                    import asyncio
+                    tasks = []
+                    if use_onto:
+                        tasks.append(_run_ontology())
+                    if use_rag:
+                        tasks.append(_run_rag())
+
+                    if tasks:
+                        gather_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                        # 合并结果
+                        all_sources: list[dict] = []
+                        for item in gather_results:
+                            if isinstance(item, Exception):
+                                logger.warning("Retrieval task failed: %s", item)
+                                continue
+                            tag, srcs, result_obj = item
+                            if tag in ("ontology",):
+                                all_sources.extend(srcs)
+                            elif tag in ("rag",):
+                                all_sources.extend(srcs)
+                                retrieval_result = result_obj
+                            # tag in ("ontology_error", "rag_error"): skip
+
+                        sources = all_sources
+
+                        # 兜底：hybrid 检索全部为空 → 联网搜索（Bocha）
+                        if not sources and self.settings.web_search.enabled:
+                            try:
+                                from sales_agent.services.web_search import (
+                                    bocha_search, web_search_sources_to_context,
+                                )
+                                web_result = await bocha_search(
+                                    query=message,
+                                    api_key=self.settings.web_search.api_key,
+                                    top_n=self.settings.web_search.top_n,
+                                )
+                                if web_result.success and web_result.sources:
+                                    sources = web_result.sources
+                                    if web_result.raw_answer:
+                                        ontology_context_text = (
+                                            ontology_context_text
+                                            + "\n\n"
+                                            + web_search_sources_to_context(web_result)
+                                        ).strip()
+                                    logger.info(
+                                        "Web search fallback: %d sources for query=%s",
+                                        len(sources), message[:80],
+                                    )
+                            except Exception as e:
+                                logger.warning("Web search fallback failed: %s", e)
+
+                        retrieval_info = {
+                            "called": True,
+                            "provider": "hybrid" if use_hybrid else engine,
+                            "source_count": len(sources),
+                            "ontology_used": use_onto and ontology_graph_evidence is not None,
+                            "rag_used": use_rag and retrieval_result is not None,
+                            "web_search_used": any(
+                                isinstance(s, dict) and s.get("source_type") == "web_search"
+                                for s in sources
+                            ) if sources else False,
+                        }
+                        if ontology_graph_evidence:
+                            retrieval_info["graph_evidence"] = ontology_graph_evidence.to_dict()
+                            # Record ontology trace
+                            await tracer.record_step(
+                                "ontology_answer",
+                                latency_ms=int(ontology_graph_evidence.timings_ms.get("ontology_retrieval", 0)),
+                                metadata={"provider": "ontology_neo4j", "graph_evidence": ontology_graph_evidence.to_dict()},
+                            )
+                        if retrieval_result:
+                            retrieval_info["top_k"] = self.settings.retrieval.top_k
+                            # Record retrieval trace
+                            await tracer.record_step(
+                                "retrieval",
+                                latency_ms=int(retrieval_result.retrieval_latency_ms),
+                                metadata={"top_k": self.settings.retrieval.top_k, "source_count": len(sources)},
+                            )
+                            await tracer.record_retrieval_trace(
+                                original_query=message,
+                                top_k=self.settings.retrieval.top_k,
+                                vector_weight=1.0 - self.settings.retrieval.keyword_weight,
+                                keyword_weight=self.settings.retrieval.keyword_weight,
+                                rrf_constant=self.settings.retrieval.rrf_k,
+                                retrieval_triggered=True,
+                                trace_hits=getattr(retrieval_result, "trace_hits", []),
+                                retrieval_latency_ms=retrieval_result.retrieval_latency_ms,
+                            )
+                    else:
+                        retrieval_info = {"called": False, "reason": "no_engine_configured"}
+                        await tracer.record_step("retrieval", status="skipped", metadata=retrieval_info)
                 else:
                     retrieval_info = {
                         "called": False,
@@ -701,6 +771,35 @@ class ChatPipeline:
                     coach_guidance_text = ""
 
                 # =============================================
+                # 9c. 联网搜索兜底：hybrid/rag/ontology 全部为空 → Bocha
+                # =============================================
+                if not sources and self.settings.web_search.enabled:
+                    try:
+                        from sales_agent.services.web_search import (
+                            bocha_search, web_search_sources_to_context,
+                        )
+                        web_result = await bocha_search(
+                            query=message,
+                            api_key=self.settings.web_search.api_key,
+                            top_n=self.settings.web_search.top_n,
+                        )
+                        if web_result.success and web_result.sources:
+                            sources = web_result.sources
+                            web_ctx = web_search_sources_to_context(web_result)
+                            ontology_context_text = (
+                                (ontology_context_text + "\n\n" + web_ctx).strip()
+                                if ontology_context_text else web_ctx
+                            )
+                            retrieval_info["web_search_used"] = True
+                            retrieval_info["web_search_source_count"] = len(sources)
+                            logger.info(
+                                "Web search fallback: %d sources for query=%s",
+                                len(sources), message[:80],
+                            )
+                    except Exception as e:
+                        logger.warning("Web search fallback failed: %s", e)
+
+                # =============================================
                 # 10. Agent 执行（知识图谱路径已在检索阶段预计算 answer_dict，
                 #     通过 skip_generation 跳过 agent LLM 生成，保留图谱答案）
                 # =============================================
@@ -724,6 +823,7 @@ class ChatPipeline:
                         tenant_style=tenant_style,
                         prompt_text=prompt_text,
                         system_prompt_text=system_prompt_text,
+                        ontology_context=ontology_context_text,
                     )
 
                     # 标准化卡片类任务输出（访前作战卡、访后机会推进卡）

@@ -42,12 +42,12 @@ class ObservabilityApiClient:
     ) -> None:
         self._base = base_url.rstrip("/")
         self._token = token
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         self._client = httpx.AsyncClient(
             transport=transport,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
             timeout=_DEFAULT_TIMEOUT,
         )
 

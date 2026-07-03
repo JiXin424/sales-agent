@@ -23,6 +23,7 @@ from eval.optimizer.tools.synthesize import run_synthesize
 from eval.optimizer.tools.evaluate import run_evaluate
 from eval.optimizer.tools.triage import diagnose
 from eval.optimizer.tools.tune_retrieval import tune_retrieval, apply_tuning
+from eval.optimizer.tools.evaluate import _resolve_knowledge_engine
 from eval.optimizer.tools.judge import judge_convergence
 
 logger = logging.getLogger(__name__)
@@ -32,16 +33,25 @@ logger = logging.getLogger(__name__)
 
 
 async def node_synthesize(state: OptimizerState) -> dict:
-    """出题节点：生成 Golden 测试数据。"""
-    logger.info("[Round %d] Synthesizing goldens from %s", state["round"], state["docs_dir"])
-    output_dir = str(Path(state["output_dir"]) / f"round_{state['round']:02d}")
+    """出题节点：生成 Golden 测试数据（首轮），后续轮复用已有文件。"""
+    round_num = state["round"]
+    output_dir = str(Path(state["output_dir"]) / f"round_{round_num:02d}")
+
+    # 后续轮复用 Round 1 的 goldens，避免重复合成（DeepSeek JSON 不稳定）
+    if round_num > 1:
+        golden_file = str(Path(state["output_dir"]) / "round_01" / "goldens.json")
+        if Path(golden_file).is_file():
+            logger.info("[Round %d] Reusing goldens from %s", round_num, golden_file)
+            return {"golden_file": golden_file}
+
+    logger.info("[Round %d] Synthesizing goldens from %s", round_num, state["docs_dir"])
     json_path, count = run_synthesize(
         docs_dir=state["docs_dir"],
         output_dir=output_dir,
         max_goldens=0,  # 不限总量，让 limit-per-doc 控制
         limit_per_doc=3,  # 每轮每篇文档 3 题
     )
-    logger.info("[Round %d] Generated %d goldens → %s", state["round"], count, json_path)
+    logger.info("[Round %d] Generated %d goldens → %s", round_num, count, json_path)
     return {"golden_file": json_path}
 
 
@@ -84,12 +94,17 @@ async def node_tune_retrieval(state: OptimizerState) -> dict:
     metrics: "RoundMetrics" = state["_metrics"]
     current_config = state.get("retrieval_config", {})
 
-    # 从 metrics 中筛选低分题目
+    # 从 metrics 中筛选低分题目（检索指标低 或 生成质量低）
     low_cases = [
         snap for snap in metrics.per_question
-        if not snap.error and min(snap.contextual_recall, snap.contextual_relevancy) < 0.3
+        if not snap.error and (
+            min(snap.contextual_recall, snap.contextual_relevancy) < 0.3
+            or snap.correctness < 0.4
+            or snap.faithfulness < 0.5
+        )
     ]
-    low_cases.sort(key=lambda s: min(s.contextual_recall, s.contextual_relevancy))
+    # 按综合质量排序：correctness + faithfulness 越低越靠前
+    low_cases.sort(key=lambda s: s.correctness + s.faithfulness)
     low_cases = low_cases[:10]
 
     tuning = await tune_retrieval(
@@ -97,22 +112,30 @@ async def node_tune_retrieval(state: OptimizerState) -> dict:
         diagnosis=diag,
         low_score_cases=low_cases,
         current_config=current_config,
+        engine_type=_resolve_knowledge_engine(state["tenant_id"]),
     )
 
     logger.info("[Round %d] Tuning suggestion: %s", state["round"], tuning)
 
-    # 应用配置
-    if tuning.top_k or tuning.chunk_size or tuning.chunk_overlap:
+    # 应用配置（检查是否有任何变更）
+    has_change = any([
+        tuning.top_k, tuning.chunk_size, tuning.chunk_overlap,
+        tuning.entity_limit, tuning.facts_per_entity,
+        tuning.max_entities_for_prompt, tuning.max_facts_for_prompt,
+        tuning.vector_fallback_top_k,
+    ])
+    if has_change:
         await apply_tuning(state["tenant_id"], tuning)
 
-    # 更新 state
+    # 更新 state（RAG + Ontology 全量同步）
     new_config = dict(current_config)
-    if tuning.top_k is not None:
-        new_config["top_k"] = tuning.top_k
-    if tuning.chunk_size is not None:
-        new_config["chunk_size"] = tuning.chunk_size
-    if tuning.chunk_overlap is not None:
-        new_config["chunk_overlap"] = tuning.chunk_overlap
+    for key in ("top_k", "chunk_size", "chunk_overlap",
+                "entity_limit", "facts_per_entity",
+                "max_entities_for_prompt", "max_facts_for_prompt",
+                "vector_fallback_top_k"):
+        val = getattr(tuning, key, None)
+        if val is not None:
+            new_config[key] = val
 
     action = RoundAction(
         round=state["round"],

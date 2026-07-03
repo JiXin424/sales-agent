@@ -110,12 +110,27 @@ class LoggingConfig(BaseModel):
 class OntologyConfig(BaseModel):
     """Ontology knowledge engine config."""
 
-    knowledge_engine: str = "legacy_rag"  # legacy_rag | ontology_neo4j
+    knowledge_engine: str = "legacy_rag"  # legacy_rag | ontology_neo4j | hybrid
+    hybrid_retrieval: bool = False  # True = 同时跑 ontology + RAG，LLM 整合
     vector_fallback: str = "conservative"
     # 视觉模型名称（用于图片/扫描件解读，默认为 qwen-vl-plus）
     vision_model: str = "qwen-vl-plus"
     # 是否在 ingestion 中开启图片视觉解读（默认关闭）
     vision_enabled: bool = False
+    # ── 运行时可控的检索参数（优化器可调） ──
+    entity_limit: int = 15          # Cypher 返回的最多实体数
+    facts_per_entity: int = 20      # 每个实体的最多 fact 数
+    max_entities_for_prompt: int = 10   # 塞给 LLM 的最多实体数
+    max_facts_for_prompt: int = 25      # 塞给 LLM 的最多 fact 数
+    vector_fallback_top_k: int = 5      # 向量回退返回数
+
+
+class WebSearchConfig(BaseModel):
+    """联网搜索兜底配置（Bocha API）。"""
+
+    enabled: bool = False
+    api_key: str = ""
+    top_n: int = 5
 
 
 class Neo4jConfig(BaseModel):
@@ -169,6 +184,7 @@ class Settings(BaseModel):
     path_router: PathRouterConfig = PathRouterConfig()
     ontology: OntologyConfig = OntologyConfig()
     neo4j: Neo4jConfig = Neo4jConfig()
+    web_search: WebSearchConfig = WebSearchConfig()
 
     # 延迟导入避免循环依赖
     @property
@@ -284,6 +300,9 @@ class Settings(BaseModel):
         knowledge_engine = os.getenv("KNOWLEDGE_ENGINE")
         if knowledge_engine:
             raw.setdefault("ontology", {})["knowledge_engine"] = knowledge_engine
+        hybrid_retrieval = os.getenv("HYBRID_RETRIEVAL", "").lower()
+        if hybrid_retrieval in ("1", "true", "yes"):
+            raw.setdefault("ontology", {})["hybrid_retrieval"] = True
 
         ontology_vector_fallback = os.getenv("ONTOLOGY_VECTOR_FALLBACK")
         if ontology_vector_fallback:
@@ -300,6 +319,15 @@ class Settings(BaseModel):
         neo4j_overrides = {k: v for k, v in neo4j_env.items() if v}
         if neo4j_overrides:
             raw.setdefault("neo4j", {}).update(neo4j_overrides)
+
+        # 环境变量覆盖 web_search 配置
+        web_search_api_key = os.getenv("BOCHA_API_KEY", "")
+        if web_search_api_key:
+            raw.setdefault("web_search", {})["api_key"] = web_search_api_key
+            raw.setdefault("web_search", {})["enabled"] = True
+        web_search_top_n = os.getenv("BOCHA_TOP_N", "")
+        if web_search_top_n:
+            raw.setdefault("web_search", {})["top_n"] = int(web_search_top_n)
 
         instance = cls(**raw)
         # 构造 DingTalkConfig 并设置到 instance

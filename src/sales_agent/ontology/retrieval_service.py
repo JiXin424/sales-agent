@@ -102,12 +102,13 @@ class OntologyRetrievalService:
                 "Ontology graph query returned 0 entities for terms=%s, trying vector fallback",
                 search_terms,
             )
+            from sales_agent.core.config import get_settings
             embedding = (await self.embedding_model.embed([question]))[0]
             vector_rows = await self.repository.query_vector({
                 "tenant_id": tenant_id,
                 "agent_id": agent_id,
                 "embedding": embedding,
-                "limit": 5,
+                "limit": get_settings().ontology.vector_fallback_top_k,
             })
             vector_used = True
             for row in vector_rows:

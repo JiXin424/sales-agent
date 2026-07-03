@@ -94,6 +94,51 @@ class GraphEvidence:
             "timings_ms": self.timings_ms,
         }
 
+    def to_context_text(self) -> str:
+        """将图谱证据格式化为 LLM 可读的上下文字符串。
+
+        供 hybrid 模式使用——把 ontology 检索结果注入 execute_agent 的 prompt。
+        """
+        lines = ["## 知识图谱检索结果（Ontology Neo4j）", ""]
+
+        if self.matched_entities:
+            lines.append(f"**匹配实体** ({len(self.matched_entities)} 个)：")
+            for e in self.matched_entities[:5]:
+                name = e.get("name") or e.get("title", "?")
+                etype = e.get("type", "")
+                lines.append(f"  - {name}" + (f" ({etype})" if etype else ""))
+            lines.append("")
+
+        if self.facts_used:
+            lines.append(f"**图谱事实** ({len(self.facts_used)} 条)：")
+            for f in self.facts_used[:10]:
+                predicate = f.get("predicate") or f.get("name", "")
+                value = f.get("value") or f.get("content") or f.get("text", "")
+                if predicate and value:
+                    lines.append(f"  - {predicate}: {value}")
+                elif value:
+                    lines.append(f"  - {value}")
+                elif predicate:
+                    lines.append(f"  - {predicate}")
+            lines.append("")
+
+        if self.evidence:
+            lines.append(f"**证据片段** ({len(self.evidence)} 条)：")
+            for ev in self.evidence[:5]:
+                text = ev.get("content") or ev.get("text") or ev.get("value", "")
+                if text:
+                    lines.append(f"  > {str(text)[:300]}")
+            lines.append("")
+
+        if self.source_documents:
+            lines.append(f"**来源文档** ({len(self.source_documents)} 个)：")
+            for doc in self.source_documents[:5]:
+                title = doc.get("title") or doc.get("name", "?")
+                lines.append(f"  - {title}")
+            lines.append("")
+
+        return "\n".join(lines) if len(lines) > 2 else ""
+
 
 @dataclass
 class OntologyAnswer:

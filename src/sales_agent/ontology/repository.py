@@ -170,9 +170,11 @@ class OntologyRepository:
             return row["id"] if row else params["fact_id"]
 
     async def retrieve_by_query(self, params: dict[str, Any]) -> list[dict[str, Any]]:
-        # 设置默认值：最多 15 个实体，每个实体最多 20 条事实
-        params.setdefault("entity_limit", 15)
-        params.setdefault("facts_per_entity", 20)
+        # 从配置读取默认值（运行时参数，优化器可调）
+        from sales_agent.core.config import get_settings
+        onto = get_settings().ontology
+        params.setdefault("entity_limit", onto.entity_limit)
+        params.setdefault("facts_per_entity", onto.facts_per_entity)
         async with self.client.session() as session:
             result = await session.run(retrieval_statement(), params)
             return [dict(record) async for record in result]

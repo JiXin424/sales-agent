@@ -284,7 +284,15 @@ def _deduplicate(items: list[QuestionItem]) -> list[QuestionItem]:
                 deduped[found_key] = item
             elif item.has_reference == existing.has_reference:
                 source_order = ["qa_extracted.md", "questions.md", "ground_truth_30q.json"]
-                if source_order.index(item.source) < source_order.index(existing.source):
+                try:
+                    item_rank = source_order.index(item.source)
+                except ValueError:
+                    item_rank = len(source_order)  # unknown sources get lowest priority
+                try:
+                    existing_rank = source_order.index(existing.source)
+                except ValueError:
+                    existing_rank = len(source_order)
+                if item_rank < existing_rank:
                     deduped[found_key] = item
         else:
             deduped[norm] = item
@@ -370,6 +378,60 @@ def _extract_sources(sources: list[dict] | None) -> list[str]:
 
 _MAX_ACTUAL_OUTPUT_CHARS = 2500
 _MAX_SOURCE_CHARS = 1500
+
+
+def _is_ontology_engine() -> bool:
+    """检查当前租户是否使用 ontology 相关的知识引擎（ontology_neo4j 或 hybrid）。"""
+    from sales_agent.core.config import get_settings
+    settings = get_settings()
+    return settings.ontology.knowledge_engine in ("ontology_neo4j", "hybrid")
+
+
+async def _fetch_ontology_sources(
+    tenant_id: str,
+    agent_id: str | None,
+    message: str,
+    db,
+) -> list[str]:
+    """当 pipeline sources 为空时，直接查询 ontology 获取事实作为 source 文本。"""
+    try:
+        from sales_agent.ontology.retrieval_service import OntologyRetrievalService
+        from sales_agent.ontology.repository import OntologyRepository
+        from sales_agent.ontology.neo4j_client import Neo4jClient
+        from sales_agent.core.config import get_settings
+        from sales_agent.llm.openai_compatible import OpenAICompatibleEmbedding
+        import os as _os
+
+        settings = get_settings()
+        neo4j_client = Neo4jClient(settings.neo4j)
+        repo = OntologyRepository(neo4j_client)
+
+        # 用 app 原生 embedding model（支持 DashScope text-embedding-v3）
+        embedder = OpenAICompatibleEmbedding(
+            model=_os.getenv("EMBEDDING_MODEL", "text-embedding-v3"),
+            api_key=_os.getenv("EMBEDDING_API_KEY", ""),
+            base_url=_os.getenv("EMBEDDING_BASE_URL", ""),
+        )
+        # chat_model=None → 跳过 LLM 实体提取，用原始问题直接检索
+        retriever = OntologyRetrievalService(repo, embedder, chat_model=None)
+        result = await retriever.retrieve(
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            question=message,
+        )
+        raw_docs = result.source_documents if result.source_documents else result.facts_used
+        texts = []
+        for doc in raw_docs[:5]:
+            text = (
+                doc.get("content") or doc.get("text") or doc.get("value")
+                or doc.get("snippet") or doc.get("title") or doc.get("name", "")
+            )
+            if text:
+                texts.append(str(text)[:_MAX_SOURCE_CHARS])
+        return texts
+    except Exception as e:
+        logger.warning("Failed to fetch ontology sources for eval: %s", e)
+        return []
 
 
 async def call_agent_pipeline(
@@ -459,6 +521,12 @@ async def call_agent_pipeline(
 
                 # 检索来源
                 response.sources = _extract_sources(result.sources or [])
+
+                # ontology_neo4j 兜底：路由未触发检索时直接查图谱获取事实做 retrieval_context
+                if not response.sources and _is_ontology_engine():
+                    response.sources = await _fetch_ontology_sources(
+                        tenant_id, agent_id, question.text, db,
+                    )
 
                 # 风险
                 response.risk_level = result.risk_result.level

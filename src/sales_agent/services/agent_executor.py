@@ -137,6 +137,7 @@ async def execute_agent(
     tenant_style: dict[str, Any] | None = None,
     prompt_text: str | None = None,
     system_prompt_text: str | None = None,
+    ontology_context: str = "",
 ) -> dict[str, Any]:
     """执行 Agent：构建 prompt，调用模型，返回结构化回答。
 
@@ -147,6 +148,7 @@ async def execute_agent(
         context: 用户提供的上下文
         retrieval_result: RAG 检索结果
         history_messages: 多轮历史消息
+        ontology_context: Ontology 图谱检索结果（hybrid 模式）
         tenant_style: 租户话术风格配置
         prompt_text: 运行时解析的 prompt 模板文本（可选）。
             为 None 时回退到 _TASK_PROMPTS 静态映射。
@@ -164,6 +166,7 @@ async def execute_agent(
         tenant_style=tenant_style,
         prompt_text=prompt_text,
         system_prompt_text=system_prompt_text,
+        ontology_context=ontology_context,
     )
 
     # 2. 调用模型
@@ -197,6 +200,7 @@ def _build_messages(
     tenant_style: dict[str, Any] | None = None,
     prompt_text: str | None = None,
     system_prompt_text: str | None = None,
+    ontology_context: str = "",
 ) -> list[dict[str, str]]:
     """构建发送给模型的消息列表。
 
@@ -205,6 +209,8 @@ def _build_messages(
     Args:
         prompt_text: 运行时解析的 task prompt 模板；None 时回退到 _TASK_PROMPTS。
         system_prompt_text: 运行时解析的 system prompt；None 时回退到 SYSTEM_CONSTRAINT。
+        ontology_context: Ontology 图谱检索上下文（hybrid 模式），
+            追加到 retrieval_content 后面。
     """
     # 1. 获取 prompt 模板：优先运行时解析的模板，否则回退到默认映射
     template = prompt_text or _TASK_PROMPTS.get(task_type, _DEFAULT_TASK_PROMPT)
@@ -219,6 +225,10 @@ def _build_messages(
     else:
         retrieval_block = _build_retrieval_block(retrieval_result)
         retrieval_content = ""
+
+    # 3b. Ontology 上下文追加（hybrid 模式）
+    if ontology_context:
+        retrieval_content = (retrieval_content + "\n\n" + ontology_context).strip()
 
     # 4. 填充模板
     user_prompt = template.format(
@@ -257,6 +267,7 @@ async def stream_execute_agent(
     tenant_style: dict[str, Any] | None = None,
     prompt_text: str | None = None,
     system_prompt_text: str | None = None,
+    ontology_context: str = "",
 ) -> AsyncIterator[str]:
     """流式执行 Agent：构建 prompt，流式调用模型，yield 原始文本块。
 
@@ -287,6 +298,7 @@ async def stream_execute_agent(
         tenant_style=tenant_style,
         prompt_text=prompt_text,
         system_prompt_text=system_prompt_text,
+        ontology_context=ontology_context,
     )
 
     start_time = time.time()

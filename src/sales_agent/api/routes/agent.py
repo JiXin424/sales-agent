@@ -1,12 +1,13 @@
-"""Agent Chat 路由 — 委托 ChatPipeline 或 LangGraph 执行。
+"""Agent Chat 路由 — 使用 LangGraph StateGraph 执行。
 
-P0: Graph execution now includes Store for cross-session memory
-     and supports ``interrupt_before``/``interrupt_after`` for HITL.
+统一使用 Graph 路径（与钉钉 Stream 同一管线）。
+ChatPipeline 已废弃删除。
 """
 
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -20,10 +21,8 @@ from sales_agent.core.exceptions import (
     SalesAgentError,
 )
 from sales_agent.core.tenant_runtime import get_tenant_runtime
-from sales_agent.graph.chat_graph import build_chat_graph_compiled
-from sales_agent.graph.checkpoints import get_checkpointer, get_store
 from sales_agent.models.base import generate_id
-from sales_agent.services.chat_pipeline import ChatPipeline
+from sales_agent.services.online_conversation import invoke_online_turn
 from sales_agent.services.response_formatter import build_chat_response
 
 logger = logging.getLogger(__name__)
@@ -33,7 +32,6 @@ router = APIRouter(tags=["agent"])
 
 async def _execute_via_graph(
     db: AsyncSession,
-    chat_model: Any,
     tenant_id: str,
     user_id: str,
     message: str,
@@ -42,112 +40,136 @@ async def _execute_via_graph(
     agent_id: str | None = None,
     model_override: str | None = None,
 ) -> dict:
-    """Execute chat via LangGraph StateGraph (parallel path to ChatPipeline).
+    """Execute chat via the Unified Online Conversation Graph.
 
-    P0: Uses ``build_chat_graph_compiled`` with checkpointer and store
-    for cross-session memory. Common ``interrupt_before`` and
-    ``interrupt_after`` options can be passed to enable HITL.
+    Delegates to ``invoke_online_turn`` instead of compiling a per-request
+    Chat Graph.  Keeps the same public signature for backward compatibility.
 
     Args:
         db: Database session (placed in Runtime.context for graph nodes).
-        chat_model: ChatModel instance (placed in Runtime.context for generation).
         tenant_id: Tenant identifier.
         user_id: User identifier.
         message: User message text.
         conversation_id: Optional existing conversation ID.
         channel: Channel identifier (local, dingtalk, etc.).
         agent_id: Optional agent identifier.
-        model_override: Optional model name override.
+        model_override: Optional model name override (deprecated, models
+            resolved by runtime).
 
     Returns:
-        Final graph state dict after full pipeline execution.
+        Final graph state dict after full pipeline execution, with fields
+        mapped to the shape expected by the chat and eval route handlers.
     """
-    import uuid
-    from langgraph.checkpoint.memory import InMemorySaver
-    from langgraph.store.memory import InMemoryStore
-
-    checkpointer = InMemorySaver()  # P0: could use get_checkpointer()
-    store = InMemoryStore()         # P0: cross-session memory
-
-    graph = build_chat_graph_compiled(
-        checkpointer=checkpointer,
-        store=store,
+    result = await invoke_online_turn(
+        db=db,
+        tenant_id=tenant_id,
+        agent_id=agent_id,
+        user_id=user_id,
+        session_user_id=user_id,  # HTTP: use user_id as session_user_id
+        channel=channel,
+        conversation_id=conversation_id or generate_id(),
+        message=message,
+        entry_action=None,  # HTTP: no DingTalk entry_action
+        event_id=None,  # HTTP: no DingTalk event_id
+        chat_model=None,  # resolved by TenantResolver at runtime
+        embedding_model=None,
     )
 
-    result = await graph.ainvoke(
-        {
-            "tenant_id": tenant_id,
-            "user_id": user_id,
-            "message": message,
-            "conversation_id": conversation_id or str(uuid.uuid4()),
-            "channel": channel,
-            "agent_id": agent_id,
-            "model_override": model_override,
-        },
-        config={"configurable": {"thread_id": conversation_id or str(uuid.uuid4())}},
-        context={
-            "db": db,
-            "chat_model": chat_model,
-        },
-        durability="sync",  # P2: safe sync checkpoint for HTTP
+    # Derive path and task_type from the online state
+    response_kind = result.get("response_kind", "chat")
+    is_guided = response_kind in (
+        "flow_question", "flow_completed", "flow_cancelled", "flow_retry",
     )
-    return result
+
+    answer_dict = result.get("answer_dict") or result.get("final_answer") or {
+        "summary": "", "sections": []
+    }
+
+    if is_guided:
+        path = "guided_flow"
+        task_type = result.get("completed_flow") or result.get("active_flow") or "guided_flow"
+    else:
+        path = result.get("path", "standard")
+        task_type = result.get("task_type", "general_sales_coaching")
+
+    return {
+        "answer_dict": answer_dict,
+        "task_type": task_type,
+        "path": path,
+        "path_reason": result.get("path_reason", ""),
+        "sources": result.get("sources") or result.get("final_sources") or [],
+        "risk_result": result.get("risk_result") or {},
+        "retrieval_info": result.get("retrieval_info") or {},
+        "usage": result.get("usage") or {},
+        "conversation_id": result.get("conversation_id", conversation_id) or generate_id(),
+        "response_kind": response_kind,
+        "route_confidence": result.get("route_confidence", 1.0),
+        "run_id": result.get("run_id"),
+    }
 
 
 @router.post("/agent/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, db: DbSession) -> ChatResponse:
-    """Agent 聊天 — 通过 ChatPipeline 执行完整请求生命周期。
-
-    支持延迟优化的 fast / standard / slow 三级路径。
-    """
+    """Agent 聊天 — 通过 LangGraph StateGraph 执行（与钉钉 Stream 同一管线）。"""
     settings = get_settings()
     conversation_id = req.conversation_id or generate_id()
+    start_time = time.time()
 
     try:
-        pipeline = ChatPipeline(db, settings)
-        result = await pipeline.execute(
+        result = await _execute_via_graph(
+            db=db,
             tenant_id=req.tenant_id,
             user_id=req.user_id,
             message=req.message,
             conversation_id=conversation_id,
-            context=req.context.model_dump() if req.context else None,
             channel=req.channel,
             agent_id=req.agent_id,
-            model=req.model,
+            model_override=req.model,
         )
 
-        # 构建响应
+        total_ms = int((time.time() - start_time) * 1000)
         runtime = get_tenant_runtime()
+
+        # 从 graph state 提取字段
+        task_type = result.get("task_type", "general_sales_coaching")
+        answer_dict = result.get("answer_dict") or result.get("final_answer") or {
+            "summary": "", "sections": []
+        }
+        sources = result.get("sources") or result.get("final_sources") or []
+        risk_result = result.get("risk_result") or {}
+        path = result.get("path", "standard")
+        path_reason = result.get("path_reason", "")
+        retrieval_info = result.get("retrieval_info") or {}
+        usage = result.get("usage") or {}
+
         response = build_chat_response(
-            conversation_id=result.conversation_id,
+            conversation_id=result.get("conversation_id", conversation_id),
             tenant_id=req.tenant_id,
-            task_type=result.route_result.task_type if result.route_result else "fast_command",
-            answer=result.answer_dict,
-            sources=result.sources,
-            risk=result.risk_result.to_dict(),
+            task_type=task_type,
+            answer=answer_dict,
+            sources=sources,
+            risk=risk_result,
             debug=DebugInfo(
                 retrieval_query="",
-                route_confidence=result.route_result.confidence if result.route_result else 1.0,
+                route_confidence=result.get("route_confidence", 1.0),
                 prompt_version="v0",
-                run_id=result.run_id,
+                run_id=result.get("run_id") or generate_id(),
                 model=runtime.chat_model or "default",
-                latency_ms=int(result.timings.total_ms),
+                latency_ms=total_ms,
                 provider=runtime.provider,
                 base_url_host=runtime.base_url_host,
                 api_key_ref=runtime.api_key_ref,
                 api_key_fingerprint=runtime.api_key_fingerprint,
-                path=result.path_result.path,
-                path_reason=result.path_result.reason,
-                stage_latency_ms={k: int(v) for k, v in result.timings.stages.items()},
+                path=path,
+                path_reason=path_reason,
+                stage_latency_ms={},
                 llm_calls={
-                    "router": result.route_result.llm_router_called
-                    if result.route_result and hasattr(result.route_result, "llm_router_called")
-                    else False,
-                    "main": result.fast_reply is None,
-                    "risk": result.path_result.needs_llm_risk_check,
+                    "router": bool(result.get("route_confidence")),
+                    "main": bool(answer_dict.get("summary")),
+                    "risk": retrieval_info.get("risk_checked", False),
                     "summary": False,
                 },
-                usage=result.usage or {},
+                usage=usage,
             ).model_dump(),
         )
 
@@ -168,7 +190,6 @@ async def chat(req: ChatRequest, db: DbSession) -> ChatResponse:
 
 
 # ── Eval streaming endpoint ────────────────────────────────────────────
-# 供 eval 脚本测试。复用 ChatPipeline 完整链路，额外返回 TTFT。
 
 @router.post("/eval/streaming-chat", response_model=ChatResponse)
 async def eval_streaming_chat(
@@ -176,61 +197,63 @@ async def eval_streaming_chat(
     db: DbSession = None,
 ) -> dict[str, Any]:
     _logger = logging.getLogger(__name__)
+    start_time = time.time()
     try:
-        from sales_agent.services.chat_pipeline import ChatPipeline as _CP
-
-        pipeline = _CP(db, get_settings())
-        result = await pipeline.execute(
+        result = await _execute_via_graph(
+            db=db,
             tenant_id=req.tenant_id,
             user_id=req.user_id or "eval",
             message=req.message,
             conversation_id=req.conversation_id or f"eval_{generate_id()}",
-            context=None,
             channel="eval_streaming",
             agent_id=None,
         )
 
-        # TTFT: ontology 路径用总耗时，legacy 路径用 retrieval + 10% generation 近似
-        ttft_ms = int(result.timings.total_ms)
-        streaming_chunks: list[dict] = []
-        if not (result.path_result.needs_retrieval and get_settings().ontology.knowledge_engine == "ontology_neo4j"):
-            stages = result.timings.stages
-            ttft_ms = int(stages.get("retrieval", 0) + stages.get("generation", 0) * 0.1)
-
+        total_ms = int((time.time() - start_time) * 1000)
         runtime = get_tenant_runtime()
+
+        task_type = result.get("task_type", "general_sales_coaching")
+        answer_dict = result.get("answer_dict") or result.get("final_answer") or {
+            "summary": "", "sections": []
+        }
+        sources = result.get("sources") or result.get("final_sources") or []
+        risk_result = result.get("risk_result") or {}
+
+        ttft_ms = total_ms
+        streaming_chunks: list[dict] = []
+
         response = build_chat_response(
-            conversation_id=result.conversation_id,
+            conversation_id=result.get("conversation_id", req.conversation_id or ""),
             tenant_id=req.tenant_id,
-            task_type=result.route_result.task_type if result.route_result else "fast_command",
-            answer=result.answer_dict,
-            sources=result.sources,
-            risk=result.risk_result.to_dict(),
+            task_type=task_type,
+            answer=answer_dict,
+            sources=sources,
+            risk=risk_result,
             debug=DebugInfo(
                 retrieval_query="",
-                route_confidence=result.route_result.confidence if result.route_result else 1.0,
+                route_confidence=result.get("route_confidence", 1.0),
                 prompt_version="v0",
                 run_id=generate_id(),
                 model=runtime.chat_model or "default",
-                latency_ms=int(result.timings.total_ms),
+                latency_ms=total_ms,
                 provider=runtime.provider,
                 base_url_host=runtime.base_url_host,
                 api_key_ref=runtime.api_key_ref,
                 api_key_fingerprint=runtime.api_key_fingerprint,
-                path=result.path_result.path,
-                path_reason=result.path_result.reason,
-                stage_latency_ms={k: int(v) for k, v in result.timings.stages.items()},
+                path=result.get("path", "standard"),
+                path_reason=result.get("path_reason", ""),
+                stage_latency_ms={},
                 llm_calls={
-                    "router": result.route_result.llm_router_called
-                    if result.route_result and hasattr(result.route_result, "llm_router_called") else False,
-                    "main": result.fast_reply is None,
-                    "risk": result.path_result.needs_llm_risk_check,
+                    "router": bool(result.get("route_confidence")),
+                    "main": bool(answer_dict.get("summary")),
+                    "risk": False,
                     "summary": False,
                 },
                 retrieval_info={
                     "ttft_ms": ttft_ms,
                     "streaming_chunks": streaming_chunks,
                 },
-                usage=result.usage or {},
+                usage=result.get("usage") or {},
             ).model_dump(),
         )
         return ChatResponse(**response)

@@ -31,6 +31,7 @@ from .conversation import (
     ConversationSummary,
     RetrievalLog,
 )
+from .conversation_topic import ConversationTopic
 from .tenant_model_config import TenantModelConfig
 from .model_call_log import ModelCallLog
 from .prompt import PromptVersion
@@ -113,6 +114,7 @@ __all__ = [
     "Conversation",
     "ConversationMessage",
     "ConversationSummary",
+    "ConversationTopic",
     "RetrievalLog",
     "TenantModelConfig",
     "ModelCallLog",

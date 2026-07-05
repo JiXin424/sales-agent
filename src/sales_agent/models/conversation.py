@@ -55,6 +55,7 @@ class ConversationMessage(TimestampMixin, Base):
     role: Mapped[str] = mapped_column(Text, nullable=False)  # user / assistant / system
     content: Mapped[str] = mapped_column(Text, nullable=False)
     metadata_json: Mapped[str] = mapped_column(Text, nullable=True)
+    topic_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
 
     def __repr__(self) -> str:
         return f"<ConversationMessage(id={self.id}, role={self.role})>"

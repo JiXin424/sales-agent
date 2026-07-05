@@ -133,6 +133,44 @@ python scripts/run_retrieval_eval.py --tenant taishan --mode hybrid --round 01
 - 消息速率限制（每用户每分钟 / 每天 / 每租户）
 - Markdown 格式回复
 
+### 统一引导流程（Guided Flows）
+
+**2026-07-06 新增**：访前准备、访后复盘、小赢欣赏、卡点破框四大引导流程通过统一
+LangGraph `online_graph` 路由，取代遗留的 `quick_session_graph` 和 `daily_eval_graph`
+占位图。
+
+| 流程 | 触发词 | 说明 |
+|------|--------|------|
+| 访前准备 `visit_preparation` | "访前准备" | 三步问答生成客户作战卡 |
+| 访后复盘 `post_visit_review` | "访后复盘" | 三步问答输出拜访复盘卡 |
+| 小赢欣赏 `small_win_appreciation` | "小赢欣赏" | 三步问答记录小赢并给激励 |
+| 卡点破框 `breakthrough` | "卡点破框" | 三步问答诊断并推荐破框方案 |
+
+**关键设计：**
+- 所有流程共享同一个图结构（`graph/guided_flow/graph.py`），通过 state 中的
+  `active_flow` 字段区分流程类型
+- 每次用户回答推进一个阶段（flow_stage: question_n → question_n+1 → card），
+  完成后回到普通 Chat
+- 新触发词中途打断当前流程，旧状态丢弃
+- `退出` 关键词随时返回普通 Chat
+- 钉钉 Stream 路径通过 `graph_stream.py` 中的 `online_graph` 路由，HTTP 路径通过
+  `agent.py` 中的 `resolve_graph` 分派
+- **三路并行图注册**：`graph/registry.py` 统一 `GRAPH_REGISTRY`，
+  含 `online`（统一在线会话）、`guided-flow`（引导流程）、`ontology-retrieval` 子图
+
+**配置与回退：**
+```
+GUIDED_FLOWS_ENABLED=true    # 启用统一引导流程（默认）
+GUIDED_FLOWS_ENABLED=false   # 路由所有文本到普通 Chat 管道
+```
+设置 `GUIDED_FLOWS_ENABLED=false` 并重启实例后，所有消息走普通 ChatPipeline。
+进行中的引导状态保存在进程内存中，重启或自然日切换后丢弃。
+
+**遗留行为说明：**
+- `quick_sessions` 表保留但不再写入（入口已全部转向 Guided Flow handlers）
+- Daily Evaluation 继续通过 `DailyEvaluationService` 和 scheduler 运行，
+  与引导流程无关
+
 ## 快速开始
 
 ### 1. 启动数据库
@@ -351,6 +389,9 @@ sales-agent eval --tenant taishan --file eval/smoke_test.jsonl
 | `path_router.enable_slow_path_notice` | 启用慢任务提示 | `true` |
 | `path_router.llm_router_confidence_threshold` | LLM router 调用阈值 | 0.75 |
 | `path_router.clarify_confidence_threshold` | 追问/澄清阈值 | 0.45 |
+| `guided_flows.enabled` | 统一引导流程开关 | `true` |
+| `guided_flows.timezone` | 引导流程时区（自然日重置） | `Asia/Shanghai` |
+| `retrieval.parallel_enabled` | 并行 Ontology + RAG 检索（Send fan-out） | `true` |
 
 ## Docker 部署
 
@@ -563,7 +604,7 @@ PYTHONPATH=src pytest tests/unit/ -v
 PYTHONPATH=src pytest tests/integration/test_pilot_api.py -v
 ```
 
-当前 160+ 单元测试全部通过，覆盖：
+当前 260+ 测试（含 unit/graph/coach/dingtalk/pipeline-parity/guided-flows-config）全部通过，覆盖：
 - Markdown 解析和切分（8 个）
 - 任务路由 6 种类型 + 优先级 + 置信度 + 调用率日志（13 个）
 - 路径路由 fast/standard/slow + 配置开关 + 风险关键词（22 个）
@@ -574,6 +615,9 @@ PYTHONPATH=src pytest tests/integration/test_pilot_api.py -v
 - 响应格式化（7 个）
 - 密钥解析 + 指纹 + 脱敏 + 租户匹配（17 个）
 - 钉钉集成（命令解析 + 事件 + 渲染 + 限流 + 签名 + 用户映射）（34 个）
+- **统一引导流程**（图结构 + 触发器 + 四种流程 handler + online 图 + 图对比 + 配置开关）（39 个）
+- **Online Conversation 图**（路由节点 + 图构建 + checkpoint + registry + 检索节点 + 快速命令 + 风险）（28 个）
+- **引导流程在线路由**（HTTP + 钉钉 Stream 路由 + 多轮 + 退出 + 打断 + 重复事件保护）（33 个）
 
 ## Demo 数据
 

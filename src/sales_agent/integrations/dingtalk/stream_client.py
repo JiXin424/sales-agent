@@ -238,17 +238,28 @@ class SalesAgentChatbotHandler(dingtalk_stream.ChatbotHandler):
             )
             return
 
+        # Resolve model provider for graph execution
+        from sales_agent.integrations.dingtalk.agent_resolver import resolve_dingtalk_agent_id
+        from sales_agent.services.tenant_resolver import TenantResolver
+
+        agent_id = await resolve_dingtalk_agent_id(db, runtime.tenant_id)
+        resolver = TenantResolver(db)
+        tenant_info = await resolver.resolve(runtime.tenant_id)
+        model_provider = resolver.get_model_provider(tenant_info)
+
         result = await handle_dingtalk_stream_via_graph(
             tenant_id=runtime.tenant_id,
             user_id=internal_user_id,
             dingtalk_user_id=sender_id,
             message=text_content,
             conversation_id=conversation_id,
-            agent_id=None,
+            agent_id=agent_id,
+            event_id=event_id,
             reply_fn=reply_fn,
             card_sender=card_sender,
             db=db,
-            chat_model=None,
+            chat_model=model_provider.chat,
+            embedding_model=model_provider.embedding,
         )
         logger.info("Graph-based streaming completed successfully")
         return

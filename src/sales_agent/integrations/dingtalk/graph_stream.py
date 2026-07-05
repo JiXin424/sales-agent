@@ -17,8 +17,9 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable
 
-from sales_agent.graph.chat_graph import build_chat_graph_compiled
-from sales_agent.graph.checkpoints import get_checkpointer, get_store
+from sales_agent.core.config import get_settings
+from sales_agent.graph.checkpoints import get_checkpointer
+from sales_agent.services.online_conversation import get_online_graph
 
 logger = logging.getLogger(__name__)
 
@@ -31,15 +32,18 @@ async def handle_dingtalk_stream_via_graph(
     message: str,
     conversation_id: str,
     agent_id: str | None,
+    event_id: str | None = None,
     reply_fn: Callable[[str], Awaitable[None]],
     card_sender,  # DingTalkCardSender
     db,  # AsyncSession
-    chat_model,  # ChatModel instance (P1: was None — now required for graph)
+    chat_model,  # ChatModel instance (required for LLM generation)
+    embedding_model=None,  # EmbeddingModel instance (required for RAG retrieval)
 ) -> dict:
-    """Process a DingTalk stream message through the LangGraph ChatPipeline.
+    """Process a DingTalk stream message through the Online Conversation Graph.
 
-    The graph handles all pipeline stages (routing, retrieval, generation).
-    This function only manages the DingTalk card lifecycle:
+    The graph routes to either the Guided Flow subgraph or the Chat Graph
+    and handles all pipeline stages.  This function only manages the
+    DingTalk card lifecycle:
 
     1. Create an initial "analyzing..." card
     2. Stream three modes concurrently:
@@ -63,6 +67,7 @@ async def handle_dingtalk_stream_via_graph(
         message: User's message text.
         conversation_id: Conversation thread identifier.
         agent_id: Resolved agent identifier.
+        event_id: Event identifier for deduplication.
         reply_fn: Callback to send DingTalk messages (fallback).
         card_sender: DingTalkCardSender instance for interactive cards.
         db: Async SQLAlchemy session.
@@ -72,26 +77,29 @@ async def handle_dingtalk_stream_via_graph(
         The final graph state dict.
     """
     checkpointer = await get_checkpointer()
-    store = await get_store()  # P0: cross-session memory
+    settings = get_settings()
 
-    graph = build_chat_graph_compiled(
-        checkpointer=checkpointer,
-        store=store,
-    )
+    graph = get_online_graph(checkpointer=checkpointer)
 
+    thread_id = conversation_id or str(uuid.uuid4())
     config = {
         "configurable": {
-            "thread_id": conversation_id or str(uuid.uuid4()),
+            "thread_id": thread_id,
         }
     }
 
     input_state = {
         "tenant_id": tenant_id,
+        "agent_id": agent_id,
         "user_id": user_id,
+        "session_user_id": dingtalk_user_id,
         "message": message,
         "conversation_id": conversation_id,
         "channel": "dingtalk",
-        "agent_id": agent_id,
+        "entry_action": None,
+        "event_id": event_id,
+        "guided_flows_enabled": settings.guided_flows.enabled,
+        "answer_dict": None,       # clear previous turn's answer
     }
 
     # 1. Create initial card
@@ -109,7 +117,7 @@ async def handle_dingtalk_stream_via_graph(
     async for chunk in graph.astream(
         input_state,
         config,
-        context={"db": db, "chat_model": chat_model},
+        context={"db": db, "chat_model": chat_model, "embedding_model": embedding_model},
         stream_mode=["messages", "updates", "custom"]
     ):
         chunk_count += 1
@@ -157,16 +165,29 @@ async def handle_dingtalk_stream_via_graph(
                         data.get("latency_ms", ""),
                     )
 
+    answer_summary = final_answer.get("summary", "") if final_answer else ""
     logger.warning(
-        "GRAPH_DONE: total_chunks=%s final_answer_keys=%s accumulated_len=%s",
+        "GRAPH_DONE: chunks=%s answer_keys=%s acc_len=%s summary_preview=%s",
         chunk_count,
         list(final_answer.keys()) if final_answer else "None",
         len(accumulated_text),
+        answer_summary[:200] if answer_summary else "(empty)",
     )
-    # 3. Finalize card
+    # 3. Finalize card — use updates answer if streaming didn't capture text
     if final_answer is None:
         final_answer = {"summary": accumulated_text, "sections": []}
 
-    await card_sender.streaming_finalize(card_id, accumulated_text)
+    display_text = accumulated_text
+    if not display_text and final_answer:
+        display_text = final_answer.get("summary", "")
+    if not display_text and final_answer:
+        sections = final_answer.get("sections", [])
+        if sections:
+            display_text = "\n\n".join(
+                s.get("content", "") for s in sections if s.get("content")
+            )
+
+    logger.warning("CARD_FINALIZE: display_len=%s", len(display_text))
+    await card_sender.streaming_finalize(card_id, display_text)
 
     return {"answer_dict": final_answer}

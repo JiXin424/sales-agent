@@ -118,45 +118,31 @@ async def _get_jsapi_ticket(access_token: str) -> str:
 
 _QUICK_ENTRY_ACTIONS: dict[str, dict[str, str]] = {
     "pre_visit_prepare": {
+        "flow_id": "pre_visit_prepare",
         "task_type": "visit_preparation",
         "label": "访前准备",
         "subtitle": "1 分钟生成客户沟通作战卡",
-        "questions": (
-            "请告诉我以下信息，我帮你生成访前作战卡：\n"
-            "1. 你要见谁？\n"
-            "2. 客户现在大概什么情况？\n"
-            "3. 这次你最想推进到哪一步？"
-        ),
         "message_icon": "📋",
     },
     "post_visit_review": {
+        "flow_id": "post_visit_review",
         "task_type": "post_visit_review",
         "label": "访后复盘",
         "subtitle": "1 分钟判断客户状态和下一步动作",
-        "questions": (
-            "请告诉我以下信息，我帮你生成访后机会推进卡：\n"
-            "1. 刚才客户主要说了什么？\n"
-            "2. 客户现在是什么态度？\n"
-            "3. 你们有没有约定下一步？"
-        ),
         "message_icon": "📊",
     },
-    # 多轮状态机类快捷入口：点击后在单聊里做多轮追问直到出卡，
-    # 会话状态落库（quick_sessions），由 streaming_handler 顶部推进。
     "small_win_appreciation": {
+        "flow_id": "small_win_appreciation",
         "task_type": "small_win_appreciation",
-        "session_type": "small_win_appreciation",
         "label": "小赢欣赏",
         "subtitle": "3 分钟，看见今天一个小进展",
-        "questions": "",
         "message_icon": "🌟",
     },
     "sales_block_breakthrough": {
+        "flow_id": "sales_block_breakthrough",
         "task_type": "sales_block_breakthrough",
-        "session_type": "sales_block_breakthrough",
         "label": "卡点破框",
         "subtitle": "3 问，拆掉一个销售卡点",
-        "questions": "",
         "message_icon": "🔓",
     },
 }
@@ -257,30 +243,63 @@ async def _fulfill_quick_action(
     action_config: dict[str, Any],
     tenant_id: str,
 ) -> dict[str, Any]:
-    """识别到 staffId userId 后的统一收尾。抛出异常由各端点转成 HTTP/HTML 响应。"""
-    session_type = action_config.get("session_type")
-    if session_type:
-        from sales_agent.coach.quick_session import start_session, label_of
-        from sales_agent.core.database import get_session_factory
+    """识别到 staffId userId 后的统一收尾。
 
-        factory = get_session_factory()
-        async with factory() as session:
-            first_reply = await start_session(
-                session,
-                tenant_id=tenant_id,
-                external_user_id=dingtalk_user_id,
-                session_type=session_type,
-            )
-            await session.commit()
-        title = label_of(session_type)
-        await sender.send_markdown(dingtalk_user_id, title, first_reply)
-        return {"status": "ok", "action": action, "message": f"{title}已开始，请在单聊里直接回复。"}
+    通过 Online Graph 处理引导动作，不再使用 legacy ``quick_sessions``。
+    抛出异常由各端点转成 HTTP/HTML 响应。
+    """
+    settings = get_settings()
+    if not settings.guided_flows.enabled:
+        await sender.send_text(dingtalk_user_id, "该引导功能暂时停用")
+        return {"status": "ok", "action": action, "message": "该引导功能暂时停用"}
 
-    label = action_config["label"]
-    icon = action_config["message_icon"]
-    questions = action_config["questions"]
-    await sender.send_text(dingtalk_user_id, f"{icon} {label}\n\n{questions}")
-    return {"status": "ok", "action": action, "message": f"{label}引导消息已发送到你的钉钉单聊。"}
+    import time as _time
+
+    from sales_agent.core.database import get_session_factory
+    from sales_agent.integrations.dingtalk.agent_resolver import resolve_dingtalk_agent_id
+    from sales_agent.integrations.dingtalk.user_mapper import DingTalkUserMapper
+    from sales_agent.services.online_conversation import invoke_online_turn
+
+    config = _get_dingtalk_config()
+    corp_id = config.corp_id or ""
+    label = action_config.get("label", action)
+    entry_action = action_config.get("task_type", action)
+
+    factory = get_session_factory()
+    async with factory() as session:
+        # 1. Map DingTalk user to internal user ID
+        user_mapper = DingTalkUserMapper(session, tenant_id)
+        internal_user_id = await user_mapper.get_or_create_user(
+            corp_id=corp_id,
+            dingtalk_user_id=dingtalk_user_id,
+            display_name="",
+        )
+
+        # 2. Resolve concrete Agent ID
+        agent_id = await resolve_dingtalk_agent_id(session, tenant_id)
+
+        # 3. Call invoke_online_turn with entry_action
+        result = await invoke_online_turn(
+            db=session,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            user_id=internal_user_id,
+            session_user_id=dingtalk_user_id,
+            channel="dingtalk",
+            conversation_id=f"quick_{action}_{dingtalk_user_id}",
+            message="",
+            entry_action=entry_action,
+            event_id=f"quick_{action}_{dingtalk_user_id}_{int(_time.time())}",
+        )
+
+        # 4. Send result["answer_dict"]["summary"]
+        summary = result.get("answer_dict", {}).get("summary", "")
+        await sender.send_text(dingtalk_user_id, f"{label}\n\n{summary}")
+
+        # 5. Commit only message/log writes (no quick_sessions access)
+        await session.commit()
+
+    return {"status": "ok", "action": action, "message": f"{label}已发送到你的钉钉单聊。"}
 
 
 # ============================================================

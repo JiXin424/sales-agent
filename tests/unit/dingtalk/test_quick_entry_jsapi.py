@@ -1,10 +1,19 @@
-"""快捷入口 dd.config 签名（sign_jsapi）单元测试。
+"""快捷入口 dd.config 签名（sign_jsapi）单元测试 + JSAPI 路由验证。
 
 背景：PC 钉钉调用 requestAuthCode 前必须 dd.config 鉴权，签名串为
 ``jsapi_ticket=..&noncestr=..&timestamp=..&url=..``（键按字典序、
 noncestr/timestamp 全小写），取 SHA1 小写十六进制。签错任一字段名都会导致
 PC 端回调不触发、页面卡死。
+
+验证 JSAPI 路径（dingtalk_quick_whoami）中 _fulfill_quick_action
+不再使用 legacy start_session/QuickSession。
 """
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from sales_agent.integrations.dingtalk.quick_entry import sign_jsapi
 
@@ -57,3 +66,85 @@ class TestSignJsapi:
              + "×tamp=1" + chr(38) + "url=u").encode("utf-8")
         ).hexdigest()
         assert sign_jsapi("t", "n", "1", "u") != mangled
+
+
+class TestJsapiRouting:
+    """JSAPI whoami 路径验证在线图路由（不接触 legacy quick_sessions）。"""
+
+    @pytest.mark.asyncio
+    async def test_whoami_routes_through_online_graph(self):
+        """模拟 dingtalk_quick_whoami 的 _fulfill_quick_action 调用
+        验证 invoke_online_turn 被正确使用且 QuickSession 未引入。"""
+        mock_sender = AsyncMock()
+        mock_settings = MagicMock()
+        mock_settings.guided_flows.enabled = True
+
+        mock_db_session = AsyncMock()
+        mock_db_session.commit = AsyncMock()
+        mock_factory = MagicMock()
+        mock_factory.return_value.__aenter__.return_value = mock_db_session
+
+        from sales_agent.integrations.dingtalk.quick_entry import (
+            _QUICK_ENTRY_ACTIONS,
+        )
+
+        action_config = _QUICK_ENTRY_ACTIONS["post_visit_review"]
+        mock_dt_config = MagicMock()
+        mock_dt_config.corp_id = "corp_test"
+
+        with patch(
+            "sales_agent.integrations.dingtalk.quick_entry.get_settings",
+            return_value=mock_settings,
+        ):
+            with patch(
+                "sales_agent.core.database.get_session_factory",
+                return_value=mock_factory,
+            ):
+                with patch(
+                    "sales_agent.integrations.dingtalk.user_mapper.DingTalkUserMapper",
+                ) as mock_mapper_cls:
+                    mock_mapper = AsyncMock()
+                    mock_mapper.get_or_create_user.return_value = "internal_user_jsapi"
+                    mock_mapper_cls.return_value = mock_mapper
+
+                    with patch(
+                        "sales_agent.integrations.dingtalk.agent_resolver.resolve_dingtalk_agent_id",
+                        new_callable=AsyncMock,
+                        return_value="agent_jsapi",
+                    ):
+                        with patch(
+                            "sales_agent.services.online_conversation.invoke_online_turn",
+                            new_callable=AsyncMock,
+                            return_value={
+                                "answer_dict": {
+                                    "summary": "访后复盘问题",
+                                    "sections": [],
+                                },
+                                "response_kind": "start",
+                            },
+                        ) as mock_invoke:
+                            with patch(
+                                "sales_agent.integrations.dingtalk.quick_entry._get_dingtalk_config",
+                                return_value=mock_dt_config,
+                            ):
+                                from sales_agent.integrations.dingtalk.quick_entry import (
+                                    _fulfill_quick_action,
+                                )
+
+                                result = await _fulfill_quick_action(
+                                    sender=mock_sender,
+                                    dingtalk_user_id="ding_user_jsapi",
+                                    action="post_visit_review",
+                                    action_config=action_config,
+                                    tenant_id="test_tenant",
+                                )
+
+        mock_invoke.assert_awaited_once()
+        kwargs = mock_invoke.call_args[1]
+        assert kwargs["entry_action"] == "post_visit_review"
+        assert kwargs["message"] == ""
+        assert kwargs["channel"] == "dingtalk"
+        assert result["status"] == "ok"
+
+        import sys
+        assert "sales_agent.coach.quick_session" not in sys.modules

@@ -29,7 +29,6 @@ logger = logging.getLogger(__name__)
 # ====================================================================
 
 _online_graph: CompiledStateGraph | None = None
-_online_checkpointer = None  # process-level InMemorySaver
 
 
 # ====================================================================
@@ -82,9 +81,10 @@ def build_online_thread_id(
 def get_online_graph(*, checkpointer=None) -> CompiledStateGraph:
     """Return the compiled online conversation graph.
 
-    The graph is compiled once and cached.  Pass *checkpointer* to inject
-    a specific checkpointer (for tests); production callers should omit
-    it and let the function use the process-level default.
+    The graph is compiled once and cached when using the default
+    process-level checkpointer.  Pass *checkpointer* to inject a specific
+    checkpointer (for tests); production callers should omit it and let
+    the function use the process-level default.
 
     Production callers **must not** create a new checkpointer per request
     — the process-level singleton is shared across all turns.
@@ -96,20 +96,22 @@ def get_online_graph(*, checkpointer=None) -> CompiledStateGraph:
     Returns:
         A compiled :class:`CompiledStateGraph` ready for ``ainvoke``.
     """
-    global _online_graph, _online_checkpointer
+    global _online_graph
 
+    if checkpointer is not None:
+        # Non-default checkpointer (e.g. from tests) — skip caching so
+        # every call gets a fresh compilation with the injected saver.
+        return build_online_graph().compile(checkpointer=checkpointer)
+
+    # Default path: use the process-level singleton and cache the result.
     if _online_graph is not None:
         return _online_graph
 
-    if checkpointer is None:
-        # Lazily create the process-level singleton
-        if _online_checkpointer is None:
-            from langgraph.checkpoint.memory import InMemorySaver
+    from sales_agent.graph.checkpoints import get_online_checkpointer_sync
 
-            _online_checkpointer = InMemorySaver()
-        checkpointer = _online_checkpointer
-
-    _online_graph = build_online_graph().compile(checkpointer=checkpointer)
+    _online_graph = build_online_graph().compile(
+        checkpointer=get_online_checkpointer_sync()
+    )
     return _online_graph
 
 

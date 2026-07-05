@@ -187,31 +187,3 @@ def build_chat_graph_compiled(
         interrupt_before=interrupt_before or [],
         interrupt_after=interrupt_after or [],
     )
-
-
-# ── Graph Debug Registry (auto-discovery for frontend) ────────────
-# Add new entries here when adding new subgraphs. The frontend
-# Graph Debug page auto-discovers them via GET /graph-debug/graphs.
-
-from sales_agent.graph.coach.daily_eval_graph import build_daily_eval_graph
-from sales_agent.graph.coach.quick_session_graph import build_quick_session_graph
-from sales_agent.graph.retrieval.ontology_graph import build_ontology_retrieval_graph
-
-DEBUG_GRAPH_REGISTRY: dict[str, dict] = {
-    "chat": {
-        "name": "Chat Pipeline",
-        "builder": build_chat_graph,
-    },
-    "daily-eval": {
-        "name": "Daily Evaluation",
-        "builder": build_daily_eval_graph,
-    },
-    "quick-session": {
-        "name": "Quick Session",
-        "builder": build_quick_session_graph,
-    },
-    "ontology-retrieval": {
-        "name": "Ontology Retrieval",
-        "builder": build_ontology_retrieval_graph,
-    },
-}

@@ -15,12 +15,25 @@ P1: Emits custom stream events via ``runtime.stream_writer`` for
 from __future__ import annotations
 
 import logging
+from functools import lru_cache
 from langgraph.runtime import Runtime
 
 from sales_agent.graph.state import ChatGraphState
 from sales_agent.core.config import get_settings
+from sales_agent.graph.retrieval.ontology_graph import build_ontology_retrieval_graph
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=1)
+def _get_ontology_subgraph():
+    """Return the compiled ontology retrieval subgraph (cached).
+
+    The subgraph builder is stateless (same topology every call), so we
+    compile once and reuse across all requests.  The cache can be cleared
+    for testing via ``_get_ontology_subgraph.cache_clear()``.
+    """
+    return build_ontology_retrieval_graph().compile()
 
 
 async def retrieve_node(state: ChatGraphState, runtime: Runtime) -> dict:
@@ -44,13 +57,17 @@ async def retrieve_node(state: ChatGraphState, runtime: Runtime) -> dict:
     message = state["message"]
     tenant_id = state["tenant_id"]
     agent_id = state.get("agent_id")
+    parallel_mode = state.get("parallel_mode", False)
 
     # P1: Custom stream progress
     writer({"phase": "retrieval_started", "path": path, "task_type": task_type})
 
     # -- Path 1: Ontology Neo4j knowledge graph (subgraph) --
     if path == "ontology":
-        return await _retrieve_via_ontology(state, runtime, tenant_id, agent_id, task_type, message)
+        return await _retrieve_via_ontology(
+            state, runtime, tenant_id, agent_id, task_type, message,
+            parallel_mode=parallel_mode,
+        )
 
     # -- Path 2: Traditional RAG (vector/hybrid/keyword) --
     if path == "rag":
@@ -72,14 +89,12 @@ async def _retrieve_via_ontology(
     agent_id: str | None,
     task_type: str,
     message: str,
+    parallel_mode: bool = False,
 ) -> dict:
     """Run the ontology retrieval subgraph, which handles everything internally:
     extract terms -> graph query -> [vector fallback] -> compact -> generate answer.
     """
-    from sales_agent.graph.retrieval.ontology_graph import build_ontology_retrieval_graph
-
-    subgraph_builder = build_ontology_retrieval_graph()
-    subgraph = subgraph_builder.compile()
+    subgraph = _get_ontology_subgraph()
 
     sub_input = {
         "question": message,
@@ -102,6 +117,43 @@ async def _retrieve_via_ontology(
             "answer_dict": None,
         }
 
+    # 并行模式：只返回 sources，让主 generate 节点统一生成（合并 ontology + RAG）
+    # 独占模式（非并行）：skip_generation，用 ontology 子图自己生成的 answer
+    if parallel_mode:
+        # 构建 ontology 证据文本，供主生成节点与 RAG 结果合并
+        compacted = sub_result.get("compacted_evidence", {})
+        onto_lines = ["## 知识图谱（本体）检索结果"]
+        entities = compacted.get("entities", [])
+        if entities:
+            onto_lines.append(f"匹配实体 ({len(entities)}): " + ", ".join(
+                f"{e.get('name','')}({e.get('type','')})" for e in entities[:20]
+            ))
+        facts = compacted.get("facts", [])
+        if facts:
+            onto_lines.append(f"相关事实 ({len(facts)}):")
+            for f in facts[:15]:
+                onto_lines.append(
+                    f"  - [{f.get('subject','')}] {f.get('predicate','')} "
+                    f"{f.get('object','')} {f.get('value','')}"[:200]
+                )
+        docs = compacted.get("source_documents", [])
+        if docs:
+            onto_lines.append(f"来源文档: {', '.join(docs[:10])}")
+        ontology_context_text = "\n".join(onto_lines)
+
+        return {
+            "retrieval_info": {
+                "called": True,
+                "provider": "ontology_neo4j",
+                "vector_fallback_used": sub_result.get("vector_fallback_used", False),
+                "source_count": len(sub_result.get("sources", [])),
+                "parallel_mode": True,
+            },
+            "sources": sub_result.get("sources", []),
+            "skip_generation": False,
+            "answer_dict": None,
+            "ontology_context_text": ontology_context_text,
+        }
     return {
         "retrieval_info": {
             "called": True,

@@ -82,3 +82,33 @@ class TestOntologySubgraph:
         assert "compacted_evidence" in result
         assert len(result["compacted_evidence"]["entities"]) == 1
         assert len(result["compacted_evidence"]["facts"]) == 1
+
+
+class TestOntologySubgraphCache:
+    """The compiled ontology subgraph must be cached (lru_cache maxsize=1)."""
+
+    def test_cache_compiles_only_once(self):
+        from sales_agent.graph.nodes.retrieval import _get_ontology_subgraph
+
+        # Clear cache to start fresh
+        _get_ontology_subgraph.cache_clear()
+
+        info0 = _get_ontology_subgraph.cache_info()
+        assert info0.hits == 0
+        assert info0.misses == 0
+
+        # First call — cache miss
+        g1 = _get_ontology_subgraph()
+        info1 = _get_ontology_subgraph.cache_info()
+        assert info1.misses == 1
+        assert info1.hits == 0
+
+        # Second call — cache hit
+        g2 = _get_ontology_subgraph()
+        info2 = _get_ontology_subgraph.cache_info()
+        assert info2.misses == 1
+        assert info2.hits == 1
+        assert g1 is g2, "Same compiled graph should be returned"
+
+        # Clean up
+        _get_ontology_subgraph.cache_clear()

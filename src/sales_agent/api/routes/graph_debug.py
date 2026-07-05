@@ -23,7 +23,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sales_agent.api.deps import DbSession
-from sales_agent.graph.chat_graph import DEBUG_GRAPH_REGISTRY
+from sales_agent.graph.registry import GRAPH_REGISTRY
 from sales_agent.graph.checkpoints import get_checkpointer
 from sales_agent.core.tenant_runtime import get_tenant_runtime
 
@@ -116,11 +116,11 @@ def _safe_serialize(obj: Any) -> Any:
 @router.get("/graphs", response_model=GraphsResponse)
 async def list_graphs(agent_id: str):
     """Return all registered graphs with Mermaid diagram data."""
-    if not DEBUG_GRAPH_REGISTRY:
+    if not GRAPH_REGISTRY:
         return GraphsResponse(graphs=[])
 
     results: list[GraphInfo] = []
-    for graph_id, entry in DEBUG_GRAPH_REGISTRY.items():
+    for graph_id, entry in GRAPH_REGISTRY.items():
         try:
             builder = entry["builder"]()
             compiled = builder.compile()
@@ -156,8 +156,8 @@ async def run_graph(agent_id: str, req: RunRequest, db: DbSession):
       - ``done``        → final answer
       - ``error``       → execution error
     """
-    if req.graph_id not in DEBUG_GRAPH_REGISTRY:
-        raise HTTPException(404, f"Unknown graph: {req.graph_id}. Available: {list(DEBUG_GRAPH_REGISTRY)}")
+    if req.graph_id not in GRAPH_REGISTRY:
+        raise HTTPException(404, f"Unknown graph: {req.graph_id}. Available: {list(GRAPH_REGISTRY)}")
 
     # Compile the graph WITH a checkpointer so each node boundary writes a
     # checkpoint to Postgres. The thread_id is prefixed with ``debug:`` to
@@ -344,9 +344,9 @@ async def _compile_with_checkpointer(graph_id: str):
     the same backing store across workers. Shared by /run and the two history
     endpoints.
     """
-    if graph_id not in DEBUG_GRAPH_REGISTRY:
-        raise HTTPException(404, f"Unknown graph: {graph_id}. Available: {list(DEBUG_GRAPH_REGISTRY)}")
-    entry = DEBUG_GRAPH_REGISTRY[graph_id]
+    if graph_id not in GRAPH_REGISTRY:
+        raise HTTPException(404, f"Unknown graph: {graph_id}. Available: {list(GRAPH_REGISTRY)}")
+    entry = GRAPH_REGISTRY[graph_id]
     checkpointer = await get_checkpointer()
     builder = entry["builder"]()
     return builder.compile(checkpointer=checkpointer)

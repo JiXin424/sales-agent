@@ -159,6 +159,15 @@ async def chat_node(
         "conversation_id": state.get("conversation_id", ""),
         "channel": state.get("channel", "local"),
         "agent_id": state.get("agent_id"),
+        # Pass through Topic and precomputed routing fields
+        "topic_id": state.get("topic_id"),
+        "knowledge_policy": state.get("knowledge_policy"),
+        "needs_retrieval": state.get("needs_retrieval"),
+        "task_type": state.get("task_type"),
+        "route_confidence": state.get("route_confidence"),
+        "precomputed_route": True if state.get("knowledge_policy") else None,
+        # Pass retained entities for topic key_entities_json update in log_node
+        "retained_entities": state.get("retained_entities", []),
     }
 
     # Allow tests to inject a stub chat runner via runtime context

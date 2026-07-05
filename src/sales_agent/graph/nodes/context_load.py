@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 async def load_context_node(state: ChatGraphState, runtime: Runtime) -> dict:
     """Load recent conversation history from DB.
 
+    When ``topic_id`` is present in state, filters messages to only those
+    belonging to that Topic.  Without ``topic_id``, loads all conversation
+    messages (backward-compatible).
+
     Args:
         state: Current graph state.
         runtime: LangGraph runtime with context containing ``db``.
@@ -36,13 +40,19 @@ async def load_context_node(state: ChatGraphState, runtime: Runtime) -> dict:
     history_turns = settings.conversation.history_turns
     limit = history_turns * 2
 
+    conditions = [
+        ConversationMessage.conversation_id == state["conversation_id"],
+        ConversationMessage.tenant_id == state["tenant_id"],
+        ConversationMessage.role.in_(["user", "assistant"]),
+    ]
+
+    topic_id = state.get("topic_id")
+    if topic_id:
+        conditions.append(ConversationMessage.topic_id == topic_id)
+
     stmt = (
         select(ConversationMessage)
-        .where(
-            ConversationMessage.conversation_id == state["conversation_id"],
-            ConversationMessage.tenant_id == state["tenant_id"],
-            ConversationMessage.role.in_(["user", "assistant"]),
-        )
+        .where(*conditions)
         .order_by(ConversationMessage.created_at.desc())
         .limit(limit)
     )

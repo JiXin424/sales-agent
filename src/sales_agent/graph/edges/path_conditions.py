@@ -40,6 +40,9 @@ def select_retrieval_path(state: ChatGraphState):
     requires retrieval, this returns a list of ``Send`` objects that run
     multiple retrieval backends concurrently.
 
+    When ``knowledge_policy`` is ``"none"`` (set by the Evidence Router),
+    retrieval is skipped regardless of ``needs_retrieval``.
+
     Returns:
         "ontology" — Neo4j knowledge graph retrieval (solo)
         "rag" — Traditional vector/hybrid/keyword retrieval (solo)
@@ -50,6 +53,11 @@ def select_retrieval_path(state: ChatGraphState):
                      retrieve_node can distinguish the source.
     """
     if not state.get("needs_retrieval"):
+        return "skip"
+
+    # Evidence Router's "none" policy means retrieval should be skipped
+    # even when the task type would normally need retrieval.
+    if state.get("knowledge_policy") == "none":
         return "skip"
 
     from sales_agent.core.config import get_settings

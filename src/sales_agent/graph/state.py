@@ -31,6 +31,11 @@ class ChatGraphState(TypedDict, total=False):
     agent_id: str | None
     model_override: str | None
 
+    # === Topic / Context Resolution (set by Online Graph) ===
+    topic_id: str | None
+    knowledge_policy: str | None           # "none" | "optional" | "required"
+    precomputed_route: bool | None         # skip routing_node when True
+
     # === Tenant + Model Resolution ===
     tenant_info: dict[str, Any]
     # model_provider is NOT in State — passed via Runtime.context

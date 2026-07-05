@@ -52,6 +52,7 @@ from sales_agent.graph.nodes.tenant_resolve import resolve_tenant_node
 from sales_agent.graph.nodes.context_load import load_context_node
 from sales_agent.graph.nodes.routing import routing_node
 from sales_agent.graph.nodes.retrieval import retrieve_node
+from sales_agent.graph.nodes.evidence_gate import evidence_gate
 from sales_agent.graph.nodes.generation import generate_node
 from sales_agent.graph.nodes.risk_check import risk_check_node
 from sales_agent.graph.nodes.logging_node import log_node
@@ -101,6 +102,9 @@ def build_chat_graph(
         cache_policy=CACHE_RETRIEVAL,
     )
 
+    # Evidence gate — enforces knowledge policy between retrieval and generation
+    builder.add_node("evidence_gate", evidence_gate)
+
     # P1: Generation with cache + retry + timeout
     builder.add_node(
         "generate",
@@ -126,18 +130,20 @@ def build_chat_graph(
     builder.add_edge("load_context", "route_task")
 
     # route_task → retrieve or skip (supports Send fan-out via select_retrieval_path)
+    # Both paths converge at evidence_gate before generation.
     builder.add_conditional_edges(
         "route_task",
         select_retrieval_path,
         {
             "ontology": "retrieve",
             "rag": "retrieve",
-            "skip": "generate",
+            "skip": "evidence_gate",
         },
     )
 
-    # retrieve → generate
-    builder.add_edge("retrieve", "generate")
+    # retrieve → evidence_gate → generate
+    builder.add_edge("retrieve", "evidence_gate")
+    builder.add_edge("evidence_gate", "generate")
     builder.add_edge("generate", "check_risk")
 
     # Risk result branching

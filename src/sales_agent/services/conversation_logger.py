@@ -39,6 +39,7 @@ async def log_conversation(
     retrieval_info: dict | None = None,
     stage: str | None = None,
     agent_id: str | None = None,
+    topic_id: str | None = None,
 ) -> Conversation:
     """记录一次完整的会话。
 
@@ -106,7 +107,7 @@ async def log_conversation(
             )
             db.add(conv)
 
-        # 同时记录消息
+        # 同时记录消息（携带 topic_id）
         await log_message(
             db,
             conversation_id=conversation_id,
@@ -115,6 +116,7 @@ async def log_conversation(
             user_id=user_id,
             role="user",
             content=message,
+            topic_id=topic_id,
         )
         if answer_text:
             await log_message(
@@ -125,6 +127,7 @@ async def log_conversation(
                 user_id=user_id,
                 role="assistant",
                 content=answer_text,
+                topic_id=topic_id,
             )
 
         await db.flush()
@@ -146,6 +149,7 @@ async def log_message(
     content: str,
     metadata: dict | None = None,
     agent_id: str | None = None,
+    topic_id: str | None = None,
 ) -> ConversationMessage:
     """记录一条消息。"""
     msg = ConversationMessage(
@@ -157,6 +161,7 @@ async def log_message(
         role=role,
         content=content,
         metadata_json=json.dumps(metadata, ensure_ascii=False) if metadata else None,
+        topic_id=topic_id,
     )
     db.add(msg)
     return msg

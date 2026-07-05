@@ -136,6 +136,14 @@ guided_flows:
   enabled: true
   timezone: "Asia/Shanghai"
 
+# --- 有界意图路由（话题管理、上下文解析、证据路由）---
+# 默认关闭。设为 true 开启话题生命周期、澄清解析、证据路由。
+topic_routing:
+  enabled: false
+  idle_minutes: 30           # 话题活跃超时（分钟）
+  restore_hours: 24          # 关闭话题恢复窗口（小时）
+  max_clarification_attempts: 2  # 最大模糊回答澄清尝试次数
+
 neo4j:
   uri: ""
   user: "neo4j"

@@ -94,6 +94,7 @@ _BASE_INPUT = {
     "channel": "dingtalk",
     "conversation_id": "c1",
     "guided_flows_enabled": True,
+    "topic_routing_enabled": True,
 }
 
 _CONTEXT = {
@@ -271,6 +272,51 @@ async def test_guided_disabled_no_trigger_routes_to_chat(online_graph, config):
         context=_CONTEXT,
     )
     assert result["response_kind"] == "chat"
+
+
+# ====================================================================
+# Routing: topic routing disabled → direct chat (bypasses context)
+# ====================================================================
+
+
+@pytest.mark.asyncio
+async def test_topic_routing_disabled_bypasses_context_resolution(online_graph, config):
+    """When ``topic_routing_enabled=False``, messages route directly to ``chat_node``
+    without calling the context resolver or evidence router."""
+    ctx = {
+        "db": None,
+        "chat_model": None,
+        "chat_runner": StubChatRunner(),
+        "context_resolver_override": AsyncMock(),
+        "evidence_router_override": AsyncMock(),
+    }
+    result = await online_graph.ainvoke(
+        _make_input("什么样的客户适合做访前准备", topic_routing_enabled=False),
+        config=config,
+        context=ctx,
+    )
+    assert result["response_kind"] == "chat"
+    # context_status is not set when bypassing context resolution
+    assert result.get("context_status") is None
+    # The stubs should NOT have been called
+    ctx["context_resolver_override"].assert_not_awaited()
+    ctx["evidence_router_override"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_topic_routing_disabled_no_context_status(online_graph, config):
+    """When ``topic_routing_enabled=False``, no topic-related state is set."""
+    result = await online_graph.ainvoke(
+        _make_input("你好", topic_routing_enabled=False),
+        config=config,
+        context={
+            "db": None, "chat_model": None, "chat_runner": StubChatRunner(),
+        },
+    )
+    assert result["response_kind"] == "chat"
+    assert result.get("context_status") is None
+    assert result.get("topic_id") is None
+    assert result.get("standalone_query") is None
 
 
 # ====================================================================

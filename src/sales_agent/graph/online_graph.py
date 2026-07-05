@@ -117,6 +117,12 @@ def normalize_turn_node(state: OnlineConversationState) -> dict[str, Any]:
     else:
         flow_action = "chat"
 
+    # When topic routing is disabled, bypass context resolution and
+    # evidence routing — send chat messages straight to the chat node.
+    topic_routing_enabled = state.get("topic_routing_enabled", False)
+    if flow_action == "chat" and not topic_routing_enabled:
+        flow_action = "direct_chat"
+
     return {
         "requested_flow": requested_flow,
         "flow_action": flow_action,
@@ -127,7 +133,7 @@ def route_online_message(state: OnlineConversationState) -> str:
     """Return the destination node name based on ``flow_action``.
 
     Returns one of ``"duplicate"``, ``"start"``, ``"cancel"``,
-    ``"advance"``, or ``"chat"``.
+    ``"advance"``, ``"chat"``, or ``"direct_chat"``.
     """
     return state.get("flow_action", "chat")
 
@@ -350,6 +356,7 @@ def build_online_graph() -> StateGraph:
             "cancel": "guided_flow",
             "advance": "guided_flow",
             "chat": "context_resolution",
+            "direct_chat": "chat",
         },
     )
 

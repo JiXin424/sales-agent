@@ -171,6 +171,103 @@ GUIDED_FLOWS_ENABLED=false   # 路由所有文本到普通 Chat 管道
 - Daily Evaluation 继续通过 `DailyEvaluationService` 和 scheduler 运行，
   与引导流程无关
 
+### 有界意图路由（Bounded Intent Routing / Topic Management）
+
+**2026-07-06 新增**：话题生命周期管理、上下文解析与证据路由，让 Online Graph
+能够跟踪用户当前话题、处理指代消解、区分"继续当前话题"与"开始新话题"，
+并根据意图决定是否需要知识检索。
+
+#### 核心概念
+
+| 概念 | 说明 |
+|------|------|
+| **ConversationTopic** | 表示用户当前关注的话题，包含 summary、current_goal、key_entities |
+| **Topic 生命周期** | 活跃话题 30 分钟无消息自动关闭，关闭后 24 小时内可显式恢复 |
+| **Context Resolver** | LLM 判定本轮消息与当前话题的关系：continue / revise / switch / new / ambiguous |
+| **Evidence Router** | 根据解析后的查询，决定意图类型和知识检索策略（required / optional / none） |
+| **Clarification** | 歧义消息时触发澄清循环，最多 2 次尝试，超 2 次默认新建话题（安全阀） |
+
+#### Router 模式
+
+**ContextDecision**（上下文解析输出）：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `turn_relation` | str | continue / revise / switch / new / ambiguous |
+| `standalone_query` | str | 重写的独立查询（指代消解后） |
+| `retained_entities` | list[str] | 从当前话题继承的实体 |
+| `retracted_goals` | list[str] | 当前话题中撤回的目标 |
+| `confidence` | float | 解析置信度 |
+| `reason_code` | str | 解析原因代码 |
+
+**EvidenceDecision**（证据路由输出）：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `intent` | str | 任务类型（knowledge_qa / objection_handling / 等） |
+| `knowledge_policy` | str | required / optional / none |
+| `knowledge_scope` | list[str] | 知识范围限定 |
+| `retrieval_query` | str | 可选，用于检索的查询重写 |
+| `confidence` | float | 意图分类置信度 |
+| `reason_code` | str | 路由原因代码 |
+
+**知识策略说明：**
+
+| policy | 含义 | 行为 |
+|--------|------|------|
+| `none` | 不需要知识检索 | 直接生成回答 |
+| `optional` | 尝试检索，无结果不影响回答 | 并行检索后合并 |
+| `required` | 必须检索知识，否则返回失败提示 | 阻塞直到检索完成 |
+
+#### 话题生命周期
+
+```
+创建 → [30分钟无活动] → 自动关闭 → [24小时内] → 显式恢复
+  │                              │
+  └── continue / revise / switch ┘         ── 超过24小时 → 不可恢复，创建新话题
+```
+
+- **活跃超时**：30 分钟（`topic_routing.idle_minutes`）
+- **恢复窗口**：24 小时（`topic_routing.restore_hours`）
+- **澄清尝试**：最多 2 次（`topic_routing.max_clarification_attempts`），超限默认新建话题
+
+#### 澄清解析器
+
+当 Context Resolver 无法判断用户意图时（`turn_relation="ambiguous"`），
+触发澄清流程，使用无 LLM 的命令映射（前缀匹配）：
+
+| 用户输入 | 行为 |
+|----------|------|
+| "继续" / "接着刚才" / "然后" / "接着说" | 继续当前话题 |
+| "新问题" / "换个话题" / "reset" | 新建话题 |
+| "取消" / "算了" / "忘了" | 取消当前话题 |
+
+超出精确命令时使用 LLM 兜底（`CLARIFICATION_RESOLVER_PROMPT`）。
+
+#### 配置与回退
+
+```yaml
+topic_routing:
+  enabled: false             # 默认关闭
+  idle_minutes: 30           # 话题活跃超时（分钟）
+  restore_hours: 24          # 关闭话题恢复窗口（小时）
+  max_clarification_attempts: 2  # 最大模糊回答澄清尝试次数
+```
+
+```
+TOPIC_ROUTING_ENABLED=false  # 默认，跳过上下文解析和证据路由，直连 Chat 管道
+TOPIC_ROUTING_ENABLED=true   # 启用话题管理、上下文解析、证据路由
+```
+
+设置 `TOPIC_ROUTING_ENABLED=false`（默认）并重启实例后，所有消息绕过
+话题层直接进入 Chat 管道，`ConversationTopic` 表无写入。
+
+**已知限制：**
+- 长期用户 Memory（跨会话、跨天用户画像和行为偏好）超出本设计范围，
+  需要单独的设计文档覆盖授权、溯源、TTL、用户检查/删除、矛盾消解和选择性检索。
+- 话题状态保存在 `conversation_topics` 表中，重启容器后仍需从 DB 恢复。
+- 当前版本无显式管理层 UI 查看/管理话题。
+
 ## 快速开始
 
 ### 1. 启动数据库
@@ -391,6 +488,10 @@ sales-agent eval --tenant taishan --file eval/smoke_test.jsonl
 | `path_router.clarify_confidence_threshold` | 追问/澄清阈值 | 0.45 |
 | `guided_flows.enabled` | 统一引导流程开关 | `true` |
 | `guided_flows.timezone` | 引导流程时区（自然日重置） | `Asia/Shanghai` |
+| `topic_routing.enabled` | 有界意图路由（话题管理/上下文解析/证据路由） | `false` |
+| `topic_routing.idle_minutes` | 话题活跃超时（分钟） | `30` |
+| `topic_routing.restore_hours` | 关闭话题恢复窗口（小时） | `24` |
+| `topic_routing.max_clarification_attempts` | 最大模糊回答澄清尝试次数 | `2` |
 | `retrieval.parallel_enabled` | 并行 Ontology + RAG 检索（Send fan-out） | `true` |
 
 ## Docker 部署
@@ -604,7 +705,7 @@ PYTHONPATH=src pytest tests/unit/ -v
 PYTHONPATH=src pytest tests/integration/test_pilot_api.py -v
 ```
 
-当前 260+ 测试（含 unit/graph/coach/dingtalk/pipeline-parity/guided-flows-config）全部通过，覆盖：
+当前 280+ 测试（含 unit/graph/guided-flow/topic-routing/dingtalk/pipeline-parity）全部通过，覆盖：
 - Markdown 解析和切分（8 个）
 - 任务路由 6 种类型 + 优先级 + 置信度 + 调用率日志（13 个）
 - 路径路由 fast/standard/slow + 配置开关 + 风险关键词（22 个）
@@ -618,6 +719,8 @@ PYTHONPATH=src pytest tests/integration/test_pilot_api.py -v
 - **统一引导流程**（图结构 + 触发器 + 四种流程 handler + online 图 + 图对比 + 配置开关）（39 个）
 - **Online Conversation 图**（路由节点 + 图构建 + checkpoint + registry + 检索节点 + 快速命令 + 风险）（28 个）
 - **引导流程在线路由**（HTTP + 钉钉 Stream 路由 + 多轮 + 退出 + 打断 + 重复事件保护）（33 个）
+- **话题管理**（生命周期、过期/恢复、分支/修正、澄清循环、幂等性）（25 个）
+- **上下文路由节点**（context_resolution、evidence_routing、图级 resolved/clarify/guided-bypass 路径）（14 个）
 
 ## Demo 数据
 
@@ -702,7 +805,7 @@ PYTHONPATH=src pytest tests/integration/test_pilot_api.py -v
 
 | 日期 | 摘要 |
 |------|------|
-| [2026-07-06](changelog/2026-07-06.md) | **+ Graph Registry & Ontology Cache**: 统一 `GRAPH_REGISTRY`（`online`, `guided-flow`, `ontology-retrieval`），`_get_ontology_subgraph` 进程级 LRU 缓存，删除遗留 coach 图（`quick_session_graph`, `daily_eval_graph`）和 `coach/quick_session.py`（DB 会话服务，入口已全部转向 Guided Flow handlers）|
+| [2026-07-06](changelog/2026-07-06.md) | **+ Graph Registry & Ontology Cache**: 统一 `GRAPH_REGISTRY`（`online`, `guided-flow`, `ontology-retrieval`），`_get_ontology_subgraph` 进程级 LRU 缓存，删除遗留 coach 图（`quick_session_graph`, `daily_eval_graph`）和 `coach/quick_session.py`（DB 会话服务，入口已全部转向 Guided Flow handlers）**+ Bounded Intent Routing**: 话题生命周期管理（30min 过期/24h 恢复）、上下文解析 ContextDecision、证据路由 EvidenceDecision、澄清循环（2 次上限）、`TOPIC_ROUTING_ENABLED=false` 回退开关 |
 | [2026-07-02](changelog/2026-07-02.md) | **+ Knowledge Evaluation Optimization Loop**（知识评估优化迭代闭环）：20 张新表、4 个 migration、确定性归因引擎、LangGraph 优化工作流、PG-leased Worker、Sandbox 隔离构建、REST API（14 端点）、前端知识迭代工作区（6 面板）、CLI（9 命令）。+ Graph Debug 时间旅行：`/run` 接 `AsyncPostgresSaver` + `debug:` 前缀 thread_id 隔离并回传；新增 `GET .../threads/{tid}/checkpoints`（节点快照链）与 `.../checkpoints/{cid}/state`（单点完整 state）两个只读端点（强制 `debug:` 前缀，非调试 thread 403）；前端 `GraphDebugPage` 加 checkpoint 时间轴 + 自写 `JsonNode`（零新依赖）+ localStorage 历史 run 下拉。实测 langgraph>=1.2 的 `metadata.writes` 不存在，改用 `snapshot.tasks[*].name` 作节点标签。**+ A2 fork**（同日）：`POST .../state`（改 state）+ `POST .../replay`（从 checkpoint 重跑后半段）+ `JsonNode` 编辑模式 + fork 流程；**顺带修 A1 `/run` 的 SSE tuple bug**（`astream` list-mode 返回 tuple，原按 dict 解 → /run 只发 error）；实测 `aupdate_state` 不传 as_node 即可、config 须含 `checkpoint_ns=""`、`metadata.parents` 为空。**+ A3 分支树**（同日）：`list_checkpoints` 加 `parent_checkpoint_id`（实测 `snapshot.parent_config` 给精确父血缘，非启发式重建）+ 前端 `reactflow` DAG（替换线性 `Steps`、dagre 布局、自定义节点、点节点复用 viewer），新依赖 `reactflow+dagre`（bundle +68kB gzip）。 **+ eval 全机可用**（同日，[`task`](../.trellis/tasks/07-02-eval-on-all-servers/)）：新增 `scripts/run-eval.sh`（无源码机 `docker exec` 进 `<tenant>-api` 容器跑 eval，conversation 默认容器内 `--app-url http://127.0.0.1:8000`）+ `run_retrieval_eval.py` 默认 ground_truth 路径修复（`scripts/`→`eval/`）+ `ci-fanout.sh` image-deploy 分支 tar 同步 `run-eval.sh` + `deploy/eval.env.example` 模板 + README 场景 9 + `tests/unit/test_run_eval.sh` 冒烟；**实测 `.dockerignore` 的 `*.md` 只匹配根级、不递归**，`eval/questions.md` 本就在镜像，撤销原计划的 dockerignore 改动（见 lessons #23）。 **🚨 P0 Hotfix**（同日）：移除 `chat_pipeline.py`/`task_router.py`/`agent_executor.py`/`retriever.py` 的 5 处 deepeval `@observe` 装饰器——根因是 `@observe` 退出时序列化嵌套对象迭代活 `__dict__` 触发 `RuntimeError: dictionary changed size during iteration`，导致**全站 `/agent/chat` 500**（prod2/prod3/test 所有租户）；prod 未配 Confident key 时 trace 算了全丢弃、纯负债；移除后 taishan 实测 200 恢复（见 lessons #25，待正式部署到其余机器）。 |
 | [2026-06-26](changelog/2026-06-26.md) | 知识库（ontology_neo4j）支持上传 `.doc`（LibreOffice 无头转 `.docx`）与 `.xlsx`（openpyxl 按 sheet 抽取）：扩展上传白名单、`_read_content` 新增两分支（抽出 `_docx_text` 复用）、前端 accept 放开、Dockerfile 装 `libreoffice-writer`、pyproject 加 `openpyxl`；移除遗留演示假数据 `tenant_demo_b`（企业云盘产品，与真实业务无关；数据库 43 表零数据、`tenants` 表未注册、eval 不依赖）+ 清理从未部署的 `tenant-b` 部署模板/文档引用（`tenants.test.json`、`deploy-release.sh`、`deployment-roles.md`）；保留跨租户安全测试 fixture（`tenant_b`）与历史日志；**清理顶层 nginx 死配置**（Traefik 已接管 SSL 终止/反代，`qiyelongxia.com.cn` 实际由共享 Traefik serve）+ 配套 `init-letsencrypt.sh`，同步清理 `.gitignore`/`.dockerignore` 死引用；前端容器内置 nginx（SPA + `/api` 代理，Traefik 路由终点）保留；**deploy/inventory 命名清理**：删 3 个死文件（`tenants.prod2/prod3/test.json` 旧版）、`tenants.hangzhou.json`→`tenants.test.json` 对齐机器身份（47.118.16.235=test）+ 修 `deploy.yml`/`ci-fanout.sh`/`deploy-targets.json`/文档引用，env 全链路动态拼接故行为等价（澄清：`deploy/tenants.json` 是 gitignored 的每机本地 inventory，非重复） |
 | [2026-06-25](changelog/2026-06-25.md) | Neo4j 本体知识引擎（ontology_neo4j）：图检索 + 保守向量回退 + 高风险人工复核；双租户 dedicated 部署；前端容器化（每租户 nginx SPA）；4000 运营面板新增「环境配置」卡片（`GET /instance/config`，敏感字段点击揭示+复制）；「本体探索」三栏调试页（检索过程/问答/完整上下文，SSE 流式）；部署脚本完善：`secrets/example.env` 模板纳入 git 追踪（`.gitignore` 改 `secrets/*` + `!example.env` 反例），`deploy-release.sh` 租户发现自动排除模板、交互式箭头键选择租户；**CI/CD 接入 neo4j**：生成器渲染共享 neo4j 容器 + app `NEO4J_*` env 注入、entrypoint api 角色自动 `alembic upgrade`、`deploy-release.sh` `--env-file secrets/neo4j.env` 注入凭证、CI mirror neo4j 镜像到 registry；**钉钉快捷入口 tenant mismatch 修复**：共享域名（如 `aijiaolian.com.cn`）多租户下 Traefik 无法按 query 参数分流，快捷入口端点改为 `/integrations/dingtalk/t/{tenant_id}/...`（tenant_id 进 path 段），Traefik 按 `PathPrefix(/t/<tid>/)` 分流到各自容器，根治跨租户 403 |

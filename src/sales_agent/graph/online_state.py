@@ -31,8 +31,9 @@ class OnlineConversationState(TypedDict, total=False):
 
     # ── Guided-flow control ───────────────────────────────────────
     guided_flows_enabled: bool
+    topic_routing_enabled: bool
     requested_flow: str | None
-    flow_action: str  # "duplicate" | "start" | "cancel" | "advance" | "chat"
+    flow_action: str  # "duplicate" | "start" | "cancel" | "advance" | "chat" | "direct_chat"
     active_flow: str | None
     flow_stage: str | None
     flow_payload: dict[str, Any]

@@ -172,6 +172,15 @@ class AppConfig(BaseModel):
         return "all"
 
 
+class TopicRoutingConfig(BaseModel):
+    """Bounded intent routing — topic management, context resolution, evidence routing."""
+
+    enabled: bool = False
+    idle_minutes: int = 30
+    restore_hours: int = 24
+    max_clarification_attempts: int = 2
+
+
 class GuidedFlowsConfig(BaseModel):
     """Unified online guided conversation flows (访前准备, 访后复盘, 小赢欣赏, 卡点破框)."""
 
@@ -195,6 +204,7 @@ class Settings(BaseModel):
     ontology: OntologyConfig = OntologyConfig()
     neo4j: Neo4jConfig = Neo4jConfig()
     web_search: WebSearchConfig = WebSearchConfig()
+    topic_routing: TopicRoutingConfig = TopicRoutingConfig()
     guided_flows: GuidedFlowsConfig = GuidedFlowsConfig()
 
     # 延迟导入避免循环依赖
@@ -345,6 +355,13 @@ class Settings(BaseModel):
         if guided_flows_enabled is not None:
             raw.setdefault("guided_flows", {})["enabled"] = (
                 guided_flows_enabled.strip().lower() in {"1", "true", "yes", "on"}
+            )
+
+        # 环境变量覆盖 topic_routing 配置
+        topic_routing_enabled = os.getenv("TOPIC_ROUTING_ENABLED")
+        if topic_routing_enabled is not None:
+            raw.setdefault("topic_routing", {})["enabled"] = (
+                topic_routing_enabled.strip().lower() in {"1", "true", "yes", "on"}
             )
 
         instance = cls(**raw)

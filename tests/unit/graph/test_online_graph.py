@@ -17,12 +17,19 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from unittest.mock import AsyncMock
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from sales_agent.graph.online_graph import build_online_graph
+from sales_agent.graph.online_state import OnlineConversationState
 from sales_agent.services.online_conversation import build_online_thread_id
+from sales_agent.services.structured_router_output import (
+    ContextDecision,
+    EvidenceDecision,
+)
+
 
 
 # ====================================================================
@@ -45,6 +52,37 @@ class StubChatRunner:
 
 
 # ====================================================================
+# Stub resolvers for context/evidence routing
+# ====================================================================
+
+
+def _make_context_decision(turn_relation: str = "continue", **kw) -> ContextDecision:
+    return ContextDecision(
+        turn_relation=turn_relation,
+        standalone_query=kw.pop("standalone_query", "test standalone query"),
+        retained_entities=kw.pop("retained_entities", []),
+        retracted_goals=kw.pop("retracted_goals", []),
+        missing_references=kw.pop("missing_references", []),
+        confidence=kw.pop("confidence", 0.95),
+        reason_code=kw.pop("reason_code", "test"),
+        **kw,
+    )
+
+
+def _make_evidence_decision(intent: str = "general_sales_coaching", **kw) -> EvidenceDecision:
+    return EvidenceDecision(
+        intent=intent,
+        response_mode=kw.pop("response_mode", "direct"),
+        knowledge_policy=kw.pop("knowledge_policy", "none"),
+        knowledge_scope=kw.pop("knowledge_scope", []),
+        retrieval_query=kw.pop("retrieval_query", None),
+        confidence=kw.pop("confidence", 0.9),
+        reason_code=kw.pop("reason_code", "test"),
+        **kw,
+    )
+
+
+# ====================================================================
 # Fixtures
 # ====================================================================
 
@@ -62,6 +100,19 @@ _CONTEXT = {
     "db": None,
     "chat_model": None,
     "chat_runner": StubChatRunner(),
+    "context_resolver_override": AsyncMock(
+        return_value=_make_context_decision(
+            turn_relation="continue",
+            standalone_query="test message",
+        ),
+    ),
+    "evidence_router_override": AsyncMock(
+        return_value=_make_evidence_decision(
+            intent="general_sales_coaching",
+            response_mode="direct",
+            knowledge_policy="none",
+        ),
+    ),
 }
 
 

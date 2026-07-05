@@ -27,6 +27,8 @@ from langgraph.graph.state import CompiledStateGraph
 from sales_agent.graph.chat_graph import build_chat_graph
 from sales_agent.graph.guided_flow.graph import build_guided_flow_graph
 from sales_agent.graph.guided_flow.triggers import is_cancel_command, resolve_requested_flow
+from sales_agent.graph.nodes.context_resolution import context_resolution_node
+from sales_agent.graph.nodes.evidence_routing import evidence_routing_node
 from sales_agent.graph.online_state import OnlineConversationState
 from sales_agent.services import conversation_logger
 
@@ -136,6 +138,9 @@ async def chat_node(
 ) -> dict[str, Any]:
     """Invoke the cached Chat Graph and map stable response fields.
 
+    Uses ``standalone_query`` as the Chat message (the context-resolved
+    or rewritten form), and preserves ``original_message`` for logging.
+
     The Chat Graph handles its own conversation logging (``log_node``),
     so we do **not** call ``log_conversation`` here — only map
     ``answer_dict`` and ``response_kind`` back to Online State.
@@ -143,10 +148,14 @@ async def chat_node(
     graph = _get_chat_graph()
     ctx = _unpack_context(config)
 
+    # Use the context-resolved standalone query when available; fall
+    # back to the raw message for backward compatibility.
+    chat_message = state.get("standalone_query") or state.get("message", "")
+
     chat_input: dict[str, Any] = {
         "tenant_id": state.get("tenant_id", ""),
         "user_id": state.get("user_id", ""),
-        "message": state.get("message", ""),
+        "message": chat_message,
         "conversation_id": state.get("conversation_id", ""),
         "channel": state.get("channel", "local"),
         "agent_id": state.get("agent_id"),
@@ -172,6 +181,54 @@ async def chat_node(
 def duplicate_node(state: OnlineConversationState) -> dict[str, Any]:
     """Handle duplicate events — does **not** update ``last_event_id``."""
     return {"response_kind": "duplicate"}
+
+
+async def clarification_response_node(
+    state: OnlineConversationState,
+) -> dict[str, Any]:
+    """Format the clarification response for the user.
+
+    The ``context_resolution_node`` has already set ``answer_dict`` with
+    the clarification question.  This node simply ensures the correct
+    response kind is set for downstream processing.
+    """
+    return {
+        "response_kind": "clarify",
+    }
+
+
+async def log_control_response_node(
+    state: OnlineConversationState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """Log a control response (clarification) and update ``last_event_id``.
+
+    Control responses are non-chat system messages (e.g. clarification
+    questions) that should still be persisted in the conversation log
+    for audit purposes.
+    """
+    ctx = _unpack_context(config)
+    db = ctx.get("db") if ctx else None
+
+    if db is not None:
+        answer_dict = state.get("answer_dict", {})
+        try:
+            await conversation_logger.log_conversation(
+                db,
+                tenant_id=state.get("tenant_id", ""),
+                user_id=state.get("user_id", ""),
+                channel=state.get("channel", "local"),
+                agent_id=state.get("agent_id"),
+                conversation_id=state.get("conversation_id", ""),
+                message=state.get("original_message") or state.get("message", ""),
+                task_type="clarify",
+                answer_dict=answer_dict,
+                path="clarify",
+            )
+        except Exception:
+            logger.warning("Failed to log control response", exc_info=True)
+
+    return {"last_event_id": state.get("event_id")}
 
 
 async def log_flow_output_node(
@@ -212,6 +269,20 @@ async def log_flow_output_node(
     return {"last_event_id": state.get("event_id")}
 
 
+# ===================================================================
+# Conditional edge: route from context_resolution
+# ===================================================================
+
+
+def route_context_resolution(state: OnlineConversationState) -> str:
+    """Return the next node after context resolution.
+
+    - ``"clarify"`` → the clarification response path
+    - ``"resolved"`` → evidence routing then chat
+    """
+    return state.get("context_status", "resolved")
+
+
 # ====================================================================
 # Graph builder
 # ====================================================================
@@ -222,18 +293,23 @@ def build_online_graph() -> StateGraph:
 
     Structure::
 
-        START  →  normalize_turn  →  [conditional]
+        START  →  normalize_turn  →  [flow_action]
                          │
-            ┌────────────┼──────────────┐
-            v            v              v
-        duplicate    guided_flow      chat
-                         │
-                         v
-                   log_flow_output
-                         │
-            └────────────┴──────────────┘
-                         v
-                        END
+            ┌────────────┼──────────────────────────────┐
+            v            v                              v
+        duplicate    guided_flow                  context_resolution
+                         │                              │
+                         v                    ┌─────────┴──────────┐
+                   log_flow_output            v                   v
+                         │           clarification       evidence_routing
+            └────────────┴───────────    response                 │
+                         v               │                      v
+                        END              v                     chat
+                                   log_control                    │
+                                       │                         v
+                                       └─────────┬───────────────┘
+                                                 v
+                                                END
 
     Returns:
         An uncompiled :class:`StateGraph`.  The caller must call
@@ -244,6 +320,10 @@ def build_online_graph() -> StateGraph:
     # ── Nodes ──────────────────────────────────────────────────────
     builder.add_node("normalize_turn", normalize_turn_node)
     builder.add_node("guided_flow", _get_guided_flow_graph())
+    builder.add_node("context_resolution", context_resolution_node)
+    builder.add_node("evidence_routing", evidence_routing_node)
+    builder.add_node("clarification_response", clarification_response_node)
+    builder.add_node("log_control_response", log_control_response_node)
     builder.add_node("chat", chat_node)
     builder.add_node("duplicate", duplicate_node)
     builder.add_node("log_flow_output", log_flow_output_node)
@@ -251,6 +331,7 @@ def build_online_graph() -> StateGraph:
     # ── Edges ──────────────────────────────────────────────────────
     builder.add_edge(START, "normalize_turn")
 
+    # From normalize_turn: route according to flow_action
     builder.add_conditional_edges(
         "normalize_turn",
         route_online_message,
@@ -259,13 +340,31 @@ def build_online_graph() -> StateGraph:
             "start": "guided_flow",
             "cancel": "guided_flow",
             "advance": "guided_flow",
-            "chat": "chat",
+            "chat": "context_resolution",
         },
     )
 
+    # From context_resolution: clarify or resolved
+    builder.add_conditional_edges(
+        "context_resolution",
+        route_context_resolution,
+        {
+            "clarify": "clarification_response",
+            "resolved": "evidence_routing",
+        },
+    )
+
+    # Clarification path
+    builder.add_edge("clarification_response", "log_control_response")
+    builder.add_edge("log_control_response", END)
+
+    # Resolved path
+    builder.add_edge("evidence_routing", "chat")
+    builder.add_edge("chat", END)
+
+    # Guided flow path
     builder.add_edge("guided_flow", "log_flow_output")
     builder.add_edge("log_flow_output", END)
-    builder.add_edge("chat", END)
     builder.add_edge("duplicate", END)
 
     return builder
@@ -274,8 +373,11 @@ def build_online_graph() -> StateGraph:
 __all__ = [
     "build_online_graph",
     "chat_node",
+    "clarification_response_node",
     "duplicate_node",
+    "log_control_response_node",
     "log_flow_output_node",
     "normalize_turn_node",
+    "route_context_resolution",
     "route_online_message",
 ]

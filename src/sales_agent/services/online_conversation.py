@@ -228,5 +228,6 @@ async def invoke_online_turn(
             "db": db,
             "chat_model": resolved_chat_model,
             "embedding_model": resolved_embedding_model,
+            "now": now,
         },
     )

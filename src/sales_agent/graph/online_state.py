@@ -45,6 +45,27 @@ class OnlineConversationState(TypedDict, total=False):
     # ── Deduplication ─────────────────────────────────────────────
     last_event_id: str | None
 
+    # ── Topic / Context Resolution ────────────────────────────────
+    topic_id: str | None
+    previous_topic_id: str | None
+    turn_relation: str | None  # "continue" | "revise" | "switch" | "new" | "ambiguous"
+    standalone_query: str | None
+    retained_entities: list[str]
+    retracted_goals: list[str]
+    pending_clarification_id: str | None
+    clarification_state: str | None
+    context_status: str | None  # "resolved" | "clarify"
+    original_message: str | None
+
+    # ── Evidence Routing ──────────────────────────────────────────
+    task_type: str | None
+    route_confidence: float | None
+    knowledge_policy: str | None  # "none" | "optional" | "required"
+    knowledge_scope: list[str]
+    retrieval_query: str | None
+    needs_retrieval: bool | None
+    route_trace: str | None
+
 
 __all__ = [
     "OnlineConversationState",

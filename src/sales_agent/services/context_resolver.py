@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -132,7 +133,7 @@ async def resolve_context(
                 max_tokens=500,
             )
             return parse_model_json(response, ContextDecision)
-        except Exception as exc:
+        except (json.JSONDecodeError, ValueError) as exc:
             logger.warning(
                 "resolve_context parse failure (attempt %d/2): %s",
                 attempt + 1,

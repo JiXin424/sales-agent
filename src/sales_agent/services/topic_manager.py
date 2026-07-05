@@ -468,7 +468,7 @@ async def resolve_clarification(
                 max_tokens=500,
             )
             return parse_model_json(response, ClarificationDecision)
-        except Exception as exc:
+        except (json.JSONDecodeError, ValueError) as exc:
             logger.warning(
                 "resolve_clarification parse failure: %s", exc,
             )

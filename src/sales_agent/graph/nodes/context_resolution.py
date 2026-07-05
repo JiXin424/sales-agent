@@ -142,11 +142,14 @@ async def _resolve_pending_turn(
         }
 
     if decision.resolution == "cancel":
-        # Cancel — close the topic and end.
+        # Cancel — close the topic and short-circuit to END so the
+        # canceled query is NOT re-processed through evidence_routing -> chat.
         await manager.resolve_pending(db, topic, decision, now=now)
         return {
-            "context_status": "resolved",
+            "context_status": "cancel",
+            "response_kind": "cancel",
             "topic_id": None,
+            "original_message": original_message,
             "standalone_query": "",
             "turn_relation": "new",
             "pending_clarification_id": None,

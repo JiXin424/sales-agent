@@ -360,13 +360,14 @@ def build_online_graph() -> StateGraph:
         },
     )
 
-    # From context_resolution: clarify or resolved
+    # From context_resolution: clarify, resolved, or cancel
     builder.add_conditional_edges(
         "context_resolution",
         route_context_resolution,
         {
             "clarify": "clarification_response",
             "resolved": "evidence_routing",
+            "cancel": END,
         },
     )
 

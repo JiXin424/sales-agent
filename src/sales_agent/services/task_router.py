@@ -5,11 +5,14 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any
 
 from sales_agent.prompts.task_router_prompt import TASK_ROUTER_PROMPT
+
+logger = logging.getLogger(__name__)
 
 # 任务类型常量 — Phase A
 EMOTIONAL_SUPPORT = "emotional_support"
@@ -382,7 +385,7 @@ async def _llm_route(
                 needs_clarification=confidence < 0.45,
             )
     except Exception:
-        pass
+        logger.warning("LLM route failed, falling back to rules", exc_info=True)
     return None
 
 

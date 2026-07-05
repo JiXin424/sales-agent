@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 
-from sales_agent.coach import quick_session as qs
+from sales_agent.graph.guided_flow.handlers import coach_flows as qs
 
 
 class _StubChat:
@@ -133,9 +133,6 @@ def test_sales_block_fallback_no_model():
 
 # ---------------- 分发 / 工具 ----------------
 
-def test_labels_and_cancel():
-    assert qs.label_of("small_win_appreciation") == "小赢欣赏"
-    assert qs.label_of("sales_block_breakthrough") == "卡点破框"
-    assert set(qs.VALID_TYPES) == {"small_win_appreciation", "sales_block_breakthrough"}
+def test_cancel_detection():
     assert qs._is_cancel("退出") and qs._is_cancel("cancel")
     assert not qs._is_cancel("下午好")

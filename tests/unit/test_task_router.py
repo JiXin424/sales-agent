@@ -88,7 +88,7 @@ class TestTaskRouter:
     async def test_needs_retrieval_for_knowledge_qa(self):
         result = await route_task("我们产品的优势是什么？")
         assert result.task_type == KNOWLEDGE_QA
-        assert result.needs_retrieval is True
+        assert result.knowledge_policy in ("required", "optional")
 
     @pytest.mark.asyncio
     async def test_script_needs_three_versions(self):
@@ -116,7 +116,7 @@ class TestTaskRouter:
     async def test_visit_preparation_needs_no_retrieval(self):
         result = await route_task("拜访准备：明天见一个金融客户")
         assert result.task_type == VISIT_PREPARATION
-        assert result.needs_retrieval is False
+        assert result.knowledge_policy == "none"
 
     @pytest.mark.asyncio
     async def test_follow_up_planning_basic(self):
@@ -137,7 +137,7 @@ class TestTaskRouter:
     async def test_follow_up_needs_no_retrieval(self):
         result = await route_task("跟进计划怎么安排")
         assert result.task_type == FOLLOW_UP_PLANNING
-        assert result.needs_retrieval is False
+        assert result.knowledge_policy == "none"
 
     @pytest.mark.asyncio
     async def test_customer_context_basic(self):
@@ -158,7 +158,7 @@ class TestTaskRouter:
     async def test_customer_context_needs_no_retrieval(self):
         result = await route_task("整理客户信息")
         assert result.task_type == CUSTOMER_CONTEXT_SUMMARY
-        assert result.needs_retrieval is False
+        assert result.knowledge_policy == "none"
 
     @pytest.mark.asyncio
     async def test_deal_advancement_basic(self):
@@ -179,7 +179,7 @@ class TestTaskRouter:
     async def test_deal_advancement_needs_no_retrieval(self):
         result = await route_task("怎么推进成交")
         assert result.task_type == DEAL_ADVANCEMENT
-        assert result.needs_retrieval is False
+        assert result.knowledge_policy == "none"
 
     @pytest.mark.asyncio
     async def test_conversation_scoring_basic(self):
@@ -200,7 +200,7 @@ class TestTaskRouter:
     async def test_conversation_scoring_needs_no_retrieval(self):
         result = await route_task("给我打分")
         assert result.task_type == CONVERSATION_SCORING
-        assert result.needs_retrieval is False
+        assert result.knowledge_policy == "none"
 
     # --- Routing correctness: new types should not interfere with old types ---
 
@@ -248,7 +248,7 @@ class TestTaskRouter:
     async def test_post_visit_review_needs_no_retrieval(self):
         result = await route_task("刚聊完客户")
         assert result.task_type == POST_VISIT_REVIEW
-        assert result.needs_retrieval is False
+        assert result.knowledge_policy == "none"
 
     @pytest.mark.asyncio
     async def test_post_visit_review_opportunity_card(self):

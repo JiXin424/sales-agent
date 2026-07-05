@@ -72,6 +72,7 @@ def _task_entries() -> list[BuiltinPrompt]:
 
 
 def _system_router_risk_entries() -> list[BuiltinPrompt]:
+    from sales_agent.prompts.evidence_router_prompt import EVIDENCE_ROUTER_PROMPT
     from sales_agent.prompts.risk_check_prompt import RISK_CHECK_PROMPT
     from sales_agent.prompts.system import SYSTEM_CONSTRAINT
     from sales_agent.prompts.task_router_prompt import TASK_ROUTER_PROMPT
@@ -79,6 +80,7 @@ def _system_router_risk_entries() -> list[BuiltinPrompt]:
     return [
         BuiltinPrompt("system", "system_constraint", SYSTEM_CONSTRAINT, (), "系统约束（Agent 人设与硬性边界）"),
         BuiltinPrompt("router", "task_router", TASK_ROUTER_PROMPT, ("message",), "任务路由 LLM 兜底分类器"),
+        BuiltinPrompt("router", "evidence_router", EVIDENCE_ROUTER_PROMPT, (), "意图证据路由分析器"),
         BuiltinPrompt("risk", "risk_check", RISK_CHECK_PROMPT, ("message", "answer"), "风险检查 LLM 合规复核"),
     ]
 

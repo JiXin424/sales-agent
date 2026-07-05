@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from sales_agent.prompts.task_router_prompt import TASK_ROUTER_PROMPT
@@ -75,15 +75,103 @@ class RouteResult:
 
     task_type: str
     confidence: float
-    needs_retrieval: bool
+    needs_retrieval: bool = False
     needs_clarification: bool = False
     router_type: str = "rule"           # "rule" | "llm" | "fallback"
     llm_router_called: bool = False     # 是否调用了 LLM router
+    knowledge_policy: str = "none"      # "none" | "optional" | "required"
+    knowledge_scope: list[str] = field(default_factory=list)
+    retrieval_query: str | None = None
+
+    def __post_init__(self) -> None:
+        """初始化后推导 needs_retrieval 兼容字段。"""
+        # 从 knowledge_policy 推导 needs_retrieval
+        object.__setattr__(self, "needs_retrieval", self.knowledge_policy != "none")
 
     @property
     def should_proceed(self) -> bool:
         """是否可以直接执行。"""
         return self.confidence >= 0.45
+
+
+# --- 策略守卫：信号关键词 ---
+
+# 事实信号关键词 — 检测到这些信号时强制 required/retrieve
+_FACT_SIGNAL_PATTERNS: list[re.Pattern] = [
+    re.compile(r"(产品|功能|方案|服务)"),
+    re.compile(r"(公司|企业)"),
+    re.compile(r"(价格|多少钱|怎么收费|报价|费用|成本|预算)"),
+    re.compile(r"(政策|制度|规定|流程|售后|保障)"),
+    re.compile(r"(案例|成功故事|客户见证|效果)"),
+    re.compile(r"(竞品|竞争对手|对比|区别|vs)"),
+    re.compile(r"(合同|合约|协议|签约|条款)"),
+    re.compile(r"(交付|实施|上线|部署|售后|服务)"),
+]
+
+# 非事实信号关键词 — 检测到这些信号时强制 none/direct
+_NON_FACT_SIGNAL_PATTERNS: list[re.Pattern] = [
+    re.compile(r"^(你好|嗨|hi|hello|hey|您好|早上好|下午好|晚上好)$"),
+    re.compile(r"(焦虑|沮丧|崩溃|担心|害怕|紧张|压力|没信心|想放弃|郁闷|烦躁)"),
+    re.compile(r"(说得对|好的|明白了|知道了|收到|谢谢|感谢|懂了|嗯|好的吧)"),
+]
+
+
+def apply_evidence_policy_guard(
+    query: str,
+    knowledge_policy: str,
+    response_mode: str,
+    retrieval_query: str | None,
+    reason_code: str,
+) -> tuple[str, str, str | None, str]:
+    """对知识策略决策应用本地策略守卫。
+
+    根据查询中的事实信号词或非事实信号词，强制调整
+    ``knowledge_policy`` 和 ``response_mode``。
+
+    不会暴露任何节点名、工具名或内部路由细节 — 仅修正 policy 级别。
+
+    Parameters
+    ----------
+    query :
+        原始用户查询文本（用于信号检测）。
+    knowledge_policy :
+        原始的 knowledge_policy 值。
+    response_mode :
+        原始的 response_mode 值。
+    retrieval_query :
+        原始的 retrieval_query 值。
+    reason_code :
+        原始的 reason_code 值。
+
+    Returns
+    -------
+    tuple[str, str, str | None, str]
+        (knowledge_policy, response_mode, retrieval_query, reason_code)
+    """
+    # 检测事实信号 — 升级策略（none 或 optional 均升级到 required）
+    has_fact_signal = any(p.search(query) for p in _FACT_SIGNAL_PATTERNS)
+
+    if has_fact_signal and knowledge_policy in ("none", "optional"):
+        knowledge_policy = "required"
+        response_mode = "retrieve"
+        reason_code = "policy_guard_upgraded_to_required"
+
+    # 检测非事实信号 — 降级策略（但已 required 的不降级）
+    has_non_fact_signal = any(p.search(query) for p in _NON_FACT_SIGNAL_PATTERNS)
+
+    if has_non_fact_signal and knowledge_policy != "required":
+        knowledge_policy = "none"
+        response_mode = "direct"
+        if reason_code == "policy_guard_upgraded_to_required":
+            pass  # 事实信号优先于非事实信号
+        else:
+            reason_code = "policy_guard_downgraded_to_none"
+
+    # 如果 required 但没有 retrieval_query，使用原始查询补位
+    if knowledge_policy == "required" and not retrieval_query:
+        retrieval_query = query
+
+    return knowledge_policy, response_mode, retrieval_query, reason_code
 
 
 # --- 规则匹配 ---
@@ -209,7 +297,6 @@ def _resolve_priority(hits: list[tuple[str, float]], message: str) -> RouteResul
         return RouteResult(
             task_type=GENERAL_COACHING,
             confidence=0.3,
-            needs_retrieval=False,
             needs_clarification=True,
         )
 
@@ -230,13 +317,16 @@ def _resolve_priority(hits: list[tuple[str, float]], message: str) -> RouteResul
         # 保留高优先级的任务类型，但置信度微调
         pass
 
-    needs_retrieval = TASK_DEFAULT_RETRIEVAL.get(best_type, False)
     needs_clarification = best_conf < 0.45
+
+    # 从 TASK_DEFAULT_RETRIEVAL 推导 knowledge_policy
+    default_needs_retrieval = TASK_DEFAULT_RETRIEVAL.get(best_type, False)
+    knowledge_policy = "required" if default_needs_retrieval else "none"
 
     return RouteResult(
         task_type=best_type,
         confidence=best_conf,
-        needs_retrieval=needs_retrieval,
+        knowledge_policy=knowledge_policy,
         needs_clarification=needs_clarification,
     )
 
@@ -277,11 +367,18 @@ async def _llm_route(
             if task_type not in ALL_TASK_TYPES:
                 task_type = GENERAL_COACHING
             confidence = float(data.get("confidence", 0.5))
-            needs_retrieval = bool(data.get("needs_retrieval", False))
+            # 兼容旧版 response：优先使用 knowledge_policy，否则从 needs_retrieval 推导
+            knowledge_policy = data.get("knowledge_policy", None)
+            if knowledge_policy is None:
+                needs_retrieval_old = bool(data.get("needs_retrieval", False))
+                knowledge_policy = "required" if needs_retrieval_old else "none"
+            # 如果 knowledge_policy 无效，使用默认值
+            if knowledge_policy not in ("none", "optional", "required"):
+                knowledge_policy = "none"
             return RouteResult(
                 task_type=task_type,
                 confidence=confidence,
-                needs_retrieval=needs_retrieval,
+                knowledge_policy=knowledge_policy,
                 needs_clarification=confidence < 0.45,
             )
     except Exception:
@@ -363,7 +460,6 @@ async def route_task(
     return RouteResult(
         task_type=GENERAL_COACHING,
         confidence=0.3,
-        needs_retrieval=False,
         needs_clarification=True,
         router_type="fallback",
         llm_router_called=False,
@@ -377,19 +473,30 @@ def route_task_rules_only(message: str) -> RouteResult:
         message: 用户输入消息
 
     Returns:
-        RouteResult 包含 task_type, confidence, needs_retrieval
+        RouteResult 包含 task_type, confidence, knowledge_policy
     """
     hits = _match_rules(message)
     if hits:
         result = _resolve_priority(hits, message)
         result.router_type = "rule"
         result.llm_router_called = False
+        # 对规则结果应用策略守卫
+        knowledge_policy, _, retrieval_query, _ = (
+            apply_evidence_policy_guard(
+                message,
+                result.knowledge_policy,
+                "retrieve" if result.knowledge_policy == "required" else "direct",
+                result.retrieval_query,
+                "rule_match",
+            )
+        )
+        result.knowledge_policy = knowledge_policy
+        result.retrieval_query = retrieval_query
         return result
 
     return RouteResult(
         task_type=GENERAL_COACHING,
         confidence=0.3,
-        needs_retrieval=False,
         needs_clarification=True,
         router_type="rule",
         llm_router_called=False,

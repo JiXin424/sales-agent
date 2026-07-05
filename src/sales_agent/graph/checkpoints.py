@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 _in_memory_saver: InMemorySaver | None = None
 _async_pg_saver: AsyncPostgresSaver | None = None
 
+# ── Online graph checkpointer (process-level singleton) ───────────────
+_online_in_memory_saver: InMemorySaver | None = None
+
 # ── Store singletons (P1: cross-session memory) ──────────────────────
 _in_memory_store: InMemoryStore | None = None
 _async_pg_store = None  # AsyncPostgresStore | None
@@ -30,6 +33,20 @@ def get_checkpointer_sync() -> InMemorySaver:
     if _in_memory_saver is None:
         _in_memory_saver = InMemorySaver()
     return _in_memory_saver
+
+
+def get_online_checkpointer_sync() -> InMemorySaver:
+    """Return a process-level InMemorySaver for the Online Graph.
+
+    This checkpointer is shared across all production conversation turns
+    and **must not** be created per request.  Tests should pass their
+    own :class:`InMemorySaver` to ``build_online_graph().compile()``
+    instead of using this singleton.
+    """
+    global _online_in_memory_saver
+    if _online_in_memory_saver is None:
+        _online_in_memory_saver = InMemorySaver()
+    return _online_in_memory_saver
 
 
 async def get_checkpointer() -> AsyncPostgresSaver | InMemorySaver:
@@ -58,8 +75,9 @@ async def get_checkpointer() -> AsyncPostgresSaver | InMemorySaver:
         from psycopg_pool import AsyncConnectionPool
 
         pool = AsyncConnectionPool(conn_string, min_size=1, max_size=5, open=True)
-        _async_pg_saver = AsyncPostgresSaver(conn=pool)
-        await _async_pg_saver.setup()
+        saver = AsyncPostgresSaver(conn=pool)
+        await saver.setup()
+        _async_pg_saver = saver  # only cache after successful setup
         logger.info("AsyncPostgresSaver initialized with PostgreSQL pool")
         return _async_pg_saver
 
@@ -107,8 +125,9 @@ async def get_store():
         from psycopg_pool import AsyncConnectionPool
 
         pool = AsyncConnectionPool(conn_string, min_size=1, max_size=5, open=True)
-        _async_pg_store = AsyncPostgresStore(conn=pool)
-        await _async_pg_store.setup()
+        store = AsyncPostgresStore(conn=pool)
+        await store.setup()
+        _async_pg_store = store  # only cache after successful setup
         logger.info("AsyncPostgresStore initialized for cross-session memory")
         return _async_pg_store
 

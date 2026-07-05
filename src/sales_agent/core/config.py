@@ -60,6 +60,9 @@ class RetrievalConfig(BaseModel):
     synonyms_path: str = "data/synonyms.json"
     # MD 优化预处理开关（在 chunk 前调用 LLM 增强 MD，默认关闭）
     md_optimization_enabled: bool = False
+    # Graph 路径（钉钉 Stream）并行 Ontology + RAG 检索开关
+    # True = LangGraph Send fan-out 同时执行两条检索路径，结果合并
+    parallel_enabled: bool = True
 
 
 class SourceDisplayConfig(BaseModel):
@@ -169,6 +172,13 @@ class AppConfig(BaseModel):
         return "all"
 
 
+class GuidedFlowsConfig(BaseModel):
+    """Unified online guided conversation flows (访前准备, 访后复盘, 小赢欣赏, 卡点破框)."""
+
+    enabled: bool = True
+    timezone: str = "Asia/Shanghai"
+
+
 class Settings(BaseModel):
     """顶层设置，聚合所有子配置。"""
 
@@ -185,6 +195,7 @@ class Settings(BaseModel):
     ontology: OntologyConfig = OntologyConfig()
     neo4j: Neo4jConfig = Neo4jConfig()
     web_search: WebSearchConfig = WebSearchConfig()
+    guided_flows: GuidedFlowsConfig = GuidedFlowsConfig()
 
     # 延迟导入避免循环依赖
     @property
@@ -328,6 +339,13 @@ class Settings(BaseModel):
         web_search_top_n = os.getenv("BOCHA_TOP_N", "")
         if web_search_top_n:
             raw.setdefault("web_search", {})["top_n"] = int(web_search_top_n)
+
+        # 环境变量覆盖 guided_flows 配置
+        guided_flows_enabled = os.getenv("GUIDED_FLOWS_ENABLED")
+        if guided_flows_enabled is not None:
+            raw.setdefault("guided_flows", {})["enabled"] = (
+                guided_flows_enabled.strip().lower() in {"1", "true", "yes", "on"}
+            )
 
         instance = cls(**raw)
         # 构造 DingTalkConfig 并设置到 instance

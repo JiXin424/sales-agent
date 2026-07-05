@@ -118,16 +118,23 @@ dingtalk:
 ontology:
   knowledge_engine: legacy_rag
   vector_fallback: conservative
+  hybrid_retrieval: true  # 同时跑 ontology + RAG，结果合并提升召回
   # 视觉模型（图片/扫描件解读）
   vision_model: "qwen-vl-plus"
   # 图片视觉解读开关
   vision_enabled: false
   # ── 运行时可控的检索参数（优化器可调） ──
-  entity_limit: 15
+  # ↓ 泰山 10轮优化最优 (pass_rate=53.7%, faith=0.95)
+  entity_limit: 92
   facts_per_entity: 20
-  max_entities_for_prompt: 10
-  max_facts_for_prompt: 25
-  vector_fallback_top_k: 5
+  max_entities_for_prompt: 46
+  max_facts_for_prompt: 158
+  vector_fallback_top_k: 10
+
+# --- 统一引导流程（访前准备、访后复盘、小赢欣赏、卡点破框）---
+guided_flows:
+  enabled: true
+  timezone: "Asia/Shanghai"
 
 neo4j:
   uri: ""

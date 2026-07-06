@@ -37,6 +37,18 @@ retrieval_query 字段：
 - 当 knowledge_policy 为 "optional" 时建议提供
 - 当 knowledge_policy 为 "none" 时留空
 
+## 检索激活原则（借自旧 intent_router）
+
+- **宁可多搜，不可漏搜**：不确定一个问题是否需要知识库时，knowledge_policy 设为 required 或 optional。多搜到无关内容可被后续过滤，漏搜会导致回答无知识支撑。
+- **触发词对照**：
+  - 产品/价格/多少钱/功能/服务/保障/承诺/赔付/资质/蛋糕/电影/年节/餐补/福利/商城 → knowledge_policy=required
+  - 怎么介绍/怎么推荐/方案/话术/异议/谈判/拜访 → required（策略类也需知识）
+  - 案例/经验/别人怎么/销冠/话术模板 → required
+  - 工会/国企/政策/采购/招标/客户画像 → required
+  - 竞品对比/XX公司怎么样 → required
+  - 纯情绪倾诉/纯通用教练/不涉及企业知识的话术创作 → none
+- required 时必须提供 retrieval_query；optional 时建议提供；none 时留空。
+
 ## 关键区分示例
 
 下面两个例子都涉及"写话术"，但知识策略不同：

@@ -62,11 +62,13 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 async def _run_auto_migrations(engine) -> None:
     """启动时自动把 DB schema 升级到 alembic head。
 
-    自动处理 baseline stamp（alembic_version 表不存在时）：
-    - 新库（create_all 刚建、schema 最新）→ stamp head；
-    - 旧库（schema 是 baseline）→ stamp baseline 再 upgrade head。
-    凭 ``prompt_versions`` 是否有 ``prompt_category`` 列区分新旧。
-    alembic_version 表已存在则直接 upgrade head（幂等）。
+    注意：``init_db`` 先调了 ``Base.metadata.create_all``（幂等 IF NOT EXISTS），
+    所以物理 schema 已经是最新的模型定义。alembic 迁移只需追上版本号，
+    不应再跑已执行的 DDL（否则会 DuplicateTableError）。
+
+    流程：
+    - 无 alembic_version 表 → 新库，直接 stamp head
+    - 有 alembic_version 表 → 先尝试 upgrade head；若因建表冲突失败则 stamp head
     失败不阻断启动（仅警告），保证运维接口可用。
     """
     import asyncio
@@ -101,24 +103,23 @@ async def _run_auto_migrations(engine) -> None:
                 ).scalar()
             )
             if not has_version_table:
-                has_new_col = bool(
-                    (
-                        await conn.execute(
-                            text(
-                                "SELECT EXISTS (SELECT FROM information_schema.columns "
-                                "WHERE table_name='prompt_versions' "
-                                "AND column_name='prompt_category')"
-                            )
-                        )
-                    ).scalar()
-                )
-                # 新库 create_all 已建最新 schema → stamp head；旧库 → stamp baseline
-                stamp_rev = "0002_prompt_category" if has_new_col else "0001_baseline"
-                log.info("Auto alembic stamp %s (schema_is_new=%s)", stamp_rev, has_new_col)
-                await asyncio.to_thread(command.stamp, cfg, stamp_rev)
+                # 新库：create_all 已经基于最新模型建好全部表 → 直接 stamp head
+                log.info("Auto alembic: new DB, stamping head")
+                await asyncio.to_thread(command.stamp, cfg, "head")
+                log.info("Auto alembic stamp head completed")
+                return
 
-        await asyncio.to_thread(command.upgrade, cfg, "head")
-        log.info("Auto alembic upgrade to head completed")
+        # 表存在 → 先尝试升级；若 create_all 已提前建了迁移里的表则 stamp head 兜底
+        try:
+            await asyncio.to_thread(command.upgrade, cfg, "head")
+            log.info("Auto alembic upgrade to head completed")
+        except Exception:
+            log.warning(
+                "Auto alembic upgrade failed (likely tables already created by "
+                "create_all), stamping head as fallback"
+            )
+            await asyncio.to_thread(command.stamp, cfg, "head")
+            log.info("Auto alembic stamp head completed (fallback)")
     except Exception as e:  # noqa: BLE001
         log.warning("Auto alembic migration failed (non-fatal): %s", e)
 

@@ -39,4 +39,5 @@ async def test_llm_route_falls_back_to_default_when_no_prompt():
     result = await _llm_route("随便说点什么", model)
     assert result is not None
     user_content = model.received_messages[0]["content"]
-    assert "任务分类器" in user_content  # 内置默认特征词
+    assert "emotional_support" in user_content  # 内置默认含 12 类列表
+    assert "knowledge_qa" in user_content

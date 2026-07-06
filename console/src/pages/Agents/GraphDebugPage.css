@@ -1,9 +1,9 @@
 .gd-container {
   display: flex;
   flex-direction: column;
-  /* graph-debug 路由下 AgentLayout 的 Content 已去 margin/padding，
-     可用高度 = 100vh - 64px(header)。普通页面仍走白卡片 Content。 */
-  height: calc(100vh - 64px);
+  /* graph-debug 路由脱离了 AgentLayout 的侧边栏 + Header，
+     整个视口都给图调试页。 */
+  height: 100vh;
   gap: 0;
 }
 
@@ -76,14 +76,17 @@
   display: flex;
   justify-content: center;
   align-items: center;
-  min-height: 100%;
+  height: 100%;
+  width: 100%;
 }
 
+/* mermaid svg 撑满图区容器，按 preserveAspectRatio(xMidYMid meet)
+   保持比例最大化显示——图真正占满整个屏幕而非按原始尺寸居中。
+   !important 覆盖 mermaid render 注入的内联 max-width/height。 */
 .gd-mermaid svg {
-  max-width: 100%;
-  max-height: 100%;
-  height: auto;
-  width: auto;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
 }
 
 /* ── 节点类型图例 + 对照表 ──
@@ -153,6 +156,11 @@
   margin-left: auto;
   font-weight: 400;
   font-size: 13px;
+}
+
+/* 「图结构」标题：夹在返回按钮和折叠按钮之间。 */
+.gd-left-header .gd-title {
+  margin-left: 12px;
 }
 
 .gd-right-body {

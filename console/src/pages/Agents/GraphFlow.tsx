@@ -20,7 +20,7 @@ import ReactFlow, {
 import dagre from 'dagre';
 import 'reactflow/dist/style.css';
 import type { GraphInfo } from '@/api/types';
-import { GraphNode, graphNodeTypes, inferKind, type GraphNodeData } from './GraphNode';
+import { graphNodeTypes, inferKind, type GraphNodeData } from './GraphNode';
 
 const NODE_WIDTH = 180;
 const NODE_HEIGHT = 48;

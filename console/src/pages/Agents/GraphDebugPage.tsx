@@ -1,6 +1,6 @@
-/** Graph Debug Page — Mermaid visualization + test-run for LangGraph graphs.
+/** Graph Debug Page — reactflow graph visualization + test-run for LangGraph graphs.
 
-Left panel: Tab-switched Mermaid diagrams + input box + Send.
+Left panel: Tab-switched reactflow diagrams + input box + Send.
 Right panel: Two tabs:
   - 「实时 trace」: per-node execution trace (SSE live updates) + token output.
   - 「Checkpoint 时间轴」: read-only node-boundary state snapshots for the
@@ -22,7 +22,6 @@ import {
   DownOutlined,
   UpOutlined,
 } from '@ant-design/icons';
-import mermaid from 'mermaid';
 import {
   getGraphDebugGraphs,
   runGraphDebug,
@@ -44,11 +43,9 @@ import type {
   PromptMapping,
 } from '@/api/types';
 import JsonNode from './JsonNode';
+import GraphFlow from './GraphFlow';
 import CheckpointDAG from './CheckpointDAG';
 import './GraphDebugPage.css';
-
-// Initialize mermaid
-mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose' });
 
 const RECENT_RUNS_KEY = 'graph-debug:runs';
 const MAX_RECENT_RUNS = 20;
@@ -79,8 +76,15 @@ function NodeLegend() {
   );
 }
 
-/** 节点 ↔ Prompt 对照表：每个 prompt 一行，无 prompt 的纯函数节点标「—」。 */
-function NodePromptTable({ rows }: { rows: PromptMapping[] }) {
+/** 节点 ↔ Prompt 对照表：每个 prompt 一行，无 prompt 的纯函数节点标「—」。
+ *  highlightedNode 命中时该行加 gd-prompt-row-highlight class（黄色闪烁）。 */
+function NodePromptTable({
+  rows,
+  highlightedNode,
+}: {
+  rows: PromptMapping[];
+  highlightedNode: string | null;
+}) {
   const columns: TableColumnsType<PromptMapping> = [
     {
       title: '节点',
@@ -127,6 +131,7 @@ function NodePromptTable({ rows }: { rows: PromptMapping[] }) {
         columns={columns}
         dataSource={rows}
         rowKey={(r, i) => `${r.node}-${r.prompt_name}-${i}`}
+        rowClassName={(row) => (row.node === highlightedNode ? 'gd-prompt-row-highlight' : '')}
       />
     </div>
   );
@@ -180,7 +185,6 @@ export default function GraphDebugPage() {
   const [tokens, setTokens] = useState('');
   const [doneInfo, setDoneInfo] = useState<GraphDebugDone | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [mermaidSvg, setMermaidSvg] = useState<Record<string, string>>({});
   const abortRef = useRef<AbortController | null>(null);
 
   // ── Time-travel state ──
@@ -194,6 +198,19 @@ export default function GraphDebugPage() {
   const [recentRuns, setRecentRuns] = useState<RecentDebugRun[]>(() => loadRunsFromStorage());
   // 执行轨迹面板折叠：折叠后图区占满整个屏幕（header 以下全部空间）
   const [traceCollapsed, setTraceCollapsed] = useState(false);
+
+  // 点 GraphFlow 节点 → 展开对照表 + 高亮对应行 2 秒。
+  const promptTableRef = useRef<HTMLDivElement>(null);
+  const [highlightedNode, setHighlightedNode] = useState<string | null>(null);
+  const handleSelectNode = useCallback((nodeId: string) => {
+    if (!nodeId) {
+      setHighlightedNode(null);
+      return;
+    }
+    setHighlightedNode(nodeId);
+    // 2 秒后清除高亮（保留滚动位置）。
+    window.setTimeout(() => setHighlightedNode(null), 2000);
+  }, []);
 
   // ── Fork (A2) state ──
   // When editing, draftValues holds the user-edited copy of checkpointState.values;
@@ -212,26 +229,6 @@ export default function GraphDebugPage() {
   });
 
   const graphs: GraphInfo[] = graphsQuery.data?.graphs ?? [];
-
-  // ── Render Mermaid for active graph ──
-  useEffect(() => {
-    if (!graphs.length) return;
-    const g = graphs.find(g => g.id === activeGraphId);
-    if (!g || !g.mermaid) return;
-    if (mermaidSvg[activeGraphId]) return; // already rendered
-
-    // Remove Mermaid YAML front-matter block (v11 doesn't parse it)
-    const cleanMermaid = g.mermaid.replace(/^---\n[\s\S]*?\n---\n/, '');
-
-    (async () => {
-      try {
-        const { svg } = await mermaid.render(`mermaid-${activeGraphId}`, cleanMermaid);
-        setMermaidSvg(prev => ({ ...prev, [activeGraphId]: svg }));
-      } catch {
-        setMermaidSvg(prev => ({ ...prev, [activeGraphId]: `<pre>${cleanMermaid}</pre>` }));
-      }
-    })();
-  }, [graphs, activeGraphId, mermaidSvg]);
 
   // ── Fetch checkpoint list for a thread (used by both run-done and history select) ──
   const fetchCheckpoints = useCallback(
@@ -571,24 +568,23 @@ export default function GraphDebugPage() {
                 children: (
                   <>
                     <NodeLegend />
-                    <div className="gd-mermaid-wrap">
-                      {mermaidSvg[g.id] ? (
-                        <div
-                          className="gd-mermaid"
-                          dangerouslySetInnerHTML={{ __html: mermaidSvg[g.id] }}
-                        />
-                      ) : (
-                        <Spin tip="渲染图中..." />
-                      )}
+                    <div className="gd-flow-wrap">
+                      <GraphFlow graph={g} onSelect={handleSelectNode} />
                     </div>
                     <Collapse
                       size="small"
-                      defaultActiveKey={[]}
+                      ref={promptTableRef}
+                      defaultActiveKey={highlightedNode ? ['prompt-map'] : []}
                       style={{ marginTop: 8 }}
                       items={[{
                         key: 'prompt-map',
                         label: `节点 ↔ Prompt 对照（${g.prompt_map?.length ?? 0} 行）`,
-                        children: <NodePromptTable rows={g.prompt_map ?? []} />,
+                        children: (
+                          <NodePromptTable
+                            rows={g.prompt_map ?? []}
+                            highlightedNode={highlightedNode}
+                          />
+                        ),
                       }]}
                     />
                   </>

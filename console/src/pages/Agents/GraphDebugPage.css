@@ -53,8 +53,8 @@
   height: 100%;
 }
 
-/* tabpane 成为 flex 容器：NodeLegend / gd-mermaid-wrap / Collapse 纵向排列，
-   gd-mermaid-wrap 用 flex:1 撑满剩余，图不再被兄弟元素挤出/裁切。 */
+/* tabpane 成为 flex 容器：NodeLegend / gd-flow-wrap / Collapse 纵向排列，
+   gd-flow-wrap 用 flex:1 撑满剩余，图不再被兄弟元素挤出/裁切。 */
 .gd-left-body > .ant-tabs > .ant-tabs-content-holder > .ant-tabs-content > .ant-tabs-tabpane {
   height: 100%;
   display: flex;
@@ -62,36 +62,36 @@
   min-height: 0;
 }
 
-.gd-mermaid-wrap {
+.gd-flow-wrap {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  position: relative;
   border: 1px solid #f0f0f0;
   border-radius: 6px;
-  padding: 12px;
-  background: #fff;
+  overflow: hidden;
+  background: #f7f9fc;
 }
 
-.gd-mermaid {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  height: 100%;
-  width: 100%;
+/* reactflow 自定义节点不需要额外 CSS（样式全在 GraphNode.tsx 内联），
+   此 class 仅用于 devtools 定位。 */
+.gd-flow-node {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
-/* mermaid svg 撑满图区容器，按 preserveAspectRatio(xMidYMid meet)
-   保持比例最大化显示——图真正占满整个屏幕而非按原始尺寸居中。
-   !important 覆盖 mermaid render 注入的内联 max-width/height。 */
-.gd-mermaid svg {
-  width: 100% !important;
-  height: 100% !important;
-  max-width: none !important;
+/* 对照表高亮行：黄色背景 + 2 秒淡出。 */
+.gd-prompt-row-highlight {
+  background: #fffbe6;
+  animation: gd-row-fade 2s ease-out forwards;
+}
+
+@keyframes gd-row-fade {
+  from { background: #fff7b3; }
+  to { background: transparent; }
 }
 
 /* ── 节点类型图例 + 对照表 ──
-   mermaid 的 classDef（subgraphNode 橙 / llmNode 蓝）已在 mermaid 文本里
-   定义并由 mermaid 渲染时内联应用；此处 CSS 作为后备 + 图例色块复用。 */
+   reactflow 节点徽配色（子图橙 / LLM 蓝）在 GraphNode.tsx 内联；
+   此处 CSS 仅作图例色块复用。 */
 .gd-legend {
   display: flex;
   gap: 16px;
@@ -119,7 +119,7 @@
 .gd-legend-swatch.llm { background: #e6f4ff; border-color: #1677ff; }
 .gd-legend-swatch.sub { background: #fff3e0; border-color: #ff9800; }
 
-/* 节点-Prompt 对照表（mermaid 图下方） */
+/* 节点-Prompt 对照表（reactflow 图下方） */
 .gd-node-prompt-table {
   margin-top: 8px;
 }

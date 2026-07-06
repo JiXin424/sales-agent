@@ -22,6 +22,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from langgraph.graph.state import CompiledStateGraph
+
 from sales_agent.api.deps import DbSession
 from sales_agent.graph.registry import GRAPH_REGISTRY
 from sales_agent.graph.checkpoints import get_checkpointer
@@ -83,11 +85,50 @@ class ReplayRequest(BaseModel):
 
 # ── Helpers ────────────────────────────────────────────────────────
 
-def _count_nodes_edges(mermaid: str) -> tuple[int, int]:
-    """Count nodes and edges from a Mermaid diagram string."""
-    nodes = sum(1 for line in mermaid.split("\n") if "(" in line and "[" in line)
-    edges = sum(1 for line in mermaid.split("\n") if "-->" in line or "-." in line)
-    return nodes, edges
+# Mermaid class + classDef appended to a graph so its subgraph-entry nodes
+# stand out from ordinary nodes (orange, thick border). Applied only to the
+# online graph, which is the only one that embeds other graphs as nodes.
+_SUBGRAPH_CLASS_DEF = (
+    "classDef subgraphNode fill:#fff3e0,stroke:#ff9800,"
+    "stroke-width:3px,color:#e65100"
+)
+
+
+def _normalize_id(name: str) -> str:
+    """Normalize a graph/node id for cross-reference (``guided-flow`` == ``guided_flow``)."""
+    return name.replace("-", "_").lower()
+
+
+def _identify_subgraph_nodes(graph) -> list[str]:
+    """Return node ids in ``graph`` that are themselves subgraph entry-points.
+
+    A node counts as a subgraph node if either signal fires:
+      - its data is a compiled StateGraph — LangGraph-native subgraph wiring
+        (e.g. ``guided_flow``, added via ``add_node(name, compiled_subgraph)``);
+      - or its normalized id matches a key in ``GRAPH_REGISTRY`` — a wrapper
+        node that delegates to a registered top-level graph (e.g. ``chat``,
+        wrapped by ``chat_node()`` so LangGraph sees a plain callable, but it
+        is still a registered graph invoked as a sub-step).
+
+    ``__start__`` / ``__end__`` are excluded. Only the online graph has such
+    nodes; chat and guided-flow diagrams return ``[]``.
+    """
+    registry_ids = {_normalize_id(k) for k in GRAPH_REGISTRY}
+    out: list[str] = []
+    for nid, nd in graph.nodes.items():
+        if nid in ("__start__", "__end__"):
+            continue
+        if isinstance(nd.data, CompiledStateGraph) or _normalize_id(nid) in registry_ids:
+            out.append(nid)
+    return out
+
+
+def _decorate_mermaid(mermaid: str, subgraph_nodes: list[str]) -> str:
+    """Append a highlight class so subgraph nodes render with a distinct style."""
+    if not subgraph_nodes:
+        return mermaid
+    nodes_clause = ",".join(subgraph_nodes)
+    return f"{mermaid}\n\tclass {nodes_clause} subgraphNode\n\t{_SUBGRAPH_CLASS_DEF}\n"
 
 
 def _sse(data: dict) -> str:
@@ -124,8 +165,15 @@ async def list_graphs(agent_id: str):
         try:
             builder = entry["builder"]()
             compiled = builder.compile()
-            mermaid = compiled.get_graph().draw_mermaid()
-            nodes, edges = _count_nodes_edges(mermaid)
+            g = compiled.get_graph()
+            mermaid = g.draw_mermaid()
+            # 真实节点/边数取自 graph 对象。原先按 mermaid 文本解析(节点行需同时含
+            # "(" 和 "["),但普通节点行是 `name(name)` 仅含 "(",只有 __start__/__end__
+            # 的 `([<p>…</p>])` 同时含两者 → 全图 node_count 恒为 2。
+            nodes = len(g.nodes)
+            edges = len(g.edges)
+            # 子图节点视觉区分(橙色加粗边框);仅 online 图命中,chat/guided-flow 无子图节点
+            mermaid = _decorate_mermaid(mermaid, _identify_subgraph_nodes(g))
         except Exception as exc:
             logger.warning("Failed to compile graph %s: %s", graph_id, exc)
             mermaid = f"graph TD;\n  error[Graph '{graph_id}' failed to compile: {exc}]"

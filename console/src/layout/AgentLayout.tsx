@@ -94,19 +94,9 @@ export default function AgentLayout() {
   const selectedKey =
     items.find((it) => location.pathname.startsWith(it.key))?.key || `${agentId}/overview`;
 
-  // graph-debug 是全屏可视化工作台：脱离侧边栏 + Header，
-  // 让 Mermaid 图占满整个屏幕（100vw × 100vh）。其它路由保持白卡片样式。
+  // graph-debug 保留侧边栏 + Header（导航不变），但去掉 Content 的
+  // margin/padding 让 Mermaid 图在主区最大化放大。其它路由保持白卡片样式。
   const isGraphDebug = location.pathname.includes('/graph-debug');
-
-  if (isGraphDebug) {
-    return (
-      <Layout style={{ height: '100vh' }}>
-        <Content style={{ margin: 0, padding: 0, background: '#fff' }}>
-          <Outlet />
-        </Content>
-      </Layout>
-    );
-  }
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -142,7 +132,13 @@ export default function AgentLayout() {
             {agent.tenant_id}
           </Typography.Text>
         </Header>
-        <Content style={{ margin: 24, padding: 24, background: '#fff', borderRadius: 8, minHeight: 280 }}>
+        <Content
+          style={
+            isGraphDebug
+              ? { margin: 0, padding: 0, background: '#fff', minHeight: 0 }
+              : { margin: 24, padding: 24, background: '#fff', borderRadius: 8, minHeight: 280 }
+          }
+        >
           <Outlet />
         </Content>
       </Layout>

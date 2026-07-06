@@ -1,9 +1,9 @@
 .gd-container {
   display: flex;
   flex-direction: column;
-  /* graph-debug 路由脱离了 AgentLayout 的侧边栏 + Header，
-     整个视口都给图调试页。 */
-  height: 100vh;
+  /* 保留侧边栏 + Header：可用高度 = 100vh - 64px(顶部 Header)。
+     graph-debug 路由 Content 已去 margin/padding，宽度=侧边栏右侧全部。 */
+  height: calc(100vh - 64px);
   gap: 0;
 }
 
@@ -158,9 +158,10 @@
   font-size: 13px;
 }
 
-/* 「图结构」标题：夹在返回按钮和折叠按钮之间。 */
+/* 「图结构」标题：左侧主标题，折叠按钮靠右（gd-trace-toggle margin-left:auto 推开）。 */
 .gd-left-header .gd-title {
-  margin-left: 12px;
+  font-size: 15px;
+  font-weight: 600;
 }
 
 .gd-right-body {

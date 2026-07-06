@@ -8,7 +8,7 @@ Right panel: Two tabs:
 */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Input, Button, Collapse, Tag, Spin, Alert, Tabs, Empty, Select, Modal, Table } from 'antd';
 import type { TableColumnsType } from 'antd';
@@ -21,7 +21,6 @@ import {
   PlayCircleOutlined,
   DownOutlined,
   UpOutlined,
-  ArrowLeftOutlined,
 } from '@ant-design/icons';
 import mermaid from 'mermaid';
 import {
@@ -174,7 +173,6 @@ function summarizeMessage(msg: string, max = 40): string {
 
 export default function GraphDebugPage() {
   const { agentId } = useParams<{ agentId: string }>();
-  const navigate = useNavigate();
   const [activeGraphId, setActiveGraphId] = useState<string>('chat');
   const [message, setMessage] = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -541,14 +539,6 @@ export default function GraphDebugPage() {
       {/* Left panel */}
       <div className="gd-left">
         <div className="gd-left-header">
-          <Button
-            type="text"
-            size="small"
-            icon={<ArrowLeftOutlined />}
-            onClick={() => navigate(`/agents/${agentId}/overview`)}
-          >
-            返回控制台
-          </Button>
           <span className="gd-title">图结构</span>
           <Button
             type="text"

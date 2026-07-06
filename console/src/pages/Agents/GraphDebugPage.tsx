@@ -200,7 +200,6 @@ export default function GraphDebugPage() {
   const [traceCollapsed, setTraceCollapsed] = useState(false);
 
   // 点 GraphFlow 节点 → 展开对照表 + 高亮对应行 2 秒。
-  const promptTableRef = useRef<HTMLDivElement>(null);
   const [highlightedNode, setHighlightedNode] = useState<string | null>(null);
   const handleSelectNode = useCallback((nodeId: string) => {
     if (!nodeId) {
@@ -573,8 +572,7 @@ export default function GraphDebugPage() {
                     </div>
                     <Collapse
                       size="small"
-                      ref={promptTableRef}
-                      defaultActiveKey={highlightedNode ? ['prompt-map'] : []}
+                      activeKey={highlightedNode ? ['prompt-map'] : []}
                       style={{ marginTop: 8 }}
                       items={[{
                         key: 'prompt-map',

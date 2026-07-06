@@ -39,3 +39,17 @@ All 11 criteria from spec lines 501-513 verified.
 - `tests/unit/graph/test_online_graph.py`
 - `README.md`
 - `changelog/2026-07-06.md`
+
+## Post-Review Fixes (2026-07-06)
+
+### Issue 2: `topic_routing_enabled` default mismatch
+- Changed `state.get("topic_routing_enabled", True)` to `state.get("topic_routing_enabled", False)` in `normalize_turn_node` to match config default
+- Added `"topic_routing_enabled": True` to `_BASE_INPUT` in tests to preserve existing test behavior
+
+### Issue 3: Outdated docstrings
+- `online_state.py` line 36: Added `"direct_chat"` to `flow_action` type comment
+- `online_graph.py` line 135: Added `"direct_chat"` to `route_online_message` docstring
+
+### Verification
+- `pytest -q tests/unit/graph/test_online_graph.py` — 17 passed
+- Commit amended: `48c6f9f`

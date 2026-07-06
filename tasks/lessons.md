@@ -360,3 +360,35 @@
   5. **CI 部署 DB 不能只靠运行时 `init_db` 自动迁移**：漂移只能靠业务 crash 暴露（本次漂移了 4 个 commit 才因 stream crash 被发现）。CI 应加「部署后 schema 一致性校验」（对比 alembic_version 与关键列是否存在）+ migration 预演（临时 pgvector 库 dry-run upgrade），把漂移拦在部署阶段。新 ORM 表必须同一 PR 配 `create_table` migration（model 先进、migration 后补 = 埋漂移）。
 - **检查范式**：某环境 stream/api 报 `InFailedSQLTransactionError` 而其它环境正常 → 查该环境 DB：`SELECT column_name FROM information_schema.columns WHERE table_name='X'` 与正常环境 diff → 缺列则查 `alembic_version`（若版本号=正常环境但列缺 = 幽灵漂移）→ 写幂等 backfill migration（`ADD COLUMN IF NOT EXISTS`，**不要含 create_table**，否则又会被 stamp 跳过）补齐 → 同时修 `init_db` 顺序防前向再发。事务 dry-run（`BEGIN; <migration SQL>; ROLLBACK;`）可无风险验证 SQL 兼容性。
 - **相关**：#25（生产 500 但日志干净的「不可见故障」同族——都是兜底/装饰器吞掉真相）、#26（render 副作用跨环境覆盖——都是「环境状态被隐式改写」）、#27（graph 新路径漂移——本次根因正是 0011 引入 topic 时的 schema 没跟上 graph 代码）。
+
+## 29. CI fan-out 脚本用 `cmd || echo "⚠️ 继续下一台"` 容错会吞掉子步骤 exit code——schema 校验失败时 CI job 仍 success，只有日志 ❌，「漂移即 CI 失败」承诺失效
+- **现象**：本次给 `deploy-remote.sh` 加了 schema 校验（失败 exit 1），本意是「漂移即部署失败、CI 红」。但 `scripts/ci-fanout.sh` 每个部署分支都是 `ssh ... "docker run ... deploy-remote.sh" || echo "⚠️ [$name] 失败，继续下一台" >&2`——`cmd || echo` 在 cmd 失败时跑 echo（返回 0），整个表达式返回 0，`while` 循环继续下一台，脚本末尾隐式 exit 0。结果：deploy-remote.sh exit 1 被 `|| echo` 吞掉，**CI job 仍 success**，只有 ssh stdout 里的 ❌ 日志（用户得主动翻 Gitea Actions 日志才看到）。
+- **根因**：`|| echo` 是「fan-out 容错」设计（一台挂不阻塞其它台），但它把「子步骤失败」和「整个 job 失败」解耦了——对「尽力部署、一台失败不影响其它」合理，但对「schema 校验必须通过否则是严重 bug」这类硬约束，静默 success 比 fail 更危险（部署挂了 CI 绿，和 #25「生产 500 但日志干净」同族）。
+- **教训**：
+  1. **`cmd || echo` 吞 exit code**：在 `set -e` 下 `||` 会抑制 cmd 的非零退出，echo 返回 0。fan-out 脚本若要「继续下一台但最终 job fail」，必须显式收集失败：`cmd || { echo "⚠️"; FAILED=1; }` ... 循环末尾 `[ "${FAILED:-0}" = 1 ] && exit 1`。别让容错变成静默。
+  2. **「校验失败即 CI fail」需要端到端 exit code 传播**：校验脚本 exit 1 → deploy-remote.sh exit 1 → ci-fanout 必须 exit 1 → Gitea Actions job fail。中间任何一环用 `|| echo` / `|| true` 兜底都会断链。加校验时必须同时审 fan-out 脚本的失败传播。
+  3. **CI「静默 success」是反模式**：部署类 CI 的容错应「继续执行 + 末尾汇总失败」，而非「逐台吞错」。前者用户能在 job status 看到 red；后者要翻日志才发现。
+- **检查范式**：给部署链路加硬约束校验（schema / 健康检查 / 冒烟）后，必须 grep fan-out 脚本里调它的那行有没有 `|| echo` / `|| true` / `|| :`——有就说明失败被吞，校验形同摆设（job 永远绿）。修法：收集 FAILED 标志末尾 exit 1。
+- **相关**：#25（生产 500 但日志干净——兜底/装饰器吞真相同族）、#28（init_db stamp head 兜底掩盖 add_column 跳过——「容错变成谎言」同族，本次 schema 校验正是为拦 #28 的幽灵漂移）、#24（bash 隐式失败 + set -e 同族——bash 失败语义反直觉）。
+
+## 30. DB 版 prompt 含字面花括号（`{群聊/私聊}`）→ `str.format` 当未知占位符抛 `KeyError`，LLM 路由每次必崩；用 `format_map` + `__missing__` SafeDict 兼容三类花括号。**+ Edit 被 hook 静默 revert，必须 `git diff` 验证而非 Read**
+- **场景**：eval 跑 10 道知识库题，`_llm_route` 用 `(router_prompt).format(message=message)` 渲染 DB 版 task_router prompt，每次抛 `KeyError: '群聊/私聊'` → LLM 路由崩溃 → 回退规则路由 → 知识题（不含规则关键词的）误判 `general_sales_coaching`、ontology 检索永不触发。
+- **根因**：DB active 版 task_router prompt 含**三类花括号**：① 真占位符 `{message}`；② JSON escape `{{...}}`（`.format` 还原为 `{...}`）；③ **作者漏 escape 的字面花括号** `{群聊/私聊}`/`{已有人@你/无人@你}`/`{发送者姓名}`。`.format(message=...)` 把第 ③ 类当未知占位符 → `KeyError`。prompt 经 `PromptRegistry` 从 DB 取回（非 Python 常量），故 `.format` 安全性依赖 DB 数据格式——DB 数据没人 review escape，必炸。
+- **教训**：
+  1. **`str.format` 不适合渲染「外部数据源（DB/配置）的模板」**：模板作者无法保证所有字面花括号都 escape 成 `{{}}`。改用 `format_map` + `__missing__` 返回 `"{" + key + "}"` 的 SafeDict——未知占位符原样保留，三类花括号全正确：真占位符替换、`{{}}` escape 还原、字面 `{key}` 保留。不改 DB 数据、不破坏 escape 语义。
+  2. **`.replace("{message}", msg)` 是错解**：它跳过 `.format`，导致 `{{...}}` escape 不被还原、原样发给 LLM → LLM 模仿输出双花括号 JSON → 下游解析又炸（本次第二层 `JSONDecodeError`）。format_map 才是正解：既替换真占位符、又还原 escape、又保留字面花括号。
+  3. **Edit 可能被 hook 静默 revert**：本次首次 Edit `task_router.py`（`.format`→`.replace`）被某 hook 静默撤销，`Read` 显示的是缓存/旧状态看不出问题，只有 `git diff` 才权威显示「改动没在」。**验证改动落盘一律用 `git diff`，不要用 Read**——Read 可能给 stale 视图。
+  4. **`PromptRegistry` 解析后的 prompt 仍是「待 format 的模板」**：调用方拿到 `router_prompt` 后自己 `.format`/`.format_map` 注入变量。这意味着 prompt 的 escape 规范（`{{}}`）和调用方的渲染方式（`.format` 系）必须配套——DB prompt 改了 escape 但调用方用 `.replace`，或反过来，都会出问题。规范：DB prompt 一律按 `.format` 语义 escape（字面花括号写 `{{}}`），调用方一律用 `format_map+SafeDict`（双保险：即便作者漏 escape 也不炸）。
+- **检查范式**：LLM 路由/任何 `prompt.format(...)` 报 `KeyError: '<中文/非占位符词>'` → 该词是 DB prompt 里的字面花括号（作者漏 escape）→ 改 `.format` 为 `format_map(_KeepMissingDict(...))`，`__missing__` 返回 `"{" + key + "}"`。验证改动用 `git diff`。配套：prompt 里 JSON 示例的 `{{}}` 确认被还原为 `{}`（不会被 `.replace` 破坏）。
+- **相关**：#1（`str.format` 占位符没注入 prompt 失效同族——都是「prompt 没真正按预期进 LLM」）、#27（检索旁路绕过主生成——同属「eval/老路径行为偏离预期」）、#31（eval 路径 ≠ 生产路径——本 bug 只影响 eval/cli，生产 stream 纯规则路由不炸）。
+
+## 31. eval（ChatPipeline 老路径，含 LLM 路由兜底）≠ 生产（graph `route_task_rules_only` 纯规则）；DB prompt schema 与代码 parser schema 会独立漂移；嵌套 JSON 不能用 `re.search(r"\{[^}]+\}")`
+- **场景**：修完 #30 的 `KeyError` 后，`_llm_route` 又报 `JSONDecodeError` 7 次——DB active prompt 输出 **intent schema**（`intent`/`intent_reason`/`channel_queries` 嵌套结构），但 `_llm_route` 解析代码期望 **task_type schema**（`task_type`/`confidence`/`needs_retrieval`）。两者脱节 + 嵌套 JSON 让 `re.search(r"\{[^}]+\}")` 在第一个 `}` 处截断 → 非法 JSON → 解析失败 → 仍回退规则路由。且发现：**生产钉钉 stream 走 graph `route_task_rules_only`（纯规则，从不调 `_llm_route`）**，所以 #30/#31 的所有 bug **只影响 eval/cli，生产零影响**——eval 评估的根本不是生产真实路由行为。
+- **根因**：① DB prompt（`prompt_versions` 表，可被网页端编辑、独立版本化）和代码 parser（`_llm_route`）是两个独立演进面，没有契约校验——prompt 改了输出 schema，代码不知道；代码改了期望 schema，DB prompt 不更新。② `re.search(r"\{[^}]+\}")` 只匹配「第一个 `{` 到第一个 `}`」、不支持嵌套，对 `{"a": {"b": 1}}` 这类必然截断。③ 系统有两条路由路径（graph 纯规则 vs ChatPipeline 规则+LLM 兜底），eval 跑的是后者，生产跑的是前者——eval 指标不反映生产路由。
+- **教训**：
+  1. **prompt 在 DB 版本管理 → prompt schema 与 parser 代码必须同步契约**：要么加启动期校验（解析 prompt 里的 JSON 示例确认字段名与代码期望一致），要么 parser 对 schema 容错（同时认 `intent` 和 `task_type`、缺字段给默认）。本次走容错路线：`_INTENT_TO_TASK` 映射 + 兼容旧 task_type + `_extract_first_json` 平衡花括号。
+  2. **提取嵌套 JSON 不能用 `re.search(r"\{[^}]+\}")`**：它不支持嵌套花括号，遇到 `{"a":{"b":1}}` 截断在第一个 `}`。必须按花括号深度配对扫描（depth 计数 + 字符串字面量内跳过花括号），见 `_extract_first_json`。这是 JSON-from-LLM 提取的通用陷阱。
+  3. **eval 路径 ≠ 生产路径 → eval 指标不代表生产行为**：本项目 eval 跑 ChatPipeline（规则+LLM 路由），生产 stream 跑 graph `route_task_rules_only`（纯规则）。eval 里 LLM 路由的 bug 在生产不存在（生产不调 LLM 路由），反之生产纯规则路由的边界 eval 也测不到。**用 eval 验证生产前，先确认 eval 跑的是哪条路径**（grep eval 脚本调 `ChatPipeline` 还是 `graph`），别假设一致。
+  4. **「修了 eval 的 bug」不等于「修了生产的 bug」**：本次 #30/#31 修的是 eval/cli 路径，生产 stream 不受影响（也不受益）。若要让生产也用 LLM 路由兜底，需在 graph `routing.py` 接 `_llm_route`——那是另一个决策，别混为一谈。
+- **检查范式**：`_llm_route`/任何 LLM JSON 解析报 `JSONDecodeError` → 先看 LLM 实际输出的 schema（`logger.debug(response)`）vs 代码 `data.get(...)` 的 key 是否对得上 → 对不上 = prompt 与 parser schema 漂移 → parser 容错（认多 schema + 默认值）+ 平衡花括号提取。eval 报路由 bug → 先 grep eval 入口调 ChatPipeline 还是 graph，确认是哪条路径的 bug，别误判为生产故障。
+- **相关**：#30（同一次 eval 排查的前一层——字面花括号 KeyError）、#27（检索旁路绕过主生成——同属「eval/老路径 ChatPipeline 行为偏离 graph 新路径」）、#4（验证永远优先走生产入口——本项目生产入口是钉钉 stream 非 HTTP `/agent/chat`，eval 跑的是 ChatPipeline 老路径，恰是 #4 警告的那条非生产路径）。

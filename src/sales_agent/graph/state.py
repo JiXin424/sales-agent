@@ -10,6 +10,27 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 from operator import add
+
+
+# -- Reducers for parallel Send fan-out --
+def _reduce_or(a: bool | None, b: bool | None) -> bool | None:
+    """Reducer for bool fields: True if either parallel result is True.
+    Handles initial `None` gracefully (returns `b` if `a` is None)."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return a or b
+
+
+def _reduce_merge_dict(a: dict | None, b: dict | None) -> dict | None:
+    """Reducer for dict fields: shallow merge from parallel results."""
+    if a is None and b is None:
+        return None
+    merged = dict(a) if a else {}
+    if b:
+        merged.update(b)
+    return merged
 from typing_extensions import TypedDict
 
 from langgraph.managed.is_last_step import IsLastStep
@@ -59,11 +80,11 @@ class ChatGraphState(TypedDict, total=False):
 
     # === Retrieval ===
     retrieval_path: str                    # "ontology" | "rag" | "skip"
-    retrieval_info: dict[str, Any]
+    retrieval_info: Annotated[dict[str, Any], _reduce_merge_dict]
     retrieval_result: Any
     sources: Annotated[list[dict], add]  # P2: reducer merges parallel Send results
     ontology_context_text: str             # ontology evidence text for generate_node
-    skip_generation: bool
+    skip_generation: Annotated[bool, _reduce_or]
 
     # === Coach Guidance ===
     coach_guidance_text: str

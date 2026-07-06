@@ -21,6 +21,8 @@ from sales_agent.api.routes.graph_debug import (
     _identify_llm_nodes,
     _identify_subgraph_nodes,
     _normalize_id,
+    EdgeInfo,
+    list_graphs,
 )
 from sales_agent.graph.registry import GRAPH_REGISTRY
 
@@ -253,3 +255,36 @@ class TestNodeInfosAndPromptMap:
         for nid in ("chat", "guided_flow"):
             node = next(n for n in infos if n.id == nid)
             assert node.type == "subgraph"
+
+
+class TestEdges:
+    """edges 字段从 compiled graph 取, source/target 必须是合法节点 id。"""
+
+    @pytest.mark.parametrize("graph_id,expected_edges", [
+        ("online", 15),
+        ("chat", 14),
+        ("guided-flow", 6),
+    ])
+    def test_edge_count_matches_graph_object(self, graph_id, expected_edges):
+        """edge 数量与 len(g.edges) 一致 (cross-check test_counts_match_graph_object)。"""
+        g = _graph(graph_id)
+        # 直接调 list_graphs 需要 GRAPH_REGISTRY + async;改用 _build 辅助:
+        # edges 在 list_graphs 里从 g.edges 取,这里等价校验 g.edges 数量。
+        assert len(g.edges) == expected_edges
+
+    def test_edges_source_target_are_valid_node_ids(self):
+        """每条 edge 的 source/target 必须在 nodes ∪ {__start__,__end__} 里。"""
+        import asyncio
+        resp = asyncio.run(list_graphs("test-agent"))
+        for graph in resp.graphs:
+            valid_ids = {n.id for n in graph.nodes} | {"__start__", "__end__"}
+            assert graph.edges, f"{graph.id} edges 为空"
+            for e in graph.edges:
+                assert e.source in valid_ids, f"{graph.id}: edge source {e.source} 不在 {valid_ids}"
+                assert e.target in valid_ids, f"{graph.id}: edge target {e.target} 不在 {valid_ids}"
+
+    def test_edge_info_model_fields(self):
+        """EdgeInfo 有且仅有 source/target 两个 str 字段。"""
+        e = EdgeInfo(source="a", target="b")
+        assert e.source == "a"
+        assert e.target == "b"

@@ -52,6 +52,12 @@ class NodeInfo(BaseModel):
     prompts: list[dict] = []  # [{name, source, note?}]
 
 
+class EdgeInfo(BaseModel):
+    """图的一条边（取自 compiled.get_graph().edges）。"""
+    source: str
+    target: str
+
+
 class PromptMapping(BaseModel):
     """节点 → prompt 对应关系的一行（供前端「节点-Prompt 对照」表展示）。"""
 
@@ -69,6 +75,7 @@ class GraphInfo(BaseModel):
     node_count: int
     edge_count: int
     nodes: list[NodeInfo] = []
+    edges: list[EdgeInfo] = []
     prompt_map: list[PromptMapping] = []
 
 
@@ -312,11 +319,14 @@ async def list_graphs(agent_id: str):
             mermaid = _decorate_mermaid(mermaid, subgraph_nodes, llm_nodes)
             # 结构化节点元数据 + 节点↔prompt 映射（取自 node_metadata 单一事实源）
             node_infos, prompt_map = _build_node_infos(graph_id, g)
+            edge_infos = [
+                EdgeInfo(source=e.source, target=e.target) for e in g.edges
+            ]
         except Exception as exc:
             logger.warning("Failed to compile graph %s: %s", graph_id, exc)
             mermaid = f"graph TD;\n  error[Graph '{graph_id}' failed to compile: {exc}]"
             nodes, edges = 0, 0
-            node_infos, prompt_map = [], []
+            node_infos, prompt_map, edge_infos = [], [], []
 
         results.append(GraphInfo(
             id=graph_id,
@@ -325,6 +335,7 @@ async def list_graphs(agent_id: str):
             node_count=nodes,
             edge_count=edges,
             nodes=node_infos,
+            edges=edge_infos,
             prompt_map=prompt_map,
         ))
 

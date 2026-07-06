@@ -136,7 +136,15 @@ class TestContextLoadWithTopic:
 class TestRoutingPrecomputed:
     """routing_node short-circuits when precomputed_route=True."""
 
-    def test_precomputed_route_returns_existing_fields(self):
+    @pytest.fixture
+    def mock_runtime(self):
+        """Runtime with no chat_model — flag defaults off, rule path used."""
+        runtime = MagicMock()
+        runtime.context = {"db": AsyncMock(), "chat_model": None}
+        return runtime
+
+    @pytest.mark.asyncio
+    async def test_precomputed_route_returns_existing_fields(self, mock_runtime):
         """With precomputed_route=True, return existing task/policy fields."""
         state: ChatGraphState = {
             "tenant_id": "t1",
@@ -149,13 +157,14 @@ class TestRoutingPrecomputed:
             "knowledge_policy": "required",
             "needs_retrieval": True,
         }
-        result = routing_node(state)
+        result = await routing_node(state, mock_runtime)
         assert result["task_type"] == "knowledge_qa"
         assert result["needs_retrieval"] is True
         assert "knowledge_policy" in result
         assert result["knowledge_policy"] == "required"
 
-    def test_precomputed_route_no_task_type(self):
+    @pytest.mark.asyncio
+    async def test_precomputed_route_no_task_type(self, mock_runtime):
         """With precomputed_route=True but no existing fields, return defaults."""
         state: ChatGraphState = {
             "tenant_id": "t1",
@@ -165,10 +174,11 @@ class TestRoutingPrecomputed:
             "channel": "local",
             "precomputed_route": True,
         }
-        result = routing_node(state)
+        result = await routing_node(state, mock_runtime)
         assert result["task_type"] is None
 
-    def test_normal_routing_still_works(self):
+    @pytest.mark.asyncio
+    async def test_normal_routing_still_works(self, mock_runtime):
         """Without precomputed_route, routing_node calls route_task normally."""
         state: ChatGraphState = {
             "tenant_id": "t1",
@@ -177,7 +187,7 @@ class TestRoutingPrecomputed:
             "conversation_id": "c1",
             "channel": "local",
         }
-        result = routing_node(state)
+        result = await routing_node(state, mock_runtime)
         # General coaching fallback
         assert result["task_type"] is not None
         assert result["route_confidence"] >= 0

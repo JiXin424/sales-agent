@@ -1,7 +1,7 @@
 """Agent Chat 路由 — 使用 LangGraph StateGraph 执行。
 
 统一使用 Graph 路径（与钉钉 Stream 同一管线）。
-ChatPipeline 已废弃删除。
+ChatPipeline 类已废弃（生产零调用，保留待清理），勿按其追调用链。
 """
 
 from __future__ import annotations

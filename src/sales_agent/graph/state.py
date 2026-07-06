@@ -4,6 +4,12 @@ Includes support for:
 - ``IsLastStep`` managed value (LangGraph built-in)
 - ``Overwrite`` support via ``operator.add`` on list-typed fields
 - HITL (human-in-the-loop) fields for interrupt/Command
+
+Reducer 约束（重要）：任何会被 ``Send`` 并行 fan-out 写入的字段，必须用
+``Annotated[T, reducer]`` 声明合并策略，否则 LangGraph 合并并行结果时会抛
+``InvalidUpdateError``（见 commit eb889df）。当前会被并行双路（ontology + rag）
+写入的字段：``sources``、``retrieval_info``、``skip_generation``、``stream_tokens``。
+新增任何被并行写的字段时，务必同步加 reducer。
 """
 
 from __future__ import annotations

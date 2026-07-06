@@ -10,7 +10,8 @@ Right panel: Two tabs:
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Input, Button, Collapse, Tag, Spin, Alert, Tabs, Empty, Select, Modal } from 'antd';
+import { Input, Button, Collapse, Tag, Spin, Alert, Tabs, Empty, Select, Modal, Table } from 'antd';
+import type { TableColumnsType } from 'antd';
 import {
   SendOutlined,
   ApiOutlined,
@@ -18,6 +19,8 @@ import {
   ThunderboltOutlined,
   EditOutlined,
   PlayCircleOutlined,
+  DownOutlined,
+  UpOutlined,
 } from '@ant-design/icons';
 import mermaid from 'mermaid';
 import {
@@ -38,6 +41,7 @@ import type {
   CheckpointStateResponse,
   UpdateStateRequest,
   RecentDebugRun,
+  PromptMapping,
 } from '@/api/types';
 import JsonNode from './JsonNode';
 import CheckpointDAG from './CheckpointDAG';
@@ -56,6 +60,76 @@ interface TraceEntry {
   duration_ms?: number;
   input?: unknown;
   output?: Record<string, unknown>;
+}
+
+/** 节点类型图例：纯函数(灰) / LLM 节点(蓝) / 子图节点(橙)。 */
+function NodeLegend() {
+  return (
+    <div className="gd-legend">
+      <span className="gd-legend-item">
+        <span className="gd-legend-swatch fn" /> 纯函数节点
+      </span>
+      <span className="gd-legend-item">
+        <span className="gd-legend-swatch llm" /> LLM 节点（调 prompt）
+      </span>
+      <span className="gd-legend-item">
+        <span className="gd-legend-swatch sub" /> 子图节点
+      </span>
+    </div>
+  );
+}
+
+/** 节点 ↔ Prompt 对照表：每个 prompt 一行，无 prompt 的纯函数节点标「—」。 */
+function NodePromptTable({ rows }: { rows: PromptMapping[] }) {
+  const columns: TableColumnsType<PromptMapping> = [
+    {
+      title: '节点',
+      dataIndex: 'node',
+      key: 'node',
+      width: 160,
+      render: (node: string, row) => (
+        <span>
+          {row.calls_llm ? (
+            <Tag color="blue" className="llm-tag">LLM</Tag>
+          ) : null}
+          {node}
+        </span>
+      ),
+    },
+    {
+      title: '对应 Prompt',
+      dataIndex: 'prompt_name',
+      key: 'prompt_name',
+      render: (name: string, row) =>
+        name === '—' ? (
+          <span style={{ color: '#8c8c8c' }}>—（纯函数，无 prompt）</span>
+        ) : (
+          <span>
+            <code>{name}</code>
+            {row.note ? <span style={{ color: '#8c8c8c', marginLeft: 6 }}>({row.note})</span> : null}
+          </span>
+        ),
+    },
+    {
+      title: '来源',
+      dataIndex: 'prompt_source',
+      key: 'prompt_source',
+      width: 260,
+      render: (src: string) =>
+        src ? <code style={{ fontSize: 11, color: '#8c8c8c' }}>{src}</code> : null,
+    },
+  ];
+  return (
+    <div className="gd-node-prompt-table">
+      <Table
+        size="small"
+        pagination={false}
+        columns={columns}
+        dataSource={rows}
+        rowKey={(r, i) => `${r.node}-${r.prompt_name}-${i}`}
+      />
+    </div>
+  );
 }
 
 /** Load the recent-debug-runs list from localStorage (best-effort, never throws). */
@@ -118,6 +192,8 @@ export default function GraphDebugPage() {
   const [checkpointError, setCheckpointError] = useState<string | null>(null);
   const [rightTab, setRightTab] = useState<'trace' | 'timeline'>('trace');
   const [recentRuns, setRecentRuns] = useState<RecentDebugRun[]>(() => loadRunsFromStorage());
+  // 执行轨迹面板折叠：折叠后图区占满整个屏幕（header 以下全部空间）
+  const [traceCollapsed, setTraceCollapsed] = useState(false);
 
   // ── Fork (A2) state ──
   // When editing, draftValues holds the user-edited copy of checkpointState.values;
@@ -462,7 +538,18 @@ export default function GraphDebugPage() {
     <div className="gd-container">
       {/* Left panel */}
       <div className="gd-left">
-        <div className="gd-left-header">图结构</div>
+        <div className="gd-left-header">
+          图结构
+          <Button
+            type="text"
+            size="small"
+            className="gd-trace-toggle"
+            icon={traceCollapsed ? <UpOutlined /> : <DownOutlined />}
+            onClick={() => setTraceCollapsed(c => !c)}
+          >
+            {traceCollapsed ? '展开执行轨迹' : '折叠执行轨迹'}
+          </Button>
+        </div>
         <div className="gd-left-body">
           {graphsQuery.isLoading ? (
             <Spin tip="加载图列表..." />
@@ -482,16 +569,29 @@ export default function GraphDebugPage() {
                   </span>
                 ),
                 children: (
-                  <div className="gd-mermaid-wrap">
-                    {mermaidSvg[g.id] ? (
-                      <div
-                        className="gd-mermaid"
-                        dangerouslySetInnerHTML={{ __html: mermaidSvg[g.id] }}
-                      />
-                    ) : (
-                      <Spin tip="渲染图中..." />
-                    )}
-                  </div>
+                  <>
+                    <NodeLegend />
+                    <div className="gd-mermaid-wrap">
+                      {mermaidSvg[g.id] ? (
+                        <div
+                          className="gd-mermaid"
+                          dangerouslySetInnerHTML={{ __html: mermaidSvg[g.id] }}
+                        />
+                      ) : (
+                        <Spin tip="渲染图中..." />
+                      )}
+                    </div>
+                    <Collapse
+                      size="small"
+                      defaultActiveKey={[]}
+                      style={{ marginTop: 8 }}
+                      items={[{
+                        key: 'prompt-map',
+                        label: `节点 ↔ Prompt 对照（${g.prompt_map?.length ?? 0} 行）`,
+                        children: <NodePromptTable rows={g.prompt_map ?? []} />,
+                      }]}
+                    />
+                  </>
                 ),
               }))}
             />
@@ -520,7 +620,7 @@ export default function GraphDebugPage() {
       </div>
 
       {/* Right panel */}
-      <div className="gd-right">
+      <div className={traceCollapsed ? 'gd-right gd-right-collapsed' : 'gd-right'}>
         <div className="gd-right-header">
           执行轨迹
           {doneInfo && (

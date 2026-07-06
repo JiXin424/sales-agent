@@ -1,6 +1,7 @@
 """共享 Chat 管道 — 串联完整的请求生命周期，支持 fast / standard / slow 三级路径。
 
-被 api/routes/agent.py 和 integrations/dingtalk/processor.py 共用。
+已废弃：HTTP /agent/chat 与钉钉 Stream 均已改走 LangGraph Graph，生产零调用。
+保留待清理，勿按本类追调用链。
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ from sales_agent.services.task_router import (
 )
 from sales_agent.services.retriever import HybridRetriever, Retriever
 from sales_agent.services.agent_executor import execute_agent
-from sales_agent.services.risk_checker import RiskChecker, RiskCheckResult
+from sales_agent.services.risk_checker import RiskChecker, RiskCheckResult, merge_risk_results
 from sales_agent.services import conversation_logger
 from sales_agent.services.tenant_resolver import TenantResolver
 from sales_agent.services.response_formatter import build_chat_response
@@ -874,7 +875,7 @@ class ChatPipeline:
                             chat_model=_effective_chat,
                             risk_prompt=risk_prompt,
                         )
-                        risk_result = _merge_risk_results(risk_result, llm_risk)
+                        risk_result = merge_risk_results(risk_result, llm_risk)
                     except Exception as e:
                         logger.warning("LLM risk check failed, using rule result: %s", e)
 
@@ -979,35 +980,6 @@ class ChatPipeline:
             await collector.record(path, latency_ms)
         except Exception:
             pass  # 统计失败不影响主流程
-
-
-def _merge_risk_results(rule: RiskCheckResult, llm: RiskCheckResult) -> RiskCheckResult:
-    """合并规则和 LLM 风险结果，取更高的风险等级。"""
-    from sales_agent.services.risk_checker import LEVEL_NONE, LEVEL_LOW, LEVEL_MEDIUM, LEVEL_HIGH
-    level_priority = {LEVEL_NONE: 0, LEVEL_LOW: 1, LEVEL_MEDIUM: 2, LEVEL_HIGH: 3}
-
-    rule_level = level_priority.get(rule.level, 0)
-    llm_level = level_priority.get(llm.level, 0)
-
-    # 取更高的
-    if llm_level > rule_level:
-        merged = RiskCheckResult(
-            level=llm.level,
-            flags=list(set(rule.flags + llm.flags)),
-            action=llm.action,
-            notice=llm.notice or rule.notice,
-            rewrite_summary=llm.rewrite_summary or rule.rewrite_summary,
-        )
-    else:
-        merged = RiskCheckResult(
-            level=rule.level,
-            flags=list(set(rule.flags + llm.flags)),
-            action=rule.action,
-            notice=rule.notice,
-            rewrite_summary=rule.rewrite_summary,
-        )
-
-    return merged
 
 
 async def _load_recent_history(

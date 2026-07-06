@@ -392,3 +392,45 @@
   4. **「修了 eval 的 bug」不等于「修了生产的 bug」**：本次 #30/#31 修的是 eval/cli 路径，生产 stream 不受影响（也不受益）。若要让生产也用 LLM 路由兜底，需在 graph `routing.py` 接 `_llm_route`——那是另一个决策，别混为一谈。
 - **检查范式**：`_llm_route`/任何 LLM JSON 解析报 `JSONDecodeError` → 先看 LLM 实际输出的 schema（`logger.debug(response)`）vs 代码 `data.get(...)` 的 key 是否对得上 → 对不上 = prompt 与 parser schema 漂移 → parser 容错（认多 schema + 默认值）+ 平衡花括号提取。eval 报路由 bug → 先 grep eval 入口调 ChatPipeline 还是 graph，确认是哪条路径的 bug，别误判为生产故障。
 - **相关**：#30（同一次 eval 排查的前一层——字面花括号 KeyError）、#27（检索旁路绕过主生成——同属「eval/老路径 ChatPipeline 行为偏离 graph 新路径」）、#4（验证永远优先走生产入口——本项目生产入口是钉钉 stream 非 HTTP `/agent/chat`，eval 跑的是 ChatPipeline 老路径，恰是 #4 警告的那条非生产路径）。
+
+---
+
+## 32. ci-fanout 部署 prod2（开发机=本机）会 `git stash` + `git reset --hard origin/main` 本机工作区——push 后本机 tracked 改动会「消失」进 stash
+- **场景**：commit + push 后监控三台部署，发现本机（prod2=172.25.186.209）工作区的 `task_router.py`（别人并行未提交工作）突然从 `git status` 消失，只剩 untracked 文件。`git reflog` 显示 `reset: moving to origin/main`，`git stash list` 多了一条 `WIP on main: <刚push的sha>`。本机是 `deploy/deploy-targets.json` 里 `method=deploy-release` 的 target。
+- **根因**：`scripts/ci-fanout.sh` 对 prod2 的部署命令序列是 `ssh root@172.25.186.209 "git stash 2>/dev/null; git fetch origin main && git reset --hard origin/main && echo '[fanout] git synced to' ...; REGISTRY_IMAGE=... deploy-release.sh --yes"`。即**先 stash 本机 tracked 改动 → hard reset 到 origin/main → 再跑 deploy-release.sh**。目的是让 prod2 源码与刚 push 的镜像 SHA 严格对齐（deploy-release 在源码树上 render compose）。副作用：本机任何未提交的 tracked 改动被 stash 走、工作区被强制对齐 origin/main。untracked 文件（`docs/`、`uv.lock`）不受 `git stash` 默认行为影响，仍留在工作区。
+- **教训**：
+  1. **prod2（172.25.186.209，开发机）是 CI deploy-release target，本机工作区会被 ci-fanout 每次 push 后 stash+reset**。在 prod2 本机做未提交工作时，要么先 commit/branch，要么预期它会被 stash。别把本机工作区当稳定工作面。
+  2. **本机工作区 tracked 改动「消失」→ 先查 `git stash list` + `git reflog`，别慌重做**：ci-fanout 的 stash 消息形如 `WIP on main: <刚push的sha>`，reflog 有 `reset: moving to origin/main`。改动在 stash 里没丢，`git stash pop stash@{N}` 即可恢复。
+  3. **区分「CI 的 stash」vs「自己/别人的 stash」**：CI stash 的 base sha = 刚 push 的 commit，且通常在 CI 跑完时是 stash list 顶部（stash@{0}）。`git stash show --stat stash@{N}` 看文件内容判断归属，别误 pop 别人的工作。本次 CI stash 只含 `task_router.py`（+91/-19，是 #30/#31 的 eval 修复），识别后安全 pop 恢复。
+  4. **恢复时机**：等 ci-fanout 全部跑完（三台容器 tag 都更新到新 SHA、prod3 上无 `ci-fanout.sh` 进程）再 pop stash，避免与 CI 的 git 操作竞态。
+- **检查范式**：push 后监控部署时发现本机 `git status` 的 tracked modified 消失 → `git stash list` 找 `WIP on main: <刚push的sha>` → `git stash show --stat stash@{0}` 确认文件归属 → 等 CI 结束（`ssh prod3 'ps aux|grep ci-fanout'` 为空 + 三台 tag 更新）→ `git stash pop stash@{0}` 恢复。
+- **相关**：#4（验证走生产入口，本机即 prod2，`docker logs <tenant>-stream` 在本机直接看）、`scripts/ci-fanout.sh`（deploy-release target 的 stash+reset 序列）、`deploy/deploy-targets.json`（三台 target 清单：prod3 image-deploy / prod2 deploy-release / test image-deploy）。
+
+---
+
+## 33. 改动 mermaid 输出（后端装饰 class/classDef / shape / 语法）后，用 mermaid 官方 CLI `mmdc` + 系统 chrome headless 真渲染验证——别只靠"语法看着对"
+- **场景**：graph_debug 给 online 图 mermaid 追加 `class guided_flow,chat subgraphNode` + `classDef subgraphNode fill:#fff3e0,stroke:#ff9800,stroke-width:3px,color:#e65100` 让子图入口节点橙色加粗高亮。前端用 `mermaid@^11.16.0` 的 `mermaid.render()` 渲染。想在 node 环境直接 `mermaid.parse(text)` 预验证，但 mermaid 11 是 pure-ESM + 依赖 DOMPurify，在无 DOM 的 node 里报 `DOMPurify.sanitize is not a function`（三个图含未改动的同报错 → 证明是环境问题不是语法问题），`jsdom` + 动态 import 各种绕都失败。
+- **手法**：系统已装 `google-chrome`。临时目录 `/tmp/mmdcheck` 里 `PUPPETEER_SKIP_DOWNLOAD=1 npm i mermaid@<前端同版本> @mermaid-js/mermaid-cli@<同版本> --no-save`，写 puppeteer config `{ "executablePath": "/usr/bin/google-chrome", "args": ["--no-sandbox","--disable-gpu"] }`，`mmdc -i graph.mmd -o out.svg --puppeteerConfigFile pptr.json`。**exit=0 = 语法合法 + 前端同款引擎必能渲染**；`grep -oE '(fill|stroke)[: ]*#颜色' out.svg` 确认 class 真生效（不只解析通过）。前端 `mermaid.render` 失败会 catch 退化成 `<pre>` 纯文本（见 `GraphDebugPage.tsx:154`），光看前端不报错不够，要确认样式真应用。
+- **教训**：① 后端改 mermaid 文本（classDef/class/shape/任意语法）→ 部署前用 mmdc 真渲染验证，别靠"语法和 LangGraph 自带 classDef 同款所以肯定行"的论证。② mermaid 11 在纯 node 验证走不通（DOMPurify 依赖 DOM），mmdc（puppeteer+系统 chrome）是最权威本地预验证，比装 jsdom 折腾 DOMPurify 靠谱。③ 验证 class 真生效要 grep 渲染出的 svg 里的 fill/stroke 颜色，不只看 parse/render 不报错。④ 子图节点识别：LangGraph `add_node(name, compiled)` 的节点 `isinstance(nd.data, CompiledStateGraph)` 为真；但被 wrapper 函数包一层（如 `chat_node()` 内部调子图）的节点 LangGraph 看不出是子图，要靠节点 id 归一化后命中 `GRAPH_REGISTRY` 补识别——双信号才不漏。
+- **相关**：#4（验证优先走生产入口——mmdc 是部署前本地预验证，部署后还要 curl 端点 + `docker logs <tenant>-stream`）、`api/routes/graph_debug.py` `_decorate_mermaid`/`_identify_subgraph_nodes`。
+
+## 34. LangGraph 节点 `add_node(tags=...)` 不从 `compiled.get_graph().nodes` 暴露——识别 LLM/特殊节点要用集中映射表，别指望 tag 运行时读回；节点 `def`→`async def` 改签名要全局 grep 调用方测试同步改
+- **场景**：需求是图调试区分纯函数节点和 LLM 节点。想用 LangGraph `add_node("route_task", routing_node, tags=["llm"])` 标记（已有 `tags=[TAG_HIDDEN]` 先例），再在 `graph_debug` 从 `compiled.get_graph().nodes` 读 tag 识别 LLM 节点。探针 `dir(nd)` + `nd.metadata` 实测：node 的 `metadata` 恒为 None，`RunnableCallable` 无 tags 属性——**tags 注册后运行时读不回**。改用集中映射表 `graph/node_metadata.py` 声明 22 节点的类型/是否 LLM/对应 prompt，一举解决「区分节点」+「prompt 标注」两个需求。
+- **教训**：
+  1. **LangGraph tags 是给 tracing/回调用的，不进 graph 结构**——`get_graph().nodes[*].data` 是 `RunnableCallable`，`metadata` 恒 None。想在 graph_debug 这类「读图结构」的场景识别节点特性，用集中映射表（单一事实源），别用 tag。映射表还顺带提供节点→prompt 对应、节点描述，比 tag 信息量大。
+  2. **节点 `def`→`async def`（加 `runtime: Runtime`）改签名后，所有同步调用方测试都要改**：grep `routing_node\|risk_check_node` 找调用点，测试里 `result = node(state)` → `result = await node(state, mock_runtime)` + `@pytest.mark.asyncio` + mock_runtime fixture（`runtime.context = {"chat_model": None, "db": None}`，flag 默认 false 走原路径）。本次改了 4 个测试文件（test_routing_node/test_risk_node/test_topic_memory_flow/test_graph_debug）。**别只跑当前目录测试就以为完事**——全量 `pytest tests/unit/graph` 才发现 test_routing_node 漏改。
+  3. **「LLM 失败静默放行」是风控致命默认值**：`check_llm_risk` 失败兜底返回 `RiskCheckResult()`（action=allow）。图节点接入 LLM 风控必须 try/except 回退规则结果 + `merge_risk_results` 取更严等级，不能裸调。这也是要 feature flag 灰度（默认 False）的原因——不能一开全开。
+  4. **service 层函数「同名不同行为」要核对**：`route_task_rules_only` 自带 `apply_evidence_policy_guard`，`route_task`（async）的 rule 早返回路径不跑 guard。接入 LLM 路径后要在节点层补 guard，而非改 service 层（改 service 影响 chat_pipeline 老路径 + cli + 现有测试，面更大）。最小影响原则：节点层补，service 层不动。
+- **检查范式**：识别 LLM 节点 → 探针 `for nid,nd in g.nodes.items(): print(nid, type(nd.data), getattr(nd,'metadata',None))`，metadata 全 None 就用映射表。节点改 async 后 → `pytest tests/unit/graph/ -q` 全跑，grep `node(state)` 找漏改的同步调用。
+- **相关**：#33（改 mermaid 要 mmdc 真渲染——本次加 llmNode classDef 也要 mmdc 验证）、#4（flag 默认 False 部署后查 stream 日志确认行为不变）、#31（eval≠生产路径，LLM 路由修复是 eval 路径，节点接入才是生产路径）。
+
+## 35. 加 rollout switch（默认关闭绕过某节点）必须全覆盖：① 所有入口把 config 开关传到 state ② 所有测该节点的测试在 state 里显式开启——漏一处 = 开关失效或测试假失败
+- **场景**：commit `48c6f9f` 给 `normalize_turn` 加 `topic_routing_enabled` rollout switch（`online_graph.py:122-124`：`if flow_action=="chat" and not topic_routing_enabled: flow_action="direct_chat"`），默认 False 时绕过 context_resolution/evidence_routing 直连 chat。同天 commit `15e1452` 写了测 context_resolution 的图集成测试，但 state 里没设 `topic_routing_enabled=True` → normalize_turn 路由 direct_chat → context_resolution 被绕过 → `context_status=None` → 3 个测试失败。同时钉钉 stream 入口 `graph_stream.py` 的 input_state 设了 `guided_flows_enabled` 但漏设 `topic_routing_enabled` → 即使 `TOPIC_ROUTING_ENABLED=true`，stream 路径 topic routing 仍关闭（开关失效）。HTTP 入口 `online_conversation.py:221` 设了，stream 漏了。
+- **根因**：rollout switch 加得不全。switch 在 `normalize_turn` 读 `state["topic_routing_enabled"]`（默认 False），但 state 由各入口各自构造——HTTP 入口传了 config，stream 入口没传，测试也没传。三处构造 state 的地方只覆盖了一处。
+- **教训**：
+  1. **加「默认关闭绕过节点 X」的 rollout switch 时，grep 所有构造该图 input_state 的入口**（HTTP / 钉钉 stream / CLI / 测试），全部把 config 开关传到 state。漏一个入口 = 那条路径开关失效。本次 stream 漏设 = 生产主入口开关失效（默认关闭时无感，一旦运营想开启就发现不生效）。
+  2. **测被 switch 绕过的节点 X 的集成测试，必须在 state 里显式开启 switch**，否则 normalize_turn/路由节点把消息绕过 X → X 不执行 → 测试断言 X 的输出全 None。这种失败现象是「context_status=None / response_kind 不对」，容易误判为节点 bug，实为测试没开 switch。
+  3. **诊断「节点没执行」类失败**：先看路由节点（normalize_turn）的 switch 逻辑，确认消息没被绕过；再看节点签名/context 机制。本次先怀疑 context 机制分裂（`__pregel_runtime` vs `runtime: Runtime`），探针证实 LangGraph 1.2.7 向后兼容（`ainvoke(context=)` 仍塞 `__pregel_runtime`），老机制能拿到 ctx——机制不是问题，switch 绕过才是。
+  4. **探针验证节点是否执行**：monkeypatch 被测节点为 spy（打印 config + 短路返回 cancel 路由到 END），ainvoke 后看 spy 是否被调用。spy 没被调用 = 上游路由绕过了它；spy 被调用 = 节点执行了，问题在节点内部。
+- **检查范式**：图集成测试失败 `context_status=None` → 先 grep 路由节点的 switch（`state.get("xxx_enabled", False)` + 改 flow_action 绕过）→ 看测试 state 有没有开 switch → 没开就是根因。加 rollout switch → grep 所有 `input_state = {` 构造点，全部传开关到 state。
+- **相关**：#4（stream 是生产主入口，开关失效在 stream = 生产 bug）、#34（节点改 async 要全 grep 调用方——同款「改动要全覆盖」模式）、commit 48c6f9f（加 switch）/ 15e1452（测试漏开 switch）。

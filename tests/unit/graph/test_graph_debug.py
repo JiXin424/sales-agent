@@ -15,7 +15,10 @@ Regression guard for two bugs fixed together:
 import pytest
 
 from sales_agent.api.routes.graph_debug import (
+    _annotate_node_labels,
+    _build_node_infos,
     _decorate_mermaid,
+    _identify_llm_nodes,
     _identify_subgraph_nodes,
     _normalize_id,
 )
@@ -104,3 +107,149 @@ class TestNormalizeId:
         assert _normalize_id("guided-flow") == "guided_flow"
         assert _normalize_id("guided_flow") == "guided_flow"
         assert _normalize_id("chat") == "chat"
+
+
+class TestAnnotateNodeLabels:
+    """普通节点 label 加中文小字功能说明。"""
+
+    def test_annotates_plain_node(self):
+        mermaid = "graph TD;\n\tnormalize_turn(normalize_turn)\n"
+        out = _annotate_node_labels(mermaid, skip_nodes=set(), graph_id="online")
+        assert 'normalize_turn("normalize_turn<br/>' in out
+        # desc 取自 node_metadata（不再硬编码文案，只校验注解已注入）
+        assert "标准化" not in out or "路由" in out
+        assert "<font size='2' color='#888'>" in out
+
+    def test_skips_start_end(self):
+        mermaid = "graph TD;\n\t__start__([<p>__start__</p>]):::first\n\tfoo(foo)\n"
+        out = _annotate_node_labels(mermaid, skip_nodes=set(), graph_id="online")
+        # __start__ 行原样保留(格式不同,正则不匹配)
+        assert "__start__([<p>__start__</p>]):::first" in out
+        assert "<br/>" not in out.split("__start__")[0]
+
+    def test_skips_subgraph_nodes(self):
+        """子图入口节点(如 online 的 chat)不加注解——它本身是子图,不是普通节点。"""
+        mermaid = "graph TD;\n\tchat(chat)\n\tnormalize_turn(normalize_turn)\n"
+        out = _annotate_node_labels(mermaid, skip_nodes={"chat"}, graph_id="online")
+        # chat 行原样保留
+        assert "chat(chat)" in out
+        assert "chat<br/>" not in out
+        # 普通节点仍加注解
+        assert "normalize_turn<br/>" in out
+
+    def test_skips_unknown_node(self):
+        """不在 node_metadata 里的节点不加注解。"""
+        mermaid = "graph TD;\n\tweird_node(weird_node)\n"
+        out = _annotate_node_labels(mermaid, skip_nodes=set(), graph_id="online")
+        assert out == mermaid  # 原样返回
+
+    def test_does_not_touch_edge_lines(self):
+        """边行 (a --> b) 不应被改动。"""
+        mermaid = "graph TD;\n\tfoo(foo)\n\tfoo --> bar;\n"
+        out = _annotate_node_labels(mermaid, skip_nodes=set(), graph_id="chat")
+        # foo 不在元数据,原样;边行也不变
+        # 用一个在元数据的节点验证边不被碰
+        mermaid2 = "graph TD;\n\tlog(log)\n\tlog --> __end__;\n"
+        out2 = _annotate_node_labels(mermaid2, skip_nodes=set(), graph_id="chat")
+        assert "log --> __end__;" in out2  # 边行原样
+        assert 'log("log<br/>' in out2  # 节点行已注解
+
+    def test_online_annotates_seven_plain_nodes(self):
+        """online 图 7 个普通节点加注解,2 个子图节点跳过。"""
+        g = _graph("online")
+        mermaid = g.draw_mermaid()
+        subgraph = set(_identify_subgraph_nodes(g))
+        out = _annotate_node_labels(mermaid, subgraph, graph_id="online")
+        assert out.count("<font size='2'") == 7
+        # 子图节点未加注解
+        assert "guided_flow<br/>" not in out
+        assert "chat<br/>" not in out
+
+    def test_guided_flow_annotates_three(self):
+        out = _annotate_node_labels(_graph("guided-flow").draw_mermaid(), set(), graph_id="guided-flow")
+        assert out.count("<font size='2'") == 3
+
+    def test_chat_annotates_ten(self):
+        out = _annotate_node_labels(_graph("chat").draw_mermaid(), set(), graph_id="chat")
+        assert out.count("<font size='2'") == 10
+
+
+class TestLLMNodeHighlight:
+    """LLM 节点蓝色高亮 + node_metadata 驱动的节点元数据。"""
+
+    def test_chat_identifies_four_llm_nodes(self):
+        """chat 图 4 个 LLM 节点：route_task/retrieve/generate/check_risk。"""
+        llm = _identify_llm_nodes("chat", _graph("chat"))
+        assert set(llm) == {"route_task", "retrieve", "generate", "check_risk"}
+
+    def test_online_identifies_two_llm_nodes(self):
+        """online 图 2 个 LLM 节点：context_resolution/evidence_routing（子图节点不算）。"""
+        llm = _identify_llm_nodes("online", _graph("online"))
+        assert set(llm) == {"context_resolution", "evidence_routing"}
+
+    def test_guided_flow_identifies_advance_flow(self):
+        """guided-flow 图 1 个 LLM 节点：advance_flow。"""
+        llm = _identify_llm_nodes("guided-flow", _graph("guided-flow"))
+        assert llm == ["advance_flow"]
+
+    def test_decorate_mermaid_appends_llm_class(self):
+        """LLM 节点高亮：mermaid 末尾追加 llmNode class + classDef。"""
+        g = _graph("chat")
+        m = _decorate_mermaid(g.draw_mermaid(), [], _identify_llm_nodes("chat", g))
+        assert "class route_task,retrieve,generate,check_risk llmNode" in m
+        assert "classDef llmNode" in m
+
+    def test_decorate_mermaid_subgraph_and_llm_coexist(self):
+        """子图节点（橙）和 LLM 节点（蓝）可同时出现，互不干扰。"""
+        g = _graph("online")
+        sub = _identify_subgraph_nodes(g)
+        llm = _identify_llm_nodes("online", g)
+        m = _decorate_mermaid(g.draw_mermaid(), sub, llm)
+        assert "subgraphNode" in m
+        assert "llmNode" in m
+
+
+class TestNodeInfosAndPromptMap:
+    """结构化 nodes 字段 + 节点↔prompt 映射表。"""
+
+    def test_chat_node_infos_count(self):
+        infos, _ = _build_node_infos("chat", _graph("chat"))
+        assert len(infos) == 10  # 10 个 add_node
+
+    def test_generate_node_has_multiple_prompts(self):
+        """generate 节点对多 prompt（system + 12 task 分派）。"""
+        infos, _ = _build_node_infos("chat", _graph("chat"))
+        gen = next(n for n in infos if n.id == "generate")
+        assert gen.calls_llm is True
+        assert len(gen.prompts) >= 2
+
+    def test_pure_function_node_has_no_prompts(self):
+        """纯函数节点（validate）无 prompt，prompt_name 为「—」。"""
+        _, pmap = _build_node_infos("chat", _graph("chat"))
+        validate_rows = [r for r in pmap if r.node == "validate"]
+        assert len(validate_rows) == 1
+        assert validate_rows[0].calls_llm is False
+        assert validate_rows[0].prompt_name == "—"
+
+    def test_route_task_prompt_mapped(self):
+        """route_task 节点接入 LLM 后对应 TASK_ROUTER_PROMPT。"""
+        _, pmap = _build_node_infos("chat", _graph("chat"))
+        rt_rows = [r for r in pmap if r.node == "route_task"]
+        assert len(rt_rows) == 1
+        assert rt_rows[0].calls_llm is True
+        assert "TASK_ROUTER" in rt_rows[0].prompt_name
+
+    def test_check_risk_prompt_mapped(self):
+        """check_risk 节点接入 LLM 后对应 RISK_CHECK_PROMPT。"""
+        _, pmap = _build_node_infos("chat", _graph("chat"))
+        risk_rows = [r for r in pmap if r.node == "check_risk"]
+        assert len(risk_rows) == 1
+        assert risk_rows[0].calls_llm is True
+        assert "RISK_CHECK" in risk_rows[0].prompt_name
+
+    def test_subgraph_node_typed_subgraph(self):
+        """online 图的 chat/guided_flow 节点 type=subgraph。"""
+        infos, _ = _build_node_infos("online", _graph("online"))
+        for nid in ("chat", "guided_flow"):
+            node = next(n for n in infos if n.id == nid)
+            assert node.type == "subgraph"

@@ -75,6 +75,10 @@ class SourceDisplayConfig(BaseModel):
 
 class RiskConfig(BaseModel):
     tenant_custom_rules_enabled: bool = False
+    # 是否在图节点 check_risk 中启用 LLM 风控（规则 full_check 之后的增强层）。
+    # 默认关闭：LLM 风控失败兜底为 allow，需配合 _merge_risk_results + try/except
+    # 回退规则结果，避免静默放行。灰度时按租户/配置打开。
+    enable_llm_risk_check: bool = False
     default_price_commitment_action: str = "warn"
     default_delivery_commitment_action: str = "block"
     default_unsupported_claim_action: str = "rewrite"
@@ -99,6 +103,10 @@ class PathRouterConfig(BaseModel):
     """路径路由配置。"""
     enable_fast_path: bool = True
     enable_slow_path_notice: bool = True
+    # 是否在图节点 route_task 中启用 LLM 路由兜底（规则置信度不足时调 LLM 分类）。
+    # 默认关闭：每轮多一次 LLM 调用增加延迟，且 LLM 路由失败需回退规则。
+    # 灰度时打开；关闭时节点走 route_task_rules_only，行为与现状一致。
+    enable_llm_router: bool = False
     llm_router_confidence_threshold: float = 0.75
     clarify_confidence_threshold: float = 0.45
 
@@ -362,6 +370,18 @@ class Settings(BaseModel):
         if topic_routing_enabled is not None:
             raw.setdefault("topic_routing", {})["enabled"] = (
                 topic_routing_enabled.strip().lower() in {"1", "true", "yes", "on"}
+            )
+
+        # 环境变量覆盖 LLM 路由/风控开关（图节点 route_task / check_risk 灰度用）
+        llm_router_enabled = os.getenv("PATH_ROUTER_ENABLE_LLM_ROUTER")
+        if llm_router_enabled is not None:
+            raw.setdefault("path_router", {})["enable_llm_router"] = (
+                llm_router_enabled.strip().lower() in {"1", "true", "yes", "on"}
+            )
+        llm_risk_enabled = os.getenv("RISK_ENABLE_LLM_RISK_CHECK")
+        if llm_risk_enabled is not None:
+            raw.setdefault("risk", {})["enable_llm_risk_check"] = (
+                llm_risk_enabled.strip().lower() in {"1", "true", "yes", "on"}
             )
 
         instance = cls(**raw)

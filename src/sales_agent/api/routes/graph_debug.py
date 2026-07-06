@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from typing import Any, AsyncIterator
@@ -26,6 +27,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from sales_agent.api.deps import DbSession
 from sales_agent.graph.registry import GRAPH_REGISTRY
+from sales_agent.graph.node_metadata import NODE_META_BY_GRAPH, get_node_meta, is_llm_node
 from sales_agent.graph.checkpoints import get_checkpointer
 from sales_agent.core.tenant_runtime import get_tenant_runtime
 
@@ -39,12 +41,35 @@ DEBUG_THREAD_PREFIX = "debug:"
 
 # ── Pydantic models ────────────────────────────────────────────────
 
+class NodeInfo(BaseModel):
+    """单个图节点的结构化元数据。"""
+
+    id: str
+    name: str
+    type: str  # "function" | "subgraph"
+    calls_llm: bool
+    desc: str = ""
+    prompts: list[dict] = []  # [{name, source, note?}]
+
+
+class PromptMapping(BaseModel):
+    """节点 → prompt 对应关系的一行（供前端「节点-Prompt 对照」表展示）。"""
+
+    node: str
+    calls_llm: bool
+    prompt_name: str  # 无 prompt 的纯函数节点为 "—"
+    prompt_source: str = ""
+    note: str = ""
+
+
 class GraphInfo(BaseModel):
     id: str
     name: str
     mermaid: str
     node_count: int
     edge_count: int
+    nodes: list[NodeInfo] = []
+    prompt_map: list[PromptMapping] = []
 
 
 class GraphsResponse(BaseModel):
@@ -93,6 +118,13 @@ _SUBGRAPH_CLASS_DEF = (
     "stroke-width:3px,color:#e65100"
 )
 
+# LLM 节点视觉区分（蓝色填充），与橙色子图节点、灰色纯函数节点区分。
+# 节点是否调 LLM 取自 ``node_metadata`` 集中映射表（LangGraph tags 不暴露）。
+_LLM_CLASS_DEF = (
+    "classDef llmNode fill:#e6f4ff,stroke:#1677ff,"
+    "stroke-width:2px,color:#0958d9"
+)
+
 
 def _normalize_id(name: str) -> str:
     """Normalize a graph/node id for cross-reference (``guided-flow`` == ``guided_flow``)."""
@@ -123,12 +155,112 @@ def _identify_subgraph_nodes(graph) -> list[str]:
     return out
 
 
-def _decorate_mermaid(mermaid: str, subgraph_nodes: list[str]) -> str:
-    """Append a highlight class so subgraph nodes render with a distinct style."""
-    if not subgraph_nodes:
+def _identify_llm_nodes(graph_id: str, graph) -> list[str]:
+    """Return node ids in ``graph`` that call an LLM.
+
+    LLM 判定取自 ``node_metadata`` 集中映射表（LangGraph tags 不从
+    ``get_graph().nodes`` 暴露，无法运行时读回）。``__start__``/``__end__`` 排除。
+    """
+    out: list[str] = []
+    for nid in graph.nodes:
+        if nid in ("__start__", "__end__"):
+            continue
+        if is_llm_node(graph_id, nid):
+            out.append(nid)
+    return out
+
+
+def _decorate_mermaid(
+    mermaid: str,
+    subgraph_nodes: list[str],
+    llm_nodes: list[str] | None = None,
+) -> str:
+    """Append highlight classes so subgraph / LLM nodes render with distinct styles.
+
+    - 子图节点：橙色加粗边框（``subgraphNode``）
+    - LLM 节点：蓝色填充（``llmNode``）
+    一个节点不会同时是子图节点和 LLM 节点（子图节点是流程编排，不直接调 LLM）。
+    """
+    extra = ""
+    if subgraph_nodes:
+        extra += f"\n\tclass {','.join(subgraph_nodes)} subgraphNode\n\t{_SUBGRAPH_CLASS_DEF}"
+    if llm_nodes:
+        extra += f"\n\tclass {','.join(llm_nodes)} llmNode\n\t{_LLM_CLASS_DEF}"
+    if not extra:
         return mermaid
-    nodes_clause = ",".join(subgraph_nodes)
-    return f"{mermaid}\n\tclass {nodes_clause} subgraphNode\n\t{_SUBGRAPH_CLASS_DEF}\n"
+    return f"{mermaid}{extra}\n"
+
+
+def _build_node_infos(graph_id: str, graph) -> tuple[list[NodeInfo], list[PromptMapping]]:
+    """从 node_metadata 构建结构化节点列表 + 节点↔prompt 映射表。
+
+    遍历真实图节点（含 __start__/__end__ 排除），元数据取自 ``node_metadata``
+    集中表；未知节点按纯函数兜底（calls_llm=False）。prompt_map 每个节点一行：
+    多 prompt 节点合并展示 prompt 名列表，无 prompt 节点标「—」。
+    """
+    meta_table = NODE_META_BY_GRAPH.get(graph_id, {})
+    node_infos: list[NodeInfo] = []
+    prompt_map: list[PromptMapping] = []
+    for nid in graph.nodes:
+        if nid in ("__start__", "__end__"):
+            continue
+        meta = meta_table.get(nid)
+        calls_llm = bool(meta and meta.calls_llm)
+        ntype = meta.type if meta else "function"
+        desc = meta.desc if meta else ""
+        prompts = meta.prompts if meta else []
+
+        node_infos.append(NodeInfo(
+            id=nid, name=nid, type=ntype,
+            calls_llm=calls_llm, desc=desc, prompts=prompts,
+        ))
+
+        if prompts:
+            # 多 prompt 节点：每个 prompt 一行，便于前端表格逐条展示
+            for p in prompts:
+                prompt_map.append(PromptMapping(
+                    node=nid,
+                    calls_llm=calls_llm,
+                    prompt_name=p.get("name", ""),
+                    prompt_source=p.get("source", ""),
+                    note=p.get("note", ""),
+                ))
+        else:
+            prompt_map.append(PromptMapping(
+                node=nid, calls_llm=calls_llm, prompt_name="—",
+            ))
+    return node_infos, prompt_map
+
+
+# 节点功能说明取自 ``graph.node_metadata`` 集中映射表（单一事实源，
+# 同时服务「是否 LLM」「节点↔prompt」）。此处不再维护独立字典，避免漂移。
+
+# 匹配普通节点定义行: ``\tnode(node)`` (id == label,无引号无方括号)。
+# __start__/__end__ 行是 ``\t__start__([<p>…</p>]):::first`` 不会匹配;边行无此结构。
+_NODE_LABEL_RE = re.compile(r"^(\t)([a-z_][a-z0-9_]*)\(\2\)(.*)$")
+
+
+def _annotate_node_labels(mermaid: str, skip_nodes: set[str], graph_id: str) -> str:
+    """给普通节点 label 追加中文小字功能说明。
+
+    节点名下方加一行灰色小字注解功能: ``node("node<br/><font ...>说明</font>")``。
+    跳过 ``__start__``/``__end__``(格式不同)、子图入口节点(``skip_nodes``)、
+    以及在 ``node_metadata`` 里无 desc 的节点。HTML 标签需 ``securityLevel=loose``
+    (前端 GraphDebugPage 已配置);label 用双引号包裹、font 属性用单引号避免冲突。
+    """
+    out: list[str] = []
+    for line in mermaid.split("\n"):
+        m = _NODE_LABEL_RE.match(line)
+        if m:
+            nid = m.group(2)
+            if nid not in skip_nodes:
+                meta = get_node_meta(graph_id, nid)
+                if meta and meta.desc:
+                    label = f"{nid}<br/><font size='2' color='#888'>{meta.desc}</font>"
+                    out.append(f'{m.group(1)}{nid}("{label}"){m.group(3)}')
+                    continue
+        out.append(line)
+    return "\n".join(out)
 
 
 def _sse(data: dict) -> str:
@@ -172,12 +304,19 @@ async def list_graphs(agent_id: str):
             # 的 `([<p>…</p>])` 同时含两者 → 全图 node_count 恒为 2。
             nodes = len(g.nodes)
             edges = len(g.edges)
-            # 子图节点视觉区分(橙色加粗边框);仅 online 图命中,chat/guided-flow 无子图节点
-            mermaid = _decorate_mermaid(mermaid, _identify_subgraph_nodes(g))
+            subgraph_nodes = _identify_subgraph_nodes(g)
+            llm_nodes = _identify_llm_nodes(graph_id, g)
+            # 普通节点 label 加中文小字功能说明(跳过 __start__/__end__/子图入口)
+            mermaid = _annotate_node_labels(mermaid, set(subgraph_nodes), graph_id)
+            # 子图节点(橙) + LLM 节点(蓝)视觉区分
+            mermaid = _decorate_mermaid(mermaid, subgraph_nodes, llm_nodes)
+            # 结构化节点元数据 + 节点↔prompt 映射（取自 node_metadata 单一事实源）
+            node_infos, prompt_map = _build_node_infos(graph_id, g)
         except Exception as exc:
             logger.warning("Failed to compile graph %s: %s", graph_id, exc)
             mermaid = f"graph TD;\n  error[Graph '{graph_id}' failed to compile: {exc}]"
             nodes, edges = 0, 0
+            node_infos, prompt_map = [], []
 
         results.append(GraphInfo(
             id=graph_id,
@@ -185,6 +324,8 @@ async def list_graphs(agent_id: str):
             mermaid=mermaid,
             node_count=nodes,
             edge_count=edges,
+            nodes=node_infos,
+            prompt_map=prompt_map,
         ))
 
     return GraphsResponse(graphs=results)

@@ -99,6 +99,7 @@ async def handle_dingtalk_stream_via_graph(
         "entry_action": None,
         "event_id": event_id,
         "guided_flows_enabled": settings.guided_flows.enabled,
+        "topic_routing_enabled": settings.topic_routing.enabled,
         "answer_dict": None,       # clear previous turn's answer
     }
 

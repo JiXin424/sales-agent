@@ -4,7 +4,7 @@ Public API:
     build_chat_graph()            -- ChatPipeline as a compiled StateGraph
     build_online_graph()          -- Unified online conversation graph
     build_react_agent()           -- ReAct agent with tool calling
-    GRAPH_REGISTRY                -- Registry of buildable graphs (online, guided-flow)
+    GRAPH_REGISTRY                -- Registry of buildable graphs (online, guided-flow, chat)
 
 Checkpoints:
     get_checkpointer()            -- AsyncPostgresSaver for production

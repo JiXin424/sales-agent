@@ -114,10 +114,3 @@ class ChatGraphState(TypedDict, total=False):
     final_sources: list[dict]
     run_id: str | None
     usage: dict[str, int]
-
-    # === Release Version Pinning ===
-    release_id: str | None
-    knowledge_version_id: str | None
-    retrieval_profile_id: str | None
-    router_profile_id: str | None
-    release_manifest_hash: str | None

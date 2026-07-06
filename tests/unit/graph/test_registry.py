@@ -1,13 +1,13 @@
 """Tests for the Graph Registry.
 
-Ontology retrieval steps are now called inline by ``retrieve_node``;
-the ``ontology-retrieval`` subgraph entry has been removed from the registry.
+The registry contains online, guided-flow, and chat (the ChatPipeline subgraph).
+Ontology retrieval steps are called inline by ``retrieve_node`` (no subgraph).
 """
 import pytest
 
 
 class TestGraphRegistry:
-    """The registry must contain exactly online and guided-flow.
+    """The registry must contain exactly online, guided-flow, and chat.
 
     The legacy daily-eval graph must be absent until a real implementation exists.
     Ontology retrieval is now inline (no longer a separate subgraph).
@@ -16,7 +16,7 @@ class TestGraphRegistry:
     def test_registry_contains_expected_keys(self):
         from sales_agent.graph.registry import GRAPH_REGISTRY
 
-        assert set(GRAPH_REGISTRY.keys()) == {"online", "guided-flow"}
+        assert set(GRAPH_REGISTRY.keys()) == {"online", "guided-flow", "chat"}
 
     def test_daily_eval_absent(self):
         from sales_agent.graph.registry import GRAPH_REGISTRY
@@ -55,4 +55,5 @@ class TestRegistryImportableFromGraphPackage:
 
         assert "online" in GRAPH_REGISTRY
         assert "guided-flow" in GRAPH_REGISTRY
+        assert "chat" in GRAPH_REGISTRY
         # ontology-retrieval was removed — steps are now inline in retrieve_node

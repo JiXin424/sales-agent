@@ -838,6 +838,16 @@ echo "Running tenant checks"
 scripts/check-all-tenants.sh "$FILTERED_INVENTORY"
 
 # ──────────────────────────────────────────────
+# 11b. DB schema 一致性校验
+# ──────────────────────────────────────────────
+# 捕获 init_db stamp-head 兜底导致的幽灵漂移（alembic_version=head 但列未落地，
+# 典型 prod3 的 conversation_messages.topic_id）。校验脚本在 app 镜像内，
+# 经 docker exec <tenant>-api 跑，从容器 env 读 DATABASE_URL。
+# image-deploy 链路（deploy-remote.sh）自带同款校验；本机部署链路在此补上。
+echo "Validating DB schema consistency"
+scripts/post-deploy-schema-check.sh "$COMPOSE_FILE"
+
+# ──────────────────────────────────────────────
 # 12. Register DingTalk quick entries
 # ──────────────────────────────────────────────
 echo "Registering DingTalk quick entries when enabled"

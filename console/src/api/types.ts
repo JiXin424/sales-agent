@@ -10,6 +10,12 @@ export interface NodeInfo {
   prompts: { name: string; source: string; note?: string }[];
 }
 
+/** 图的一条边（取自后端 compiled.get_graph().edges）。 */
+export interface EdgeInfo {
+  source: string;
+  target: string;
+}
+
 /** 节点 ↔ prompt 对应关系的一行。无 prompt 的纯函数节点 prompt_name 为「—」。 */
 export interface PromptMapping {
   node: string;
@@ -26,6 +32,7 @@ export interface GraphInfo {
   node_count: number;
   edge_count: number;
   nodes: NodeInfo[];
+  edges: EdgeInfo[];
   prompt_map: PromptMapping[];
 }
 

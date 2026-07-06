@@ -62,6 +62,7 @@ class ChatGraphState(TypedDict, total=False):
     retrieval_info: dict[str, Any]
     retrieval_result: Any
     sources: Annotated[list[dict], add]  # P2: reducer merges parallel Send results
+    ontology_context_text: str             # ontology evidence text for generate_node
     skip_generation: bool
 
     # === Coach Guidance ===

@@ -1,12 +1,13 @@
 """Retrieval router node for the ChatPipeline graph.
 
 Routes to one of three paths based on `select_retrieval_path`:
-  - "ontology": Delegate to the ontology retrieval subgraph (Plan B)
+  - "ontology": Run ontology retrieval steps directly (extract → query →
+               compact) and return evidence text for the main generate node.
   - "rag": Traditional vector/hybrid/keyword retrieval via existing services
   - "skip": Bypass retrieval entirely (e.g. emotional support, script gen)
 
-The ontology path runs its own LLM calls internally and sets
-`skip_generation=True` -- the main `generate` node is bypassed.
+All paths return ``skip_generation=False`` — the main ``generate_node``
+always produces the final answer with PromptRegistry-resolved prompts.
 
 P1: Emits custom stream events via ``runtime.stream_writer`` for
      progress tracking.
@@ -15,25 +16,19 @@ P1: Emits custom stream events via ``runtime.stream_writer`` for
 from __future__ import annotations
 
 import logging
-from functools import lru_cache
+
 from langgraph.runtime import Runtime
 
 from sales_agent.graph.state import ChatGraphState
 from sales_agent.core.config import get_settings
-from sales_agent.graph.retrieval.ontology_graph import build_ontology_retrieval_graph
+from sales_agent.graph.retrieval.ontology_graph import (
+    extract_terms_node,
+    graph_query_node,
+    vector_fallback_node,
+    compact_evidence_node,
+)
 
 logger = logging.getLogger(__name__)
-
-
-@lru_cache(maxsize=1)
-def _get_ontology_subgraph():
-    """Return the compiled ontology retrieval subgraph (cached).
-
-    The subgraph builder is stateless (same topology every call), so we
-    compile once and reuse across all requests.  The cache can be cleared
-    for testing via ``_get_ontology_subgraph.cache_clear()``.
-    """
-    return build_ontology_retrieval_graph().compile()
 
 
 async def retrieve_node(state: ChatGraphState, runtime: Runtime) -> dict:
@@ -48,8 +43,9 @@ async def retrieve_node(state: ChatGraphState, runtime: Runtime) -> dict:
         runtime: LangGraph runtime with context (db, chat_model, embedding_model).
 
     Returns:
-        Dict with retrieval results. May set `skip_generation=True` and
-        `answer_dict` if the ontology subgraph pre-computed the answer.
+        Dict with retrieval results. Sets ``ontology_context_text`` for
+        the main generate node when the ontology path is used; never sets
+        ``skip_generation=True``.
     """
     writer = runtime.stream_writer
     path = state.get("retrieval_path", "skip")
@@ -57,16 +53,14 @@ async def retrieve_node(state: ChatGraphState, runtime: Runtime) -> dict:
     message = state["message"]
     tenant_id = state["tenant_id"]
     agent_id = state.get("agent_id")
-    parallel_mode = state.get("parallel_mode", False)
 
     # P1: Custom stream progress
     writer({"phase": "retrieval_started", "path": path, "task_type": task_type})
 
-    # -- Path 1: Ontology Neo4j knowledge graph (subgraph) --
+    # -- Path 1: Ontology Neo4j knowledge graph (inline steps, no subgraph) --
     if path == "ontology":
         return await _retrieve_via_ontology(
             state, runtime, tenant_id, agent_id, task_type, message,
-            parallel_mode=parallel_mode,
         )
 
     # -- Path 2: Traditional RAG (vector/hybrid/keyword) --
@@ -89,81 +83,114 @@ async def _retrieve_via_ontology(
     agent_id: str | None,
     task_type: str,
     message: str,
-    parallel_mode: bool = False,
 ) -> dict:
-    """Run the ontology retrieval subgraph, which handles everything internally:
-    extract terms -> graph query -> [vector fallback] -> compact -> generate answer.
-    """
-    subgraph = _get_ontology_subgraph()
+    """Run ontology retrieval steps directly and return evidence text.
 
-    sub_input = {
+    Pipeline: extract_terms (LLM) → graph_query (Cypher) →
+    [vector_fallback] → compact_evidence → evidence text.
+
+    Does NOT generate a final answer — the evidence text is passed to the
+    main ``generate_node`` which applies PromptRegistry-resolved prompts
+    for formatting, sales tone, and markdown output.
+    """
+    writer = runtime.stream_writer
+
+    # Local state dict that drives the step functions
+    local: dict = {
         "question": message,
         "tenant_id": tenant_id,
         "agent_id": agent_id,
         "task_type": task_type,
+        "search_terms": [],
+        "graph_rows": [],
+        "vector_fallback_used": False,
+        "compacted_evidence": {},
     }
 
     try:
-        sub_result = await subgraph.ainvoke(
-            sub_input,
-            context=runtime.context,
+        # Step 1: Extract search terms (LLM)
+        writer({"phase": "ontology_extracting_terms"})
+        local.update(await extract_terms_node(local, runtime))
+        logger.info(
+            "Ontology retrieval: terms=%s",
+            local.get("search_terms", [])[:5],
         )
+
+        # Step 2: Graph query (Cypher)
+        writer({"phase": "ontology_querying_graph"})
+        local.update(await graph_query_node(local, runtime))
+
+        # Step 3: Vector fallback if no graph results
+        if not local.get("graph_rows"):
+            writer({"phase": "ontology_vector_fallback"})
+            local.update(await vector_fallback_node(local, runtime))
+
+        # Step 4: Compact evidence
+        writer({"phase": "ontology_compacting"})
+        local.update(compact_evidence_node(local))
+
     except Exception as e:
-        logger.warning("Ontology subgraph failed: %s, falling back", e)
-        return {
-            "retrieval_info": {"called": True, "provider": "ontology_neo4j", "error": str(e)},
-            "sources": [],
-            "skip_generation": False,
-            "answer_dict": None,
-        }
-
-    # 并行模式：只返回 sources，让主 generate 节点统一生成（合并 ontology + RAG）
-    # 独占模式（非并行）：skip_generation，用 ontology 子图自己生成的 answer
-    if parallel_mode:
-        # 构建 ontology 证据文本，供主生成节点与 RAG 结果合并
-        compacted = sub_result.get("compacted_evidence", {})
-        onto_lines = ["## 知识图谱（本体）检索结果"]
-        entities = compacted.get("entities", [])
-        if entities:
-            onto_lines.append(f"匹配实体 ({len(entities)}): " + ", ".join(
-                f"{e.get('name','')}({e.get('type','')})" for e in entities[:20]
-            ))
-        facts = compacted.get("facts", [])
-        if facts:
-            onto_lines.append(f"相关事实 ({len(facts)}):")
-            for f in facts[:15]:
-                onto_lines.append(
-                    f"  - [{f.get('subject','')}] {f.get('predicate','')} "
-                    f"{f.get('object','')} {f.get('value','')}"[:200]
-                )
-        docs = compacted.get("source_documents", [])
-        if docs:
-            onto_lines.append(f"来源文档: {', '.join(docs[:10])}")
-        ontology_context_text = "\n".join(onto_lines)
-
+        logger.warning("Ontology retrieval failed: %s", e, exc_info=True)
         return {
             "retrieval_info": {
                 "called": True,
                 "provider": "ontology_neo4j",
-                "vector_fallback_used": sub_result.get("vector_fallback_used", False),
-                "source_count": len(sub_result.get("sources", [])),
-                "parallel_mode": True,
+                "error": str(e),
             },
-            "sources": sub_result.get("sources", []),
+            "sources": [],
             "skip_generation": False,
-            "answer_dict": None,
-            "ontology_context_text": ontology_context_text,
+            "ontology_context_text": "",
         }
+
+    # Step 5: Build ontology_context_text from compacted evidence
+    compacted = local.get("compacted_evidence", {})
+    onto_lines = ["## 知识图谱（本体）检索结果"]
+    entities = compacted.get("entities", [])
+    if entities:
+        onto_lines.append(f"匹配实体 ({len(entities)}): " + ", ".join(
+            f"{e.get('name', '')}({e.get('type', '')})" for e in entities[:20]
+        ))
+    facts = compacted.get("facts", [])
+    if facts:
+        onto_lines.append(f"相关事实 ({len(facts)}):")
+        for f in facts[:15]:
+            onto_lines.append(
+                f"  - [{f.get('subject', '')}] {f.get('predicate', '')} "
+                f"{f.get('object', '')} {f.get('value', '')}"[:200]
+            )
+    docs = compacted.get("source_documents", [])
+    if docs:
+        onto_lines.append(f"来源文档: {', '.join(docs[:10])}")
+    ontology_context_text = "\n".join(onto_lines)
+
+    # Build sources from source_documents
+    sources = [
+        {
+            "document_id": "",
+            "title": title,
+            "display_title": title,
+            "score": compacted.get("confidence", 0.8),
+            "source_type": "ontology",
+        }
+        for title in compacted.get("source_documents", [])[:3]
+    ]
+
+    writer({
+        "phase": "ontology_retrieval_complete",
+        "entity_count": len(entities),
+        "fact_count": len(facts),
+    })
+
     return {
         "retrieval_info": {
             "called": True,
             "provider": "ontology_neo4j",
-            "vector_fallback_used": sub_result.get("vector_fallback_used", False),
-            "source_count": len(sub_result.get("sources", [])),
+            "vector_fallback_used": local.get("vector_fallback_used", False),
+            "source_count": len(sources),
         },
-        "sources": sub_result.get("sources", []),
-        "answer_dict": sub_result.get("answer"),       # <- pre-computed answer!
-        "skip_generation": True,                       # <- skip main generate node
+        "sources": sources,
+        "skip_generation": False,
+        "ontology_context_text": ontology_context_text,
     }
 
 

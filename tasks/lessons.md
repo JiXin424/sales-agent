@@ -335,3 +335,15 @@
   3. **traefik `watch: true` + 动态目录 = 改文件即生效**：往那个目录写东西要极其小心，写错立刻影响线上域名。
 - **检查范式**：要在本机渲染别的环境 inventory → 命令必带 `--traefik-out /dev/null --compose-out /tmp/xxx.yml`；事后 `stat` 一下 `/root/code/traefik/dynamic.d/generated-sales-agent.yml` 的 mtime 确认没被自己改到。
 - **相关**：#22（跨机 rsync 覆盖 secrets/tenants.json）、#10（traefik 跨 network 502）同族——「每机的 traefik/网络/配置是本地的，跨机操作别覆盖」。
+
+## 27. 检索子图自己出答案（`skip_generation=True`）会绕过主生成节点 → 租户定制 prompt 全失效。检索层只产证据，生成层只走一条主管道
+
+- **场景**：用户问"福多多的竞品有哪些"，机器人直接端出 ontology 图谱原始结果（"推断聚优和东福是竞品"），没有 markdown 格式、没有销售话术、没结合 RAG。排查发现 graph 新路径（钉钉 Stream）走 ontology 时，`_retrieve_via_ontology` 调一个独立子图，子图用一道极简 prompt（`_ONTOLOGY_RESPONSE_PROMPT`，只说"基于图谱事实回答"）自己生成答案，然后设 `skip_generation=True`。而 `skip_generation=True` 让主 `generate_node` 整个跳过——**PromptRegistry（Agent 绑定→tenant active→内置默认三级回退的 system/task prompt）只在 `generate_node` 生效**。于是所有租户定制的"markdown 格式/销售口吻/综合 RAG"指令对 ontology 路径全部失效。
+- **根因**：架构上把"检索"和"生成"塞进同一个子图，子图又用旁路标志（`skip_generation`）短路主生成节点。任何一个绕过主 `generate_node` 的"自己出答案"路径，都会让集中式的 prompt 管理形同虚设。HTTP 老路径（`chat_pipeline.py`）本就把 ontology 纳入主 agent 生成，是对的；graph 新路径搞了个并行实现且短路了，是错的。
+- **教训**：
+  1. **检索层只产证据（context/source text），生成层只走一条主管道（`generate_node` → `execute_agent` → PromptRegistry）**。任何"检索后自己出答案并跳过主生成"的旁路都会让 prompt 管理失效——这是 prompt 体系的核心不变量。
+  2. **`skip_generation` 这类短路标志要审慎**：它只该用于"确实不需要生成"的场景（如 evidence gate 判定 required 知识缺失而 block），绝不该被检索路径用来"我已经出过答案了"。
+  3. **新路径（graph）和老路径（chat_pipeline）必须行为对齐**：老路径怎么把 ontology 纳入生成、怎么传 `ontology_context`，新路径照搬，别另起炉灶搞出一套不一致的旁路。
+  4. **排查"prompt 没生效"先查调用链终点**：`generate_node` 是否被 `skip_generation`/early-return 跳过？`resolve_execution_prompts` 是否真的进了 LLM 的 messages？别只盯 prompt 文本本身。
+- **检查范式**：用户反馈某类查询输出"像没经过定制 prompt" → 沿路径 grep `skip_generation`/`answer_dict.*precompute`/early-return → 看是否某检索/旁路分支短路了 `generate_node` → 改成"只产证据、回流主生成"。
+- **相关**：#1（`str.format` 占位符没注入，prompt 体系失效同族——都是"prompt 没真正进 LLM"）。

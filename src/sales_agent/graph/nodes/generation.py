@@ -25,8 +25,8 @@ logger = logging.getLogger(__name__)
 async def generate_node(state: ChatGraphState, runtime: Runtime) -> dict:
     """Execute the LLM agent to generate a structured answer.
 
-    If ``skip_generation`` is set (e.g. by the ontology subgraph), this
-    node is a no-op that passes through.
+    If ``skip_generation`` is set (e.g. by the evidence gate when required
+    knowledge is missing), this node is a no-op that passes through.
 
     Requires ``runtime.context["chat_model"]`` (ChatModel instance).
 
@@ -51,7 +51,7 @@ async def generate_node(state: ChatGraphState, runtime: Runtime) -> dict:
     ):
         writer({
             "phase": "generation_skipped",
-            "reason": "ontology_precomputed" if state.get("skip_generation") else "fan_out_answer_present",
+            "reason": "skip_generation_set" if state.get("skip_generation") else "fan_out_answer_present",
         })
         return {}
 
@@ -101,6 +101,8 @@ async def generate_node(state: ChatGraphState, runtime: Runtime) -> dict:
     writer({"phase": "generation_executing", "task_type": task_type})
 
     start_time = time.time()
+    ontology_context = state.get("ontology_context_text", "")
+
     answer_dict = await execute_agent(
         chat_model=chat_model,
         task_type=task_type,
@@ -111,6 +113,7 @@ async def generate_node(state: ChatGraphState, runtime: Runtime) -> dict:
         tenant_style=state.get("tenant_info", {}).get("config", {}),
         prompt_text=prompt_text,
         system_prompt_text=system_prompt_text,
+        ontology_context=ontology_context,
     )
     latency_ms = int((time.time() - start_time) * 1000)
     logger.info("Graph generation completed in %d ms for task %s", latency_ms, task_type)

@@ -1,13 +1,9 @@
-"""Tests for the retrieval router node and ontology subgraph."""
+"""Tests for the retrieval router node and ontology step functions."""
 import pytest
 from langgraph.runtime import Runtime
 from sales_agent.graph.nodes.retrieval import retrieve_node
 from sales_agent.graph.state import ChatGraphState
-from sales_agent.graph.retrieval.ontology_graph import (
-    build_ontology_retrieval_graph,
-    should_vector_fallback,
-    compact_evidence_node,
-)
+from sales_agent.graph.retrieval.ontology_graph import compact_evidence_node
 from sales_agent.graph.retrieval.state import OntologyRetrievalState
 from sales_agent.graph.edges.path_conditions import select_retrieval_path
 
@@ -35,37 +31,19 @@ class TestSelectRetrievalPath:
         }
         assert select_retrieval_path(state) == "skip"
 
-    def test_rag_when_retrieval_needed_but_no_neo4j(self):
+    def test_retrieval_when_needed(self):
         state: ChatGraphState = {
             "needs_retrieval": True, "tenant_id": "t1", "user_id": "u1",
             "message": "", "conversation_id": "c1", "channel": "local",
         }
-        # Without Neo4j config, should default to rag
+        # With needs_retrieval=True, should not be "skip"
         result = select_retrieval_path(state)
-        assert result in ("rag", "skip")
+        assert result != "skip"
+        # Result is either "ontology", "rag", or a list of Send objects
+        # depending on config (knowledge_engine, neo4j uri, parallel_enabled)
 
 
-class TestOntologySubgraph:
-    def test_graph_compiles(self):
-        builder = build_ontology_retrieval_graph()
-        assert builder is not None
-        graph = builder.compile()
-        assert graph is not None
-
-    def test_should_vector_fallback_with_rows(self):
-        state: OntologyRetrievalState = {
-            "graph_rows": [{"e": {"name": "test"}}],
-            "question": "test", "tenant_id": "t1",
-        }
-        assert should_vector_fallback(state) == "compact"
-
-    def test_should_vector_fallback_empty(self):
-        state: OntologyRetrievalState = {
-            "graph_rows": [],
-            "question": "test", "tenant_id": "t1",
-        }
-        assert should_vector_fallback(state) == "fallback"
-
+class TestCompactEvidence:
     def test_compact_evidence_sorts_by_relevance(self):
         state: OntologyRetrievalState = {
             "graph_rows": [
@@ -82,33 +60,3 @@ class TestOntologySubgraph:
         assert "compacted_evidence" in result
         assert len(result["compacted_evidence"]["entities"]) == 1
         assert len(result["compacted_evidence"]["facts"]) == 1
-
-
-class TestOntologySubgraphCache:
-    """The compiled ontology subgraph must be cached (lru_cache maxsize=1)."""
-
-    def test_cache_compiles_only_once(self):
-        from sales_agent.graph.nodes.retrieval import _get_ontology_subgraph
-
-        # Clear cache to start fresh
-        _get_ontology_subgraph.cache_clear()
-
-        info0 = _get_ontology_subgraph.cache_info()
-        assert info0.hits == 0
-        assert info0.misses == 0
-
-        # First call — cache miss
-        g1 = _get_ontology_subgraph()
-        info1 = _get_ontology_subgraph.cache_info()
-        assert info1.misses == 1
-        assert info1.hits == 0
-
-        # Second call — cache hit
-        g2 = _get_ontology_subgraph()
-        info2 = _get_ontology_subgraph.cache_info()
-        assert info2.misses == 1
-        assert info2.hits == 1
-        assert g1 is g2, "Same compiled graph should be returned"
-
-        # Clean up
-        _get_ontology_subgraph.cache_clear()

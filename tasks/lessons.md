@@ -347,3 +347,16 @@
   4. **排查"prompt 没生效"先查调用链终点**：`generate_node` 是否被 `skip_generation`/early-return 跳过？`resolve_execution_prompts` 是否真的进了 LLM 的 messages？别只盯 prompt 文本本身。
 - **检查范式**：用户反馈某类查询输出"像没经过定制 prompt" → 沿路径 grep `skip_generation`/`answer_dict.*precompute`/early-return → 看是否某检索/旁路分支短路了 `generate_node` → 改成"只产证据、回流主生成"。
 - **相关**：#1（`str.format` 占位符没注入，prompt 体系失效同族——都是"prompt 没真正进 LLM"）。
+
+## 28. `init_db` 里 `create_all` 跑在 `alembic upgrade` 之前 → migration 同时含 `create_table`+`add_column` 时必漂移：create_all 抢建新表 → upgrade 撞 DuplicateTableError → stamp head 兜底 → 跳过 add_column（幽灵漂移：版本号=head 但列缺失）
+
+- **场景**：prod3（image-deploy 生产）钉钉 stream 容器虽 `Up`，但每条消息都报 `InFailedSQLTransactionError: current transaction is aborted`，graph 新路径全废；同镜像（`eb889df`）在 prod2（开发机）正常。排查：prod3 `conversation_messages` 缺 `topic_id` 列（migration `0011` 加的），但 `alembic_version` 已是 `0011_topic_memory`——版本号在撒谎。`retrieval_profiles`/`eval_*`/`document_chunks` 也同源漂移。
+- **根因**：`init_db()` 顺序是 `Base.metadata.create_all()` → `_run_auto_migrations()`（upgrade head）。`0011` 同时 `create_table conversation_topics`（新表）+ `add_column conversation_messages.topic_id`（老表加列）。`create_all` 因 ORM model 已有 `ConversationTopic` 抢先建了 `conversation_topics` → upgrade 跑到 0011 的 `create_table` 撞 `DuplicateTableError` → 兜底 `stamp head` 把版本号标到 0011，**跳过 0011 里剩余的 `add_column topic_id`**。列永远没加，但版本号说加过了。prod2 列在（库历史不同），prod3 被 bug 漂移。
+- **教训**：
+  1. **`create_all` 和 `alembic upgrade` 不是顺序无关的**：当 migration 同时含建表+加列、且要建的表已在 ORM model 里，`create_all` 会抢建，让 upgrade 撞 `DuplicateTableError`。正确顺序是 **先 upgrade（create_all 还没预建，create_table 不撞）→ 后 create_all（幂等补 model-only 表）**。本次修复即调换此顺序。
+  2. **`upgrade 失败 → stamp head` 兜底是「谎言式容错」**：它把 alembic_version 标到 head，掩盖了失败 revision 的 add_column 没执行。「版本号到位、schema 没到位」的幽灵漂移极难发现——要等业务查询缺列 crash（且报的是次生 `InFailedSQLTransactionError`，不是原始 `UndefinedColumn`）。兜底必须打全异常 + 明确警告「add_column 被跳过、必须 backfill」。
+  3. **`InFailedSQLTransactionError: current transaction is aborted` 永远是次生错误**：它只说明事务里**更早**的某条 SQL 失败了。真正的根因（`UndefinedColumn` 等）在它前面的日志里。别只盯这条，往前翻第一条 ERROR。
+  4. **同镜像在不同环境行为不同 → 先怀疑环境状态（DB schema/secrets/env），不是代码**：prod2/prod3 同 `eb889df`，差异在 DB schema 漂移。**`alembic_version` 相同 ≠ schema 相同**——必须查实际列（`information_schema.columns` 跨环境 diff）。
+  5. **CI 部署 DB 不能只靠运行时 `init_db` 自动迁移**：漂移只能靠业务 crash 暴露（本次漂移了 4 个 commit 才因 stream crash 被发现）。CI 应加「部署后 schema 一致性校验」（对比 alembic_version 与关键列是否存在）+ migration 预演（临时 pgvector 库 dry-run upgrade），把漂移拦在部署阶段。新 ORM 表必须同一 PR 配 `create_table` migration（model 先进、migration 后补 = 埋漂移）。
+- **检查范式**：某环境 stream/api 报 `InFailedSQLTransactionError` 而其它环境正常 → 查该环境 DB：`SELECT column_name FROM information_schema.columns WHERE table_name='X'` 与正常环境 diff → 缺列则查 `alembic_version`（若版本号=正常环境但列缺 = 幽灵漂移）→ 写幂等 backfill migration（`ADD COLUMN IF NOT EXISTS`，**不要含 create_table**，否则又会被 stamp 跳过）补齐 → 同时修 `init_db` 顺序防前向再发。事务 dry-run（`BEGIN; <migration SQL>; ROLLBACK;`）可无风险验证 SQL 兼容性。
+- **相关**：#25（生产 500 但日志干净的「不可见故障」同族——都是兜底/装饰器吞掉真相）、#26（render 副作用跨环境覆盖——都是「环境状态被隐式改写」）、#27（graph 新路径漂移——本次根因正是 0011 引入 topic 时的 schema 没跟上 graph 代码）。

@@ -793,7 +793,7 @@ PYTHONPATH=src pytest tests/integration/test_pilot_api.py -v
 
 ### Prompt 全层解耦（2026-06-22）
 
-所有层 prompt（task / system / router / risk / coach）已统一纳入 DB 版本管理：
+所有层 prompt（task / system / router / risk / coach / web）已统一纳入 DB 版本管理（24 个内置槽位，2026-07-06 迁入福多多旧 prompt 并新增 `web/web_analysis`）：
 
 - 运营在后台改任意层 prompt **即时生效**（主链路 + 钉钉 + CLI），无需改代码重部署。此前仅主 Web 链路接 DB，钉钉（主要生产渠道）和 CLI 直接用代码常量。
 - **Agent 级 Prompt 绑定 UI**（`/agents/:id/prompts`）从只读改为可编辑：为每个 Agent 切换/解绑各层 prompt 版本（后端 `PUT /agents/{id}/prompts/bindings/{category}/{key}`）。
@@ -808,6 +808,7 @@ PYTHONPATH=src pytest tests/integration/test_pilot_api.py -v
 
 | 日期 | 摘要 |
 |------|------|
+| [2026-07-06](changelog/2026-07-06.md) | **福多多旧 Prompt 迁移到新 24 槽位 + 生产路径联网兜底**: 旧项目 8 条 prompt 等价迁入——`system_constraint` 整体替换为福多多旧 `system_prompt`（剥钉钉单聊不适用的「群聊信息边界」段）；`knowledge_qa`/`ONTOLOGY_RESPONSE_PROMPT` 规则区写入旧 qdrant_llm 共享 13 原则（保 schema）；`task_router`/`evidence_router` 借旧 `intent_router` 的 follow_up 短追问/情绪识别/「宁可多搜不可漏搜」+触发词表（改造适配新 12 类输出）；**新增 `web/web_analysis` prompt（23→24）**，迁移旧 `web_llm`（置信度 high/med/low + 来源 URL + 主语/日期敏感）。**生产 graph 路径补联网兜底**：`retrieve_node` 在 ontology+rag 都空时调 Bocha → 独立 LLM（`WEB_ANALYSIS_PROMPT`）分析 → `analysis` 拼进 `ontology_context_text`，`generate` 节点零改动；受 `web_search.enabled` 守卫，无 `BOCHA_API_KEY` 不触发。`_ENTITY_EXTRACTION_PROMPT` 及其余 task/risk/coach/入库 prompt 不动（旧无等价）。275 相关单测通过；生产 stream 验证待部署 |
 | [2026-07-06](changelog/2026-07-06.md) | **图调试页保留侧边栏 + 图最大化放大**: 回退上一轮「脱离侧边栏+Header」方案（用户反馈要保留侧边栏），保留侧边栏+Header 导航不变，graph-debug 路由仅去 Content margin/padding 让图在主区最大化；mermaid svg `width/height:100%!important` 撑满容器按 `preserveAspectRatio(xMidYMid meet)` 比例最大化。图区=侧边栏右侧全部宽 × `100vh-64px`。前端 build exit 0 |
 | [2026-07-06](changelog/2026-07-06.md) | **图调试页真正占满整个屏幕（脱离侧边栏+Header）**: graph-debug 路由 early return 全屏 Layout（无 Sider 无 Header），图区=100vw×100vh；顶部轻量工具栏带「← 返回控制台」按钮保留导航；mermaid svg 用 `width/height:100%!important` 撑满容器按比例最大化（覆盖 mermaid 内联 max-width）。修上一轮只去 Content margin/padding 但侧边栏 208px+Header 64px 仍占空间、svg 不主动放大致图居中偏小的不足。前端 build exit 0 |
 | [2026-07-06](changelog/2026-07-06.md) | **图调试页 Mermaid 图占满屏幕 + 执行轨迹可折叠**: graph-debug 路由突破 AgentLayout `<Content>` 的 margin/padding（白卡片），让 Mermaid 图占满 header 以下全部空间；执行轨迹 36vh→32vh 并支持一键折叠（折叠后图占满 100%）；修 `.gd-container` 高度漏算 Content padding(48px) 致溢出 + tabpane 非 flex 容器致 `gd-mermaid-wrap` 被图例/对照表挤出裁切的 bug。节点中文小字功能说明（`graph/node_metadata.py` 单一事实源，20 节点）经 mmdc 真渲染验证：SVG 用 `<foreignObject>`+HTML `<font color='#888'>` 渲染灰色小字，三图全命中。`node_metadata.py` 补 `git add` 纳入跟踪（原未跟踪，防 CI 镜像缺失 import 崩溃）。前端 tsc+vite build 通过，graph_debug 33 单测通过 |

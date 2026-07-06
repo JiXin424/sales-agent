@@ -18,7 +18,8 @@ IMAGE="${IMAGE:?需要 IMAGE 环境变量}"
 # 仓库根目录 = 本脚本所在目录的父目录
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-python3 - "$REPO_DIR/deploy/deploy-targets.json" <<'PY' > /tmp/ci-targets.txt
+TARGETS_FILE="${TARGETS_FILE:-$REPO_DIR/deploy/deploy-targets.json}"
+python3 - "$TARGETS_FILE" <<'PY' > /tmp/ci-targets.txt
 import json, sys
 d = json.load(open(sys.argv[1]))
 for t in d.get("targets", []):

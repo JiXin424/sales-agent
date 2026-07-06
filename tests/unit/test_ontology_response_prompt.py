@@ -14,6 +14,8 @@ def test_ontology_response_prompt_has_qdrant_rules():
     assert "竞品防火墙" in ONTOLOGY_RESPONSE_PROMPT
     assert "跨品类防火墙" in ONTOLOGY_RESPONSE_PROMPT
     assert "专有名词精确性" in ONTOLOGY_RESPONSE_PROMPT
+    assert "提炼要点" in ONTOLOGY_RESPONSE_PROMPT
+    assert "宁缺毋滥" in ONTOLOGY_RESPONSE_PROMPT
 
 
 def test_ontology_response_prompt_has_json_schema():

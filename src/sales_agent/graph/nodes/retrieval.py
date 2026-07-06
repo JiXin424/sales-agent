@@ -27,6 +27,7 @@ from sales_agent.graph.retrieval.ontology_graph import (
     vector_fallback_node,
     compact_evidence_node,
 )
+from sales_agent.graph.retrieval.web_fallback import web_fallback_and_analyze
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +176,31 @@ async def _retrieve_via_ontology(
         for title in compacted.get("source_documents", [])[:3]
     ]
 
+    # Step 6: Web 兜底——ontology 无实体无事实时调联网搜索
+    settings = get_settings()
+    if not entities and not facts and settings.web_search.enabled:
+        writer({"phase": "web_fallback"})
+        web_result = await web_fallback_and_analyze(
+            message=message,
+            tenant_id=tenant_id,
+            runtime=runtime,
+            api_key=settings.web_search.api_key,
+            top_n=settings.web_search.top_n,
+        )
+        if web_result is not None:
+            return {
+                "retrieval_info": {
+                    "called": True,
+                    "provider": "ontology_neo4j",
+                    "vector_fallback_used": local.get("vector_fallback_used", False),
+                    "source_count": len(web_result["sources"]),
+                    "web_search_used": True,
+                },
+                "sources": web_result["sources"],
+                "skip_generation": False,
+                "ontology_context_text": web_result["ontology_context_text"],
+            }
+
     writer({
         "phase": "ontology_retrieval_complete",
         "entity_count": len(entities),
@@ -187,6 +213,7 @@ async def _retrieve_via_ontology(
             "provider": "ontology_neo4j",
             "vector_fallback_used": local.get("vector_fallback_used", False),
             "source_count": len(sources),
+            "web_search_used": False,
         },
         "sources": sources,
         "skip_generation": False,
@@ -246,11 +273,36 @@ async def _retrieve_via_rag(
         "source_count": len(sources),
     })
 
+    # Web 兜底——RAG 无结果时
+    if not sources and settings.web_search.enabled:
+        writer({"phase": "web_fallback"})
+        web_result = await web_fallback_and_analyze(
+            message=message,
+            tenant_id=tenant_id,
+            runtime=runtime,
+            api_key=settings.web_search.api_key,
+            top_n=settings.web_search.top_n,
+        )
+        if web_result is not None:
+            return {
+                "retrieval_info": {
+                    "called": True,
+                    "top_k": settings.retrieval.top_k,
+                    "source_count": len(web_result["sources"]),
+                    "web_search_used": True,
+                },
+                "sources": web_result["sources"],
+                "retrieval_result": None,
+                "skip_generation": False,
+                "ontology_context_text": web_result["ontology_context_text"],
+            }
+
     return {
         "retrieval_info": {
             "called": True,
             "top_k": settings.retrieval.top_k,
             "source_count": len(sources),
+            "web_search_used": False,
         },
         "sources": sources,
         "retrieval_result": retrieval_result,

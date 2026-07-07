@@ -38,29 +38,47 @@ docker compose -f "$COMPOSE" --project-directory "$WORKSPACE" -p "$PROJECT" \
 #    更 ≠ stream 就绪。这里用 /health 200 作为 init_db 完成的可靠信号
 #    （FastAPI lifespan startup 同步 await init_db），并补上 schema 校验，
 #    捕获 stamp-head 兜底导致的幽灵漂移（alembic_version=head 但列未落地）。
+#
+#    api 容器 running 检测：用 `docker inspect` 直接查容器 State.Running，
+#    不用 `docker compose ps | grep -api$`。原因：`compose up -d` 重建 api
+#    时，api 等 db Healthy 处于 creating/Waiting 态，`compose ps` 在该窗口
+#    不输出该行，旧逻辑误判「未 running」exit 1（实际容器最终会起）。
+#    inspect 直接查容器对象，creating/restarting/running 都能取到状态。
+#    等待窗口放宽到 90×2s=180s（db 健康检查慢时够用）。
 echo "[deploy-remote] 等待 api running..."
 API_CT=""
-for i in $(seq 1 30); do
+for i in $(seq 1 90); do
+  # 先取 api 容器名：compose ps 列 running 态，取不到则用 inspect 按命名约定兜底
   API_CT=$(docker compose -f "$COMPOSE" -p "$PROJECT" ps --format '{{.Name}}' 2>/dev/null \
            | grep -- '-api$' | head -1 || true)
+  # compose ps 没列（容器在 creating/Waiting）→ 按命名约定 sales-agent-<env-or-tenant>-api 直接 inspect
+  if [ -z "$API_CT" ]; then
+    for cand in $(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -- '-api$'); do
+      if docker inspect --format '{{.State.Running}}' "$cand" 2>/dev/null | grep -q true; then
+        API_CT="$cand"; break
+      fi
+    done
+  fi
   [ -n "$API_CT" ] && break
   sleep 2
 done
 if [ -z "$API_CT" ]; then
-  echo "⚠️ [deploy-remote] api 容器未 running，查 docker compose -f $COMPOSE -p $PROJECT logs" >&2
+  echo "⚠️ [deploy-remote] api 容器 180s 内未 running，查 docker compose -f $COMPOSE -p $PROJECT logs" >&2
   exit 1
 fi
+echo "[deploy-remote] api 容器 running: $API_CT (after ${i}x2s)"
 
 # 等 /health 200 = lifespan startup 完成 = init_db() 已跑完（成功或 stamp-head 兜底都算完成）
-for i in $(seq 1 30); do
+# 窗口放宽到 90×2s=180s（init_db 首次建表/迁移可能较慢）
+for i in $(seq 1 90); do
   if docker exec "$API_CT" python -c \
     "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health',timeout=2).status==200 else 1)" \
     2>/dev/null; then
     echo "[deploy-remote] api /health 就绪 (after ${i}x2s)"
     break
   fi
-  [ "$i" = "30" ] && {
-    echo "⚠️ [deploy-remote] api /health 60s 内未就绪，查 docker compose -f $COMPOSE -p $PROJECT logs" >&2
+  [ "$i" = "90" ] && {
+    echo "⚠️ [deploy-remote] api /health 180s 内未就绪，查 docker compose -f $COMPOSE -p $PROJECT logs" >&2
     exit 1
   }
   sleep 2

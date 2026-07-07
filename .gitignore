@@ -102,3 +102,4 @@ images/
 
 # superpowers / Claude scratch (brainstorm mockups、SDD ledger 等)
 .superpowers/
+.worktrees/

@@ -555,6 +555,7 @@ export default function GraphDebugPage() {
             <Tabs
               activeKey={activeGraphId}
               onChange={setActiveGraphId}
+              destroyOnHidden
               items={graphs.map(g => ({
                 key: g.id,
                 label: (

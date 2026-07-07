@@ -109,7 +109,9 @@ def mock_topic_manager(mock_topic):
     """Create a mock TopicManager with controllable behavior."""
     mgr = MagicMock()
     mgr.get_active_topic = AsyncMock(return_value=mock_topic)
-    mgr.close_if_expired = AsyncMock(return_value=False)
+    # side_effect enforces the real signature (session, topic, now=None) so a
+    # missing db argument surfaces as a TypeError instead of silently passing.
+    mgr.close_if_expired = AsyncMock(side_effect=lambda db, t, now=None: False)
     mgr.find_restorable_topics = AsyncMock(return_value=[])
     mgr.create_topic = AsyncMock(return_value=mock_topic)
     mgr.set_pending_clarification = AsyncMock(side_effect=lambda db, t, e, m, c: t)

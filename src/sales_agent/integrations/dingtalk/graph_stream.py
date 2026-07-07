@@ -19,6 +19,7 @@ from collections.abc import Awaitable, Callable
 
 from sales_agent.core.config import get_settings
 from sales_agent.graph.checkpoints import get_checkpointer
+from sales_agent.integrations.dingtalk.citation import format_citation_block
 from sales_agent.services.online_conversation import get_online_graph
 
 logger = logging.getLogger(__name__)
@@ -187,6 +188,12 @@ async def handle_dingtalk_stream_via_graph(
             display_text = "\n\n".join(
                 s.get("content", "") for s in sections if s.get("content")
             )
+
+    # 方案 A：正文确定后，把来源列表拼到末尾（不走 streaming，避免卡片闪烁）
+    if display_text and final_answer:
+        citation = format_citation_block(final_answer.get("sources", []))
+        if citation:
+            display_text += citation
 
     logger.warning("CARD_FINALIZE: display_len=%s", len(display_text))
     await card_sender.streaming_finalize(card_id, display_text)

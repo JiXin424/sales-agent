@@ -149,7 +149,10 @@ class TestSelectRetrievalPath:
                 "Settings",
                 (),
                 {
-                    "ontology": type("Ont", (), {"knowledge_engine": "none"})(),
+                    "ontology": type("Ont", (), {
+                        "knowledge_engine": "none",
+                        "hybrid_retrieval": False,
+                    })(),
                     "neo4j": type("N4j", (), {"uri": None})(),
                     "retrieval": type("Ret", (), {"parallel_enabled": False})(),
                 },

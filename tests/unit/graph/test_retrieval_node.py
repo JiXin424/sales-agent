@@ -1,6 +1,9 @@
 """Tests for the retrieval router node and ontology step functions."""
+from types import SimpleNamespace
+
 import pytest
 from langgraph.runtime import Runtime
+from langgraph.types import Send
 from sales_agent.graph.nodes.retrieval import retrieve_node
 from sales_agent.graph.state import ChatGraphState
 from sales_agent.graph.retrieval.ontology_graph import compact_evidence_node
@@ -23,24 +26,98 @@ async def test_retrieve_node_skip_path():
     assert result["skip_generation"] is False
 
 
-class TestSelectRetrievalPath:
-    def test_skip_when_no_retrieval_needed(self):
-        state: ChatGraphState = {
-            "needs_retrieval": False, "tenant_id": "t1", "user_id": "u1",
-            "message": "", "conversation_id": "c1", "channel": "local",
-        }
-        assert select_retrieval_path(state) == "skip"
+def _make_settings(*, engine="legacy_rag", hybrid_retrieval=False,
+                   neo4j_uri=None, parallel_enabled=True):
+    """Build a minimal mock settings object exposing only the fields read by
+    select_retrieval_path."""
+    return SimpleNamespace(
+        ontology=SimpleNamespace(
+            knowledge_engine=engine,
+            hybrid_retrieval=hybrid_retrieval,
+        ),
+        neo4j=SimpleNamespace(uri=neo4j_uri),
+        retrieval=SimpleNamespace(parallel_enabled=parallel_enabled),
+    )
 
-    def test_retrieval_when_needed(self):
-        state: ChatGraphState = {
-            "needs_retrieval": True, "tenant_id": "t1", "user_id": "u1",
-            "message": "", "conversation_id": "c1", "channel": "local",
+
+class TestSelectRetrievalPath:
+    """Matrix tests for select_retrieval_path config-driven routing.
+
+    Verifies that ``hybrid`` engine value and ``hybrid_retrieval`` flag —
+    previously dead config in the graph path — now trigger parallel
+    ontology+rag fan-out, while preserving legacy ontology_neo4j behavior.
+    """
+
+    def _state(self, **overrides):
+        base = {
+            "needs_retrieval": True,
+            "knowledge_policy": "required",
+            "tenant_id": "t1", "user_id": "u1",
+            "message": "test", "conversation_id": "c1", "channel": "local",
         }
-        # With needs_retrieval=True, should not be "skip"
-        result = select_retrieval_path(state)
-        assert result != "skip"
-        # Result is either "ontology", "rag", or a list of Send objects
-        # depending on config (knowledge_engine, neo4j uri, parallel_enabled)
+        base.update(overrides)
+        return base
+
+    def _patch(self, monkeypatch, **kw):
+        monkeypatch.setattr(
+            "sales_agent.core.config.get_settings",
+            lambda: _make_settings(**kw),
+        )
+
+    def _assert_fanout(self, result):
+        """Assert result is a 2-element Send fan-out (ontology + rag)."""
+        assert isinstance(result, list) and len(result) == 2
+        assert all(isinstance(s, Send) and s.node == "retrieve" for s in result)
+        paths = sorted(s.arg["retrieval_path"] for s in result)
+        assert paths == ["ontology", "rag"]
+
+    def test_skip_when_no_retrieval_needed(self, monkeypatch):
+        self._patch(monkeypatch, engine="hybrid", neo4j_uri="bolt://x")
+        assert select_retrieval_path(self._state(needs_retrieval=False)) == "skip"
+
+    def test_skip_when_knowledge_policy_none(self, monkeypatch):
+        self._patch(monkeypatch, engine="hybrid", neo4j_uri="bolt://x")
+        assert select_retrieval_path(
+            self._state(knowledge_policy="none")) == "skip"
+
+    def test_hybrid_engine_triggers_fanout(self, monkeypatch):
+        """taishan 场景：hybrid engine + neo4j → 并行 fan-out（修前是死配置）。"""
+        self._patch(monkeypatch, engine="hybrid", neo4j_uri="bolt://neo4j:7687")
+        self._assert_fanout(select_retrieval_path(self._state()))
+
+    def test_hybrid_retrieval_flag_triggers_fanout(self, monkeypatch):
+        """hybrid_retrieval 标志（legacy 语义）+ neo4j → 并行 fan-out。"""
+        self._patch(monkeypatch, engine="legacy_rag",
+                    hybrid_retrieval=True, neo4j_uri="bolt://neo4j:7687")
+        self._assert_fanout(select_retrieval_path(self._state()))
+
+    def test_hybrid_engine_without_neo4j_degrades_to_rag(self, monkeypatch):
+        """hybrid engine 但 neo4j 未配置 → 安全降级到 rag。"""
+        self._patch(monkeypatch, engine="hybrid", neo4j_uri=None)
+        assert select_retrieval_path(self._state()) == "rag"
+
+    def test_hybrid_retrieval_without_neo4j_degrades_to_rag(self, monkeypatch):
+        self._patch(monkeypatch, engine="legacy_rag",
+                    hybrid_retrieval=True, neo4j_uri=None)
+        assert select_retrieval_path(self._state()) == "rag"
+
+    def test_ontology_neo4j_parallel_enabled_fanout(self, monkeypatch):
+        """原行为：ontology_neo4j + parallel_enabled → 并行。"""
+        self._patch(monkeypatch, engine="ontology_neo4j",
+                    neo4j_uri="bolt://neo4j:7687", parallel_enabled=True)
+        self._assert_fanout(select_retrieval_path(self._state()))
+
+    def test_ontology_neo4j_parallel_disabled_solo(self, monkeypatch):
+        """原行为：ontology_neo4j + parallel_enabled=False → ontology 独占。"""
+        self._patch(monkeypatch, engine="ontology_neo4j",
+                    neo4j_uri="bolt://neo4j:7687", parallel_enabled=False)
+        assert select_retrieval_path(self._state()) == "ontology"
+
+    def test_legacy_rag_returns_rag(self, monkeypatch):
+        """legacy_rag 即使配了 neo4j 也只走 rag。"""
+        self._patch(monkeypatch, engine="legacy_rag",
+                    neo4j_uri="bolt://neo4j:7687", parallel_enabled=True)
+        assert select_retrieval_path(self._state()) == "rag"
 
 
 class TestCompactEvidence:

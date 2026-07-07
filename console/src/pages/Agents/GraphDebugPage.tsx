@@ -196,8 +196,8 @@ export default function GraphDebugPage() {
   const [checkpointError, setCheckpointError] = useState<string | null>(null);
   const [rightTab, setRightTab] = useState<'trace' | 'timeline'>('trace');
   const [recentRuns, setRecentRuns] = useState<RecentDebugRun[]>(() => loadRunsFromStorage());
-  // 执行轨迹面板折叠：折叠后图区占满整个屏幕（header 以下全部空间）
-  const [traceCollapsed, setTraceCollapsed] = useState(false);
+  // 执行轨迹面板折叠：默认折叠（图区优先占满），折叠后图区占满 header 以下全部空间
+  const [traceCollapsed, setTraceCollapsed] = useState(true);
 
   // 点 GraphFlow 节点 → 展开对照表 + 高亮对应行 2 秒。
   const [highlightedNode, setHighlightedNode] = useState<string | null>(null);

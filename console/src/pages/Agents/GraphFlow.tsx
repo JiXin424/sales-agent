@@ -7,11 +7,12 @@
  * 复用 CheckpointDAG.tsx 的 dagre/reactflow 模板，方向改 LR。
  */
 
-import { useMemo, useCallback, useState } from 'react';
+import { useMemo, useCallback, useState, useEffect, useRef } from 'react';
 import ReactFlow, {
   Background,
   Controls,
   BackgroundVariant,
+  useReactFlow,
   type Node,
   type Edge,
   Position,
@@ -94,6 +95,22 @@ function computeReachable(
 
 function GraphFlowInner({ graph, onSelect }: GraphFlowProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const rf = useReactFlow();
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  // 画布尺寸变化时（折叠/展开执行轨迹、窗口 resize）重新 fitView，
+  // 让图始终适配画布大小。fitView prop 只在初始跑一次，不跟容器变化。
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const ro = new ResizeObserver(() => {
+      clearTimeout(t);
+      t = setTimeout(() => rf.fitView({ padding: 0.15 }), 80);
+    });
+    ro.observe(el);
+    return () => { clearTimeout(t); ro.disconnect(); };
+  }, [rf]);
 
   // nodes: 补 __start__/__end__ 虚拟节点 + 转 reactflow Node。
   const allNodes: Node<GraphNodeData>[] = useMemo(() => {
@@ -189,24 +206,26 @@ function GraphFlowInner({ graph, onSelect }: GraphFlowProps) {
   }, [onSelect]);
 
   return (
-    <ReactFlow
-      nodes={positionedNodes}
-      edges={decoratedEdges}
-      nodeTypes={graphNodeTypes}
-      onNodeClick={onNodeClick}
-      onPaneClick={onPaneClick}
-      fitView
-      fitViewOptions={{ padding: 0.15 }}
-      nodesDraggable={false}
-      nodesConnectable={false}
-      elementsSelectable
-      proOptions={{ hideAttribution: true }}
-      minZoom={0.2}
-      maxZoom={2}
-    >
-      <Background color="#e0e0e0" gap={16} variant={BackgroundVariant.Dots} />
-      <Controls showInteractive={false} />
-    </ReactFlow>
+    <div ref={wrapRef} style={{ width: '100%', height: '100%' }}>
+      <ReactFlow
+        nodes={positionedNodes}
+        edges={decoratedEdges}
+        nodeTypes={graphNodeTypes}
+        onNodeClick={onNodeClick}
+        onPaneClick={onPaneClick}
+        fitView
+        fitViewOptions={{ padding: 0.15 }}
+        nodesDraggable={false}
+        nodesConnectable={false}
+        elementsSelectable
+        proOptions={{ hideAttribution: true }}
+        minZoom={0.2}
+        maxZoom={2}
+      >
+        <Background color="#e0e0e0" gap={16} variant={BackgroundVariant.Dots} />
+        <Controls showInteractive={false} />
+      </ReactFlow>
+    </div>
   );
 }
 

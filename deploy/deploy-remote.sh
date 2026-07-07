@@ -16,6 +16,10 @@ PROJECT="${PROJECT:-sales-agent}"
 
 [ -f "$COMPOSE" ] || { echo "ERROR: $COMPOSE 不在 deploy 镜像里（该 env 未 render?）" >&2; exit 1; }
 [ -f "$WORKSPACE/secrets/neo4j.env" ] || { echo "ERROR: $WORKSPACE/secrets/neo4j.env 未挂载（目标机 secrets 缺?）" >&2; exit 1; }
+# 将 NEO4J_PASSWORD export 到 shell 环境，确保 docker compose 中
+# ${NEO4J_PASSWORD} 插值优先取 shell 的值（部分 docker compose 版本
+# shell 优先于 --env-file，shell 空时会覆盖 env-file 导致密码为空）。
+export $(grep -E '^NEO4J_PASSWORD=' "$WORKSPACE/secrets/neo4j.env" | xargs)
 
 echo "[deploy-remote] env=${ENV} app=${APP_IMAGE} workspace=${WORKSPACE} project=${PROJECT}"
 

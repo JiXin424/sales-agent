@@ -6,7 +6,6 @@ import json
 import logging
 import re
 import time
-from collections.abc import AsyncIterator
 from typing import Any
 
 from sales_agent.llm.base import ChatModel
@@ -204,7 +203,7 @@ def _build_messages(
 ) -> list[dict[str, str]]:
     """构建发送给模型的消息列表。
 
-    被 :func:`execute_agent` 和 :func:`stream_execute_agent` 共用。
+    被 :func:`execute_agent` 共用。
 
     Args:
         prompt_text: 运行时解析的 task prompt 模板；None 时回退到 _TASK_PROMPTS。
@@ -255,65 +254,3 @@ def _build_messages(
     messages.append({"role": "user", "content": user_prompt})
 
     return messages
-
-
-async def stream_execute_agent(
-    chat_model: ChatModel,
-    task_type: str,
-    message: str,
-    context: dict[str, Any] | None = None,
-    retrieval_result: RetrievalResult | None = None,
-    history_messages: list[dict[str, str]] | None = None,
-    tenant_style: dict[str, Any] | None = None,
-    prompt_text: str | None = None,
-    system_prompt_text: str | None = None,
-    ontology_context: str = "",
-) -> AsyncIterator[str]:
-    """流式执行 Agent：构建 prompt，流式调用模型，yield 原始文本块。
-
-    与 :func:`execute_agent` 的区别：
-    - 使用 ``stream_generate`` 逐 token 返回
-    - 不做 JSON 解析，直接 yield 原始文本
-    - 调用方负责收集完整文本后自行解析
-
-    Args:
-        chat_model: 聊天模型（需支持 stream_generate）
-        task_type: 任务类型
-        message: 用户消息
-        context: 用户提供的上下文
-        retrieval_result: RAG 检索结果
-        history_messages: 多轮历史消息
-        tenant_style: 租户话术风格配置
-        prompt_text: 运行时解析的 prompt 模板文本（可选）。
-
-    Yields:
-        模型输出的原始文本 chunk
-    """
-    messages = _build_messages(
-        task_type=task_type,
-        message=message,
-        context=context,
-        retrieval_result=retrieval_result,
-        history_messages=history_messages,
-        tenant_style=tenant_style,
-        prompt_text=prompt_text,
-        system_prompt_text=system_prompt_text,
-        ontology_context=ontology_context,
-    )
-
-    start_time = time.time()
-    chunk_count = 0
-
-    async for chunk in chat_model.stream_generate(
-        messages=messages,
-        temperature=0.3,
-        max_tokens=2000,
-    ):
-        chunk_count += 1
-        yield chunk
-
-    latency_ms = int((time.time() - start_time) * 1000)
-    logger.info(
-        "Stream agent execution completed in %d ms, %d chunks for task %s",
-        latency_ms, chunk_count, task_type,
-    )

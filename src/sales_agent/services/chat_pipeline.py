@@ -1,7 +1,8 @@
 """共享 Chat 管道 — 串联完整的请求生命周期，支持 fast / standard / slow 三级路径。
 
-已废弃：HTTP /agent/chat 与钉钉 Stream 均已改走 LangGraph Graph，生产零调用。
-保留待清理，勿按本类追调用链。
+已废弃：HTTP /agent/chat 与钉钉 Stream 均已改走 LangGraph Graph（invoke_online_turn），
+生产零调用。仅 eval/deepeval_*.py 仍依赖本类（见 tasks/todo_eval_migrate_to_graph.md）；
+待 eval 迁移到 graph 后整文件删除。勿按本类追调用链。
 """
 
 from __future__ import annotations

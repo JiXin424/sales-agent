@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from sales_agent.api.routes import agent, conversations, documents, feedback, health, tenants, prompts, uploads, admin, pilot, agents, coach, ontology, instance, graph_debug, optimization
+from sales_agent.api.routes import agent, conversations, documents, feedback, health, tenants, prompts, uploads, admin, pilot, agents, coach, ontology, instance, graph_debug, conversation_history, optimization
 from sales_agent.core.config import get_settings
 from sales_agent.core.exceptions import TenantMismatchError, DingTalkTenantMismatchError
 
@@ -206,6 +206,7 @@ app.include_router(coach.router)
 app.include_router(ontology.router)
 app.include_router(instance.router)
 app.include_router(graph_debug.router)
+app.include_router(conversation_history.router)
 app.include_router(optimization.router)
 
 # 注册钉钉集成路由

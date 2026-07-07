@@ -10,7 +10,10 @@ import json
 import logging
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from sales_agent.prompts.evidence_router_prompt import EVIDENCE_ROUTER_PROMPT
+from sales_agent.services.prompt_resolver_helper import resolve_router_prompt
 from sales_agent.services.structured_router_output import EvidenceDecision, parse_model_json
 from sales_agent.services.task_router import (
     ALL_TASK_TYPES,
@@ -97,6 +100,9 @@ async def route_intent_evidence(
     standalone_query: str,
     chat_model: Any,
     stable_identity: dict[str, str] | None = None,
+    db: AsyncSession | None = None,
+    tenant_id: str | None = None,
+    agent_id: str | None = None,
 ) -> EvidenceDecision:
     """路由意图与证据策略。
 
@@ -112,18 +118,30 @@ async def route_intent_evidence(
         支持 ``generate(messages, temperature, max_tokens)`` 的模型实例。
     stable_identity :
         稳定身份标识（可选，用于 prompt 个性化）。
+    db :
+        数据库会话；非空且 *tenant_id* 有值时走 PromptRegistry 三级回退
+        （运营后台编辑生效），否则回退到模块常量 :data:`EVIDENCE_ROUTER_PROMPT`。
+    tenant_id, agent_id :
+        租户 / Agent 标识，用于 PromptRegistry 解析。
 
     Returns
     -------
     EvidenceDecision
         路由决策，包含 intent、knowledge_policy、response_mode 等。
     """
+    system_prompt = await resolve_router_prompt(
+        db,
+        "evidence_router",
+        tenant_id,
+        agent_id,
+        default=EVIDENCE_ROUTER_PROMPT,
+    )
     user_content = f"用户消息：{standalone_query}\n"
     if stable_identity:
         user_content += f"\n用户身份：{stable_identity.get('name', '未知')}\n"
 
     messages = [
-        {"role": "system", "content": EVIDENCE_ROUTER_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content},
     ]
 

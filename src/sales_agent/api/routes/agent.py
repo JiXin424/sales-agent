@@ -196,6 +196,12 @@ async def eval_streaming_chat(
     req: ChatRequest,
     db: DbSession = None,
 ) -> dict[str, Any]:
+    """Eval 用的同步 chat 端点（名义 "streaming"，实际非流式）。
+
+    走 Online Graph 完整执行后一次性返回 ChatResponse——并不产生真实流式
+    chunk。因此 ``debug.retrieval_info`` 里 ``ttft_ms`` 等于总延迟（首字≈末字），
+    ``streaming_chunks`` 恒为空。eval 用它模拟「整段返回」的调用形态。
+    """
     _logger = logging.getLogger(__name__)
     start_time = time.time()
     try:

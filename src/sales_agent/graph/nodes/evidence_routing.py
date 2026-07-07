@@ -57,6 +57,9 @@ async def evidence_routing_node(
 
     ctx = _unpack_context(config)
     chat_model = ctx.get("chat_model") if ctx else None
+    db = ctx.get("db") if ctx else None
+    tenant_id = state.get("tenant_id") or None
+    agent_id = state.get("agent_id") or None
     evidence_router_fn = (
         ctx.get("evidence_router_override") if ctx else None
     ) or route_intent_evidence
@@ -71,6 +74,9 @@ async def evidence_routing_node(
     decision = await evidence_router_fn(
         standalone_query=standalone_query,
         chat_model=chat_model,
+        db=db,
+        tenant_id=tenant_id,
+        agent_id=agent_id,
     )
 
     # Map validated decision to state fields

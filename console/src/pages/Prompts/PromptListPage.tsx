@@ -36,7 +36,7 @@ import RelativeTime from '@/components/RelativeTime';
 const { Text } = Typography;
 const { TextArea } = Input;
 
-const CATEGORY_ORDER = ['task', 'system', 'router', 'risk', 'coach'];
+const CATEGORY_ORDER = ['task', 'system', 'router', 'risk', 'coach', 'web', 'knowledge'];
 
 export default function PromptListPage() {
   const { tenantId } = useTenant();

@@ -53,7 +53,7 @@ def _doc_to_text(src: Path) -> str:
         return _docx_text(converted)
 
 
-def _read_content(path: Path) -> str:
+def _read_content(path: Path, image_prompt: str | None = None) -> str:
     """Read file content into plain text for the LLM pipeline. Binary office
     formats are parsed by lightweight libs (python-docx / pymupdf / python-pptx /
     openpyxl); legacy .doc is first converted to .docx via LibreOffice headless;
@@ -65,7 +65,14 @@ def _read_content(path: Path) -> str:
     Note: docling was the original choice but its torch-heavy dependency tree
     (2.8GB+) would not install in the target environment (resolver thrash). These
     lightweight libs cover text extraction for the LLM pipeline at a fraction of
-    the footprint."""
+    the footprint.
+
+    Parameters
+    ----------
+    image_prompt :
+        由调用方经 ``PromptRegistry`` 解析后的 ``image_interpret`` prompt 字符串。
+        为 None 时回退到内置 :data:`IMAGE_INTERPRET_PROMPT` 常量。
+    """
     ext = path.suffix.lower()
     if ext == ".docx":
         try:
@@ -86,7 +93,7 @@ def _read_content(path: Path) -> str:
                     page_text = page.get_text()
                     if not page_text.strip():
                         # 扫描件/图片页：提取页面为图片，交给视觉模型
-                        page_text = _pdf_page_to_vision(page, path.name)
+                        page_text = _pdf_page_to_vision(page, path.name, image_prompt=image_prompt)
                     parts.append(page_text)
             return "\n".join(parts)
         except Exception:
@@ -120,18 +127,24 @@ def _read_content(path: Path) -> str:
     # ── Image files (vision) ──
     if ext in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}:
         try:
-            return _image_to_text_via_vision(path)
+            return _image_to_text_via_vision(path, image_prompt=image_prompt)
         except Exception:
             raise RuntimeError(f"图片解析失败：{path.name}")
     return path.read_text(encoding="utf-8")
 
 
-def _pdf_page_to_vision(page, filename: str) -> str:
+def _pdf_page_to_vision(page, filename: str, *, image_prompt: str | None = None) -> str:
     """Extract text from a scanned/image-based PDF page using vision model.
 
     Renders the page to a PNG pixmap, encodes as base64, and sends to the
     vision model. Returns the extracted text, or empty string if vision is
     disabled or unavailable.
+
+    Parameters
+    ----------
+    image_prompt :
+        调用方经 ``PromptRegistry`` 解析后的 prompt 字符串。为 None 时回退到
+        内置 :data:`IMAGE_INTERPRET_PROMPT` 常量。
     """
     from sales_agent.core.config import get_settings
     settings = get_settings()
@@ -145,7 +158,10 @@ def _pdf_page_to_vision(page, filename: str) -> str:
         img_b64 = base64.b64encode(img_bytes).decode("ascii")
         data_url = f"data:image/png;base64,{img_b64}"
 
-        from sales_agent.ontology.img_parser import IMAGE_INTERPRET_PROMPT
+        # image_prompt 已由 async 调用方解析（db/tenant_id 上下文），这里只用字符串
+        if image_prompt is None:
+            from sales_agent.ontology.img_parser import IMAGE_INTERPRET_PROMPT
+            image_prompt = IMAGE_INTERPRET_PROMPT
 
         # Use the page-level vision extraction via a lightweight sync wrapper.
         # For production, this should be called from an async context; the
@@ -168,7 +184,7 @@ def _pdf_page_to_vision(page, filename: str) -> str:
                 "messages": [{
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": IMAGE_INTERPRET_PROMPT},
+                        {"type": "text", "text": image_prompt},
                         {"type": "image_url", "image_url": {"url": data_url}},
                     ],
                 }],
@@ -185,11 +201,17 @@ def _pdf_page_to_vision(page, filename: str) -> str:
         return f"[视觉解读失败] {filename}"
 
 
-def _image_to_text_via_vision(path: Path) -> str:
+def _image_to_text_via_vision(path: Path, *, image_prompt: str | None = None) -> str:
     """Extract text from an image file using a vision model.
 
     Config-driven: requires ``ontology.vision_enabled=True`` and a valid
     API key. Falls back to a placeholder if vision is disabled.
+
+    Parameters
+    ----------
+    image_prompt :
+        调用方经 ``PromptRegistry`` 解析后的 prompt 字符串。为 None 时回退到
+        内置 :data:`IMAGE_INTERPRET_PROMPT` 常量。
     """
     from sales_agent.core.config import get_settings
     settings = get_settings()
@@ -213,6 +235,9 @@ def _image_to_text_via_vision(path: Path) -> str:
     mime_type = get_image_mime_type(path)
     data_url = f"data:{mime_type};base64,{img_b64}"
 
+    # image_prompt 已由 async 调用方解析（db/tenant_id 上下文），这里只用字符串
+    prompt_text = image_prompt if image_prompt is not None else IMAGE_INTERPRET_PROMPT
+
     resp = httpx.post(
         f"{settings.model.base_url}/chat/completions",
         headers={
@@ -224,7 +249,7 @@ def _image_to_text_via_vision(path: Path) -> str:
             "messages": [{
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": IMAGE_INTERPRET_PROMPT},
+                    {"type": "text", "text": prompt_text},
                     {"type": "image_url", "image_url": {"url": data_url}},
                 ],
             }],
@@ -248,8 +273,26 @@ def _get_vision_api_key() -> str:
     # Check dedicated embedding API key first, then model API key
     env_name = settings.model.embedding_api_key_env or settings.model.api_key_env
     return os.getenv(env_name, "")
-    async def extract_entities(self, content: str) -> list[EntityCandidate]: ...
-    async def extract_facts(self, content: str, entities: list[EntityCandidate]) -> list[FactCandidate]: ...
+
+
+class ExtractorProtocol(Protocol):
+    async def extract_entities(
+        self,
+        content: str,
+        *,
+        db: AsyncSession | None = None,
+        tenant_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> list[EntityCandidate]: ...
+    async def extract_facts(
+        self,
+        content: str,
+        entities: list[EntityCandidate],
+        *,
+        db: AsyncSession | None = None,
+        tenant_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> list[FactCandidate]: ...
 
 
 class RepositoryProtocol(Protocol):
@@ -333,7 +376,17 @@ class OntologyIngestionService:
                 "facts_pending_review": stats.facts_pending_review,
                 "conflicts_created": stats.conflicts_created,
             })
-        content = _read_content(path)
+        # 预解析 image_interpret prompt（同步 _read_content/_pdf_page_to_vision 无法 await）
+        from sales_agent.ontology.img_parser import IMAGE_INTERPRET_PROMPT
+        from sales_agent.services.prompt_resolver_helper import resolve_knowledge_prompt
+        image_prompt = await resolve_knowledge_prompt(
+            self.db,
+            "image_interpret",
+            tenant_id,
+            agent_id,
+            default=IMAGE_INTERPRET_PROMPT,
+        )
+        content = _read_content(path, image_prompt=image_prompt)
         source_document_id = generate_id()
         now = utcnow()
 
@@ -347,7 +400,12 @@ class OntologyIngestionService:
                 "facts_pending_review": stats.facts_pending_review,
                 "conflicts_created": stats.conflicts_created,
             })
-        entities = await self.extractor.extract_entities(content)
+        entities = await self.extractor.extract_entities(
+            content,
+            db=self.db,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+        )
         embeddings = await self.embedding_model.embed([
             f"{e.name} {json.dumps(e.properties, ensure_ascii=False)}" for e in entities
         ]) if entities else []
@@ -386,7 +444,13 @@ class OntologyIngestionService:
                 "facts_pending_review": stats.facts_pending_review,
                 "conflicts_created": stats.conflicts_created,
             })
-        facts = await self.extractor.extract_facts(content, entities)
+        facts = await self.extractor.extract_facts(
+            content,
+            entities,
+            db=self.db,
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+        )
         job.stage = "writing_neo4j"
         if progress_callback:
             await progress_callback(job.stage, {

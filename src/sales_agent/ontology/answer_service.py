@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from sales_agent.llm.base import ChatModel
 from sales_agent.ontology.schemas import GraphEvidence, OntologyAnswer
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def graph_evidence_to_sources(evidence: GraphEvidence) -> list[dict[str, Any]]:
@@ -201,9 +204,20 @@ def render_response_prompt(
 
 
 class OntologyAnswerService:
-    def __init__(self, retrieval: RetrievalProtocol, chat_model: ChatModel):
+    def __init__(
+        self,
+        retrieval: RetrievalProtocol,
+        chat_model: ChatModel,
+        *,
+        db: AsyncSession | None = None,
+        tenant_id: str | None = None,
+        agent_id: str | None = None,
+    ):
         self.retrieval = retrieval
         self.chat_model = chat_model
+        self.db = db
+        self.tenant_id = tenant_id
+        self.agent_id = agent_id
 
     async def answer_for_task(
         self,
@@ -241,12 +255,31 @@ class OntologyAnswerService:
 
         Args:
             prompt_text: 自定义 prompt 模板（含 {graph_json}/{question}/{task_type}
-                占位符）。为 None 时使用内置 ONTOLOGY_RESPONSE_PROMPT。
+                占位符）。为 None 时通过 ``PromptRegistry`` 解析
+                ``knowledge/ontology_response``（db/tenant_id 在 ``__init__`` 注入时
+                生效）；DB 未配置时回退到内置 :data:`ONTOLOGY_RESPONSE_PROMPT`。
         """
-        rendered_prompt = render_response_prompt(
-            graph_evidence, message, task_type,
-            prompt_text=prompt_text,
-        )
+        if prompt_text is None:
+            from sales_agent.services.prompt_resolver_helper import resolve_knowledge_prompt
+            prompt_text = await resolve_knowledge_prompt(
+                self.db,
+                "ontology_response",
+                self.tenant_id,
+                self.agent_id,
+                default=ONTOLOGY_RESPONSE_PROMPT,
+                graph_json=json.dumps(
+                    _compact_evidence(graph_evidence, question=message),
+                    ensure_ascii=False,
+                ),
+                question=message,
+                task_type=task_type,
+            )
+            rendered_prompt = prompt_text
+        else:
+            rendered_prompt = render_response_prompt(
+                graph_evidence, message, task_type,
+                prompt_text=prompt_text,
+            )
         raw = await self.chat_model.generate(
             messages=[{"role": "user", "content": rendered_prompt}],
             temperature=0.2,

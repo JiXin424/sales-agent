@@ -137,7 +137,6 @@ RANK_TABLE: list[tuple[str, str, int]] = [
     ("master", "大师", 600),
     ("king", "王者", 1000),
 ]
-RANK_KEYS = [k for k, _, _ in RANK_TABLE]
 
 
 def rank_for_points(points: int) -> tuple[str, str]:
@@ -178,37 +177,17 @@ def level_for_milestones(unlocked_count: int) -> int:
     return level
 
 
-# ---------------------------------------------------------------------------
-# 实时教练 —— 场景提示（Phase 4 使用，先声明）
-# ---------------------------------------------------------------------------
-
-SCENE_HINTS = {
-    "visit_preparation": "访前准备",
-    "pain_point_discovery": "痛点挖掘",
-    "customer_feedback": "客户反馈",
-    "product_demo": "产品演示",
-    "post_visit": "访后复盘",
-    "next_step": "下一步",
-    "closing_or_pricing": "成交/报价",
-    "dormant_customer": "沉睡客户",
-    "frustration": "情绪受挫",
-    "teaching_others": "教他人",
-}
-
 # 实时引导强度
 GUIDANCE_LEVEL_SPECIFIC = "specific"
 GUIDANCE_LEVEL_DIRECTIONAL = "directional"
 GUIDANCE_LEVEL_SUPPRESSED = "suppressed"
-GUIDANCE_LEVEL_VALUES = {GUIDANCE_LEVEL_SPECIFIC, GUIDANCE_LEVEL_DIRECTIONAL, GUIDANCE_LEVEL_SUPPRESSED}
 
 # 引导强度分数阈值（Phase 4）
 GUIDANCE_SPECIFIC_MAX_SCORE = 40      # score < 40 → specific
 GUIDANCE_DIRECTIONAL_MAX_SCORE = 70   # 40..70 → directional；> 70 → suppress
 
-# 每日积分上限与默认实时引导/奖励通知上限（Phase 3/4 用）
+# 每日积分上限（Phase 3/4 用）
 DAILY_POINTS_CAP = 50
-DEFAULT_DAILY_REALTIME_GUIDANCE_LIMIT = 3
-DEFAULT_DAILY_REWARD_NOTIFICATION_LIMIT = 3
 
 # 证据片段最大字符数（coach_settings.evidence_quote_max_chars 默认值）
 DEFAULT_EVIDENCE_QUOTE_MAX_CHARS = 160

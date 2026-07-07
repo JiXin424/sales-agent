@@ -111,8 +111,6 @@ class CoachReportService:
                 "content": f"当前 {score_val} 分{delta_str}",
             })
 
-        # 最近一条非零证据高亮
-        latest_obs = "（暂无新的能力变动记录）"
         summary = "你的六维能力当前评分：\n" + "\n".join(lines)
         return {"summary": summary, "sections": sections}
 

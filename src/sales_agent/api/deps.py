@@ -6,7 +6,6 @@ from typing import Annotated
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sales_agent.core.config import Settings, get_settings
 from sales_agent.core.database import get_db
 
 
@@ -17,4 +16,3 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 DbSession = Annotated[AsyncSession, Depends(get_db_session)]
-AppSettings = Annotated[Settings, Depends(get_settings)]

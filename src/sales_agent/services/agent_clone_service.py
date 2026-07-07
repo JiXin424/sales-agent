@@ -345,12 +345,6 @@ class AgentCloneService:
             "note": "shell only; no secrets or webhook credentials copied",
         }
 
-    async def _get(self, agent_id: str, model, fk: str):
-        return (
-            await self.db.execute(select(model).where(getattr(model, fk) == agent_id).limit(1))
-        ).scalar_one_or_none()
-
-
 def _manifest_to_dict(m: AgentCloneManifest) -> dict[str, Any]:
     return {
         "id": m.id,

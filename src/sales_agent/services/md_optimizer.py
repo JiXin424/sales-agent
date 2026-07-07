@@ -15,9 +15,12 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 # ── Prompt ──────────────────────────────────────────────────────────────
 
@@ -75,13 +78,27 @@ MD_OPTIMIZE_USER_TEMPLATE = """请优化以下销售知识库 Markdown 文档。
 class MDOptimizer:
     """LLM-based MD document optimizer."""
 
-    def __init__(self, chat_model: Any) -> None:
+    def __init__(
+        self,
+        chat_model: Any,
+        *,
+        db: AsyncSession | None = None,
+        tenant_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> None:
         """Args:
             chat_model: LLM client that supports
                 ``chat_model.chat(messages, temperature=..., max_tokens=...)``
                 returning an OpenAI-compatible response.
+            db, tenant_id, agent_id:
+                可选 DB 上下文；非空且 tenant_id 有值时走 ``PromptRegistry`` 三级
+                回退解析 ``md_optimize_system`` / ``md_optimize_user``，运营后台编辑
+                生效；否则回退到模块常量。单测不传仍走旧路径。
         """
         self.chat_model = chat_model
+        self.db = db
+        self.tenant_id = tenant_id
+        self.agent_id = agent_id
 
     async def optimize(self, raw_content: str, source_type_hint: str = "") -> str:
         """优化单篇 Markdown 文档。
@@ -97,7 +114,22 @@ class MDOptimizer:
             ValueError: LLM 返回空结果。
             RuntimeError: LLM 调用失败。
         """
-        user_prompt = MD_OPTIMIZE_USER_TEMPLATE.format(content=raw_content)
+        from sales_agent.services.prompt_resolver_helper import resolve_knowledge_prompt
+        system_prompt = await resolve_knowledge_prompt(
+            self.db,
+            "md_optimize_system",
+            self.tenant_id,
+            self.agent_id,
+            default=MD_OPTIMIZE_SYSTEM_PROMPT,
+        )
+        user_prompt = await resolve_knowledge_prompt(
+            self.db,
+            "md_optimize_user",
+            self.tenant_id,
+            self.agent_id,
+            default=MD_OPTIMIZE_USER_TEMPLATE,
+            content=raw_content,
+        )
         if source_type_hint:
             hint = (
                 f"\n\n**提示：** 这篇文档的 source_type 应该是 `{source_type_hint}`。"
@@ -106,7 +138,7 @@ class MDOptimizer:
             user_prompt += hint
 
         messages = [
-            {"role": "system", "content": MD_OPTIMIZE_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
 
@@ -141,29 +173,3 @@ class MDOptimizer:
             optimized = optimized[:-3].strip()
 
         return optimized
-
-    async def optimize_batch(
-        self,
-        documents: list[tuple[str, str]],  # (raw_content, source_type_hint)
-        concurrency: int = 3,
-    ) -> list[tuple[str, str | None]]:
-        """批量优化多篇文档。
-
-        Args:
-            documents: [(raw_content, source_type_hint), ...]
-            concurrency: 最大并发数（暂未实现真正的 asyncio.gather，顺序执行）
-
-        Returns:
-            [(optimized_content, error_message), ...]
-            成功时 error_message 为 None。
-        """
-        results: list[tuple[str, str | None]] = []
-        for raw_content, hint in documents:
-            try:
-                optimized = await self.optimize(raw_content, hint)
-                results.append((optimized, None))
-            except Exception as e:
-                logger.warning("Batch optimization failed for one doc: %s", e)
-                # 失败时保留原文
-                results.append((raw_content, str(e)))
-        return results

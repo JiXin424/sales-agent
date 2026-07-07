@@ -31,7 +31,6 @@ RETRIEVAL_RETRY_POLICY = RetryPolicy(
 
 # ── Timeouts ──────────────────────────────────────────────────────────
 LLM_TIMEOUT = TimeoutPolicy(run_timeout=120.0)
-DB_TIMEOUT = TimeoutPolicy(run_timeout=30.0)
 RETRIEVAL_TIMEOUT = TimeoutPolicy(run_timeout=15.0)
 
 # ── Cache policies (P1) ──────────────────────────────────────────────

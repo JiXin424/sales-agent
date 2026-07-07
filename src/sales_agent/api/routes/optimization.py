@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any
 
 from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,7 +23,6 @@ from sales_agent.api.optimization_auth import (
     OptimizationPrincipal,
     get_optimization_principal,
     require_human_principal,
-    require_scope,
 )
 
 # Annotated dependency to avoid FastAPI treating OptimizationPrincipal as response field

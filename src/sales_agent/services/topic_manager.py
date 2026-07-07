@@ -28,6 +28,7 @@ from sales_agent.models.conversation_topic import ConversationTopic
 from sales_agent.prompts.clarification_resolver_prompt import (
     CLARIFICATION_RESOLVER_PROMPT,
 )
+from sales_agent.services.prompt_resolver_helper import resolve_router_prompt
 from sales_agent.services.structured_router_output import (
     ClarificationDecision,
     ContextDecision,
@@ -410,6 +411,10 @@ async def resolve_clarification(
     message: str,
     chat_model: Any,
     attempt_count: int = 0,
+    *,
+    db: AsyncSession | None = None,
+    tenant_id: str | None = None,
+    agent_id: str | None = None,
 ) -> ClarificationDecision:
     """Resolve a clarification need based on the user's *message*.
 
@@ -427,6 +432,14 @@ async def resolve_clarification(
     :data:`CLARIFICATION_RESOLVER_PROMPT`. When *attempt_count* reaches
     :data:`MAX_CLARIFICATION_ATTEMPTS` the function defaults to ``new``
     without calling the model.
+
+    Parameters
+    ----------
+    db :
+        数据库会话；非空且 *tenant_id* 有值时走 PromptRegistry 三级回退
+        （运营后台编辑生效），否则回退到模块常量。
+    tenant_id, agent_id :
+        租户 / Agent 标识，用于 PromptRegistry 解析。
     """
     trimmed = message.strip()
 
@@ -458,8 +471,16 @@ async def resolve_clarification(
     # -- LLM-based resolution ----------------------------------------------
     if chat_model is not None:
         try:
+            # 命中 LLM 段才解析 prompt，避免无谓 DB 往返（短路命令不调 LLM）
+            system_prompt = await resolve_router_prompt(
+                db,
+                "clarification_resolver",
+                tenant_id,
+                agent_id,
+                default=CLARIFICATION_RESOLVER_PROMPT,
+            )
             messages = [
-                {"role": "system", "content": CLARIFICATION_RESOLVER_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": trimmed},
             ]
             response = await chat_model.generate(

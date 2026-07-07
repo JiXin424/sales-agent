@@ -10,8 +10,11 @@ import json
 import logging
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from sales_agent.models.conversation_topic import ConversationTopic
 from sales_agent.prompts.context_resolver_prompt import CONTEXT_RESOLVER_PROMPT
+from sales_agent.services.prompt_resolver_helper import resolve_router_prompt
 from sales_agent.services.structured_router_output import ContextDecision, parse_model_json
 
 logger = logging.getLogger(__name__)
@@ -74,6 +77,7 @@ def _build_messages(
     message: str,
     topic: ConversationTopic | None,
     recent_messages: list[dict[str, str]],
+    system_prompt: str,
 ) -> list[dict[str, str]]:
     """构造 LLM 调用消息列表。"""
     user_content = f"当前消息：{message}\n"
@@ -90,7 +94,7 @@ def _build_messages(
             user_content += f"  {role}：{content}\n"
 
     return [
-        {"role": "system", "content": CONTEXT_RESOLVER_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content},
     ]
 
@@ -101,6 +105,9 @@ async def resolve_context(
     topic: ConversationTopic | None,
     recent_messages: list[dict[str, str]],
     chat_model: Any,
+    db: AsyncSession | None = None,
+    tenant_id: str | None = None,
+    agent_id: str | None = None,
 ) -> ContextDecision:
     """解析用户消息与对话上下文的话题关系，生成 :class:`ContextDecision`。
 
@@ -117,13 +124,25 @@ async def resolve_context(
         最近消息列表，每项含 ``role`` 和 ``content`` 键。
     chat_model :
         支持 ``generate(messages, temperature, max_tokens)`` 的模型实例。
+    db :
+        数据库会话；非空且 *tenant_id* 有值时走 PromptRegistry 三级回退
+        （运营后台编辑生效），否则回退到模块常量 :data:`CONTEXT_RESOLVER_PROMPT`。
+    tenant_id, agent_id :
+        租户 / Agent 标识，用于 PromptRegistry 解析。
 
     Returns
     -------
     ContextDecision
         解析后的结构化决策。
     """
-    messages = _build_messages(message, topic, recent_messages)
+    system_prompt = await resolve_router_prompt(
+        db,
+        "context_resolver",
+        tenant_id,
+        agent_id,
+        default=CONTEXT_RESOLVER_PROMPT,
+    )
+    messages = _build_messages(message, topic, recent_messages, system_prompt)
 
     for attempt in range(2):
         try:

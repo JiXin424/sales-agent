@@ -15,7 +15,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
 import uuid
 from typing import Any
 
@@ -270,49 +269,3 @@ class DingTalkCardSender:
         """关闭资源。"""
         await self._client.aclose()
         await self._token_manager.close()
-
-
-class StreamUpdateThrottle:
-    """流式更新节流器。
-
-    控制卡片更新频率，避免触发钉钉 API 限流。
-    两个维度：
-    - 时间窗口：两次更新间隔 >= update_interval_ms
-    - 内容阈值：新内容积累 >= min_chunk_chars 才触发
-    """
-
-    def __init__(self, interval_ms: int = 300, min_chars: int = 30) -> None:
-        self._interval_ms = interval_ms
-        self._min_chars = min_chars
-        self._last_update_time: float = 0
-        self._last_update_len: int = 0
-
-    def should_update(self, current_text: str, *, is_final: bool = False) -> bool:
-        """判断是否应该触发一次卡片更新。"""
-        if is_final:
-            return True
-
-        now = time.monotonic() * 1000  # ms
-        elapsed = now - self._last_update_time
-        new_chars = len(current_text) - self._last_update_len
-
-        # 两个条件满足其一即触发
-        if elapsed >= self._interval_ms and new_chars >= self._min_chars:
-            return True
-
-        # 即使时间没到，但积累了大量内容也触发
-        if new_chars >= self._min_chars * 3:
-            return True
-
-        return False
-
-    def mark_updated(self, current_len: int | None = None) -> None:
-        """标记已更新，重置计时器。"""
-        self._last_update_time = time.monotonic() * 1000
-        if current_len is not None:
-            self._last_update_len = current_len
-
-    def reset(self) -> None:
-        """重置状态。"""
-        self._last_update_time = 0
-        self._last_update_len = 0

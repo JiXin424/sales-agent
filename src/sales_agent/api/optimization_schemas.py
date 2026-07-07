@@ -24,15 +24,6 @@ class IterationResponse(BaseModel):
     created_at: str | None = None
 
 
-class DiagnosisResponse(BaseModel):
-    id: str
-    primary_cause: str
-    confidence: float
-    recommended_action: str
-    cluster_key: str
-    affected_case_ids: list[str]
-
-
 class CandidateResponse(BaseModel):
     id: str
     change_type: str
@@ -64,20 +55,6 @@ class CheckpointForkRequest(BaseModel):
     candidate_id: str
 
 
-class ReleaseCompareResponse(BaseModel):
-    release_id: str
-    previous_release_id: str | None = None
-    changes: list[dict[str, Any]] = Field(default_factory=list)
-
-
-class EvalComparisonResponse(BaseModel):
-    metric_name: str
-    baseline_score: float | None = None
-    candidate_score: float | None = None
-    delta: float | None = None
-    is_regression: bool = False
-
-
 # ── Event schemas ────────────────────────────────────────────────────────────
 
 
@@ -103,20 +80,6 @@ class EventPageResponse(BaseModel):
 
 
 # ── Report schemas ───────────────────────────────────────────────────────────
-
-
-class ReportMetricResponse(BaseModel):
-    metric_name: str
-    group_name: str
-    direction: str
-    weight: float = 0.0
-    before_value: float | None = None
-    after_value: float | None = None
-    before_normalized: float | None = None
-    after_normalized: float | None = None
-    delta: float | None = None
-    applicable: bool = True
-    gate_result: str | None = None
 
 
 class ReportCaseResponse(BaseModel):
@@ -160,22 +123,3 @@ class ReportDetailResponse(ReportSummaryResponse):
 class TrendResponse(BaseModel):
     agent_id: str
     trends: list[Any] = Field(default_factory=list)
-
-
-# ── MCP command schemas ──────────────────────────────────────────────────────
-
-
-class AlternativeCandidateRequest(BaseModel):
-    diagnosis_id: str
-    constraints: dict[str, Any] = Field(default_factory=dict)
-
-
-class RerunCandidateEvalRequest(BaseModel):
-    suite_type: str = Field(default="fixed")  # targeted / fixed
-
-
-class CommandResultResponse(BaseModel):
-    status: str
-    target_id: str | None = None
-    idempotency_key: str | None = None
-    detail: Any = Field(default_factory=dict)

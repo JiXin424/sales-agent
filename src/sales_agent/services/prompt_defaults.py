@@ -18,18 +18,11 @@ from dataclasses import dataclass
 class BuiltinPrompt:
     """一个内置 prompt 的元信息与模板。"""
 
-    category: str  # task | system | router | risk | coach | web
+    category: str  # task | system | router | risk | coach | web | knowledge
     key: str  # 该类别下的具体标识
     template: str  # 模板正文（含 {placeholder}）
     required_placeholders: tuple[str, ...]  # 运行时 .format() 必须注入的占位符
     description: str = ""
-
-    @property
-    def placeholders_json(self) -> str:
-        """占位符列表的 JSON 字符串表示（用于存入 PromptVersion.required_placeholders_json）。"""
-        import json
-
-        return json.dumps(list(self.required_placeholders), ensure_ascii=False)
 
 
 # task 类校验时必须包含的占位符（executor 会对所有 task 统一传入
@@ -72,6 +65,8 @@ def _task_entries() -> list[BuiltinPrompt]:
 
 
 def _system_router_risk_entries() -> list[BuiltinPrompt]:
+    from sales_agent.prompts.clarification_resolver_prompt import CLARIFICATION_RESOLVER_PROMPT
+    from sales_agent.prompts.context_resolver_prompt import CONTEXT_RESOLVER_PROMPT
     from sales_agent.prompts.evidence_router_prompt import EVIDENCE_ROUTER_PROMPT
     from sales_agent.prompts.risk_check_prompt import RISK_CHECK_PROMPT
     from sales_agent.prompts.system import SYSTEM_CONSTRAINT
@@ -80,6 +75,8 @@ def _system_router_risk_entries() -> list[BuiltinPrompt]:
     return [
         BuiltinPrompt("system", "system_constraint", SYSTEM_CONSTRAINT, (), "系统约束（Agent 人设与硬性边界）"),
         BuiltinPrompt("router", "task_router", TASK_ROUTER_PROMPT, ("message",), "任务路由 LLM 兜底分类器"),
+        BuiltinPrompt("router", "context_resolver", CONTEXT_RESOLVER_PROMPT, (), "上下文消解（话语-话题关系）"),
+        BuiltinPrompt("router", "clarification_resolver", CLARIFICATION_RESOLVER_PROMPT, (), "澄清回复决策"),
         BuiltinPrompt("router", "evidence_router", EVIDENCE_ROUTER_PROMPT, (), "意图证据路由分析器"),
         BuiltinPrompt("risk", "risk_check", RISK_CHECK_PROMPT, ("message", "answer"), "风险检查 LLM 合规复核"),
     ]
@@ -115,11 +112,39 @@ def _web_entry() -> list[BuiltinPrompt]:
     ]
 
 
+def _knowledge_entries() -> list[BuiltinPrompt]:
+    """知识库子系统 prompt：实体/事实/图像/MD 优化/术语抽取/图谱回答。
+
+    运行时由各 service（extractor / ingestion_service / md_optimizer /
+    ontology_graph / retrieval_service / answer_service）经 PromptRegistry
+    三级回退解析；未配 DB 版本时回退到这里的内置常量。
+    """
+    from sales_agent.ontology.answer_service import ONTOLOGY_RESPONSE_PROMPT
+    from sales_agent.ontology.retrieval_service import _ENTITY_EXTRACTION_PROMPT
+    from sales_agent.ontology.extractor import ENTITY_EXTRACTION_PROMPT, FACT_EXTRACTION_PROMPT
+    from sales_agent.ontology.img_parser import IMAGE_INTERPRET_PROMPT
+    from sales_agent.services.md_optimizer import (
+        MD_OPTIMIZE_SYSTEM_PROMPT,
+        MD_OPTIMIZE_USER_TEMPLATE,
+    )
+
+    return [
+        BuiltinPrompt("knowledge", "entity_extraction", ENTITY_EXTRACTION_PROMPT, ("content",), "实体抽取"),
+        BuiltinPrompt("knowledge", "fact_extraction", FACT_EXTRACTION_PROMPT, ("content", "entities_json"), "事实抽取"),
+        BuiltinPrompt("knowledge", "image_interpret", IMAGE_INTERPRET_PROMPT, (), "图像视觉解读"),
+        BuiltinPrompt("knowledge", "md_optimize_system", MD_OPTIMIZE_SYSTEM_PROMPT, (), "MD 优化器 system 消息"),
+        BuiltinPrompt("knowledge", "md_optimize_user", MD_OPTIMIZE_USER_TEMPLATE, ("content",), "MD 优化器 user 模板"),
+        BuiltinPrompt("knowledge", "ontology_term_extractor", _ENTITY_EXTRACTION_PROMPT, ("question",), "知识图谱搜索术语抽取"),
+        BuiltinPrompt("knowledge", "ontology_response", ONTOLOGY_RESPONSE_PROMPT, ("graph_json", "question", "task_type"), "知识图谱回答"),
+    ]
+
+
 BUILTIN_PROMPTS: list[BuiltinPrompt] = [
     *_task_entries(),
     *_system_router_risk_entries(),
     *_coach_entries(),
     *_web_entry(),
+    *_knowledge_entries(),
 ]
 
 
@@ -137,12 +162,3 @@ def required_placeholders_for(category: str, key: str) -> list[str]:
     if b is not None:
         return list(b.required_placeholders)
     return ["message"]
-
-
-def extend_with_coach(entries: list[BuiltinPrompt]) -> None:
-    """阶段 3 coach 接入时调用：把 coach 类内置 prompt 追加到注册表。"""
-    existing = {(b.category, b.key) for b in BUILTIN_PROMPTS}
-    for entry in entries:
-        if (entry.category, entry.key) not in existing:
-            BUILTIN_PROMPTS.append(entry)
-            existing.add((entry.category, entry.key))

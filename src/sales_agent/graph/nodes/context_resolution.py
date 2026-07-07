@@ -67,6 +67,8 @@ async def _resolve_pending_turn(
     event_id: str,
     clar_resolver_fn: Any,
     now: datetime,
+    tenant_id: str | None = None,
+    agent_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Try to resolve a pending clarification on *topic*.
 
@@ -96,6 +98,9 @@ async def _resolve_pending_turn(
         message,
         chat_model,
         attempt_count=topic.clarification_attempts,
+        db=db,
+        tenant_id=tenant_id,
+        agent_id=agent_id,
     )
 
     original_message = pending.get("original_message", message)
@@ -239,6 +244,8 @@ async def context_resolution_node(
             event_id=event_id,
             clar_resolver_fn=clar_resolver_fn,
             now=now,
+            tenant_id=scope["tenant_id"] or None,
+            agent_id=scope["agent_id"] or None,
         )
         if result is not None:
             return result
@@ -282,6 +289,9 @@ async def context_resolution_node(
         topic=topic,
         recent_messages=recent_messages,
         chat_model=chat_model,
+        db=db,
+        tenant_id=scope["tenant_id"] or None,
+        agent_id=scope["agent_id"] or None,
     )
 
     # ── Step 6: Handle ambiguous result ───────────────────────────

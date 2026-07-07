@@ -139,7 +139,7 @@ class OntologyConfig(BaseModel):
 class WebSearchConfig(BaseModel):
     """联网搜索兜底配置（Bocha API）。"""
 
-    enabled: bool = False
+    enabled: bool = True
     api_key: str = ""
     top_n: int = 5
 
@@ -401,15 +401,4 @@ def get_settings() -> Settings:
     if _settings is None:
         config_path = Path(__file__).resolve().parents[3] / "config" / "default.yaml"
         _settings = Settings.from_yaml(config_path)
-    return _settings
-
-
-def reload_settings(path: str | Path | None = None) -> Settings:
-    """重新加载配置。"""
-    global _settings
-    if path is None:
-        config_path = Path(__file__).resolve().parents[3] / "config" / "default.yaml"
-    else:
-        config_path = Path(path)
-    _settings = Settings.from_yaml(config_path)
     return _settings

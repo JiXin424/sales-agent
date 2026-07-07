@@ -17,13 +17,30 @@ class LLMExtractor:
     def __init__(self, chat_model: ChatModel):
         self._chat = chat_model
 
-    async def extract_entities(self, content: str) -> list[EntityCandidate]:
-        return await extract_entities(self._chat, content)
+    async def extract_entities(
+        self,
+        content: str,
+        *,
+        db: AsyncSession | None = None,
+        tenant_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> list[EntityCandidate]:
+        return await extract_entities(
+            self._chat, content, db=db, tenant_id=tenant_id, agent_id=agent_id
+        )
 
     async def extract_facts(
-        self, content: str, entities: list[EntityCandidate]
+        self,
+        content: str,
+        entities: list[EntityCandidate],
+        *,
+        db: AsyncSession | None = None,
+        tenant_id: str | None = None,
+        agent_id: str | None = None,
     ) -> list[FactCandidate]:
-        return await extract_facts(self._chat, content, entities)
+        return await extract_facts(
+            self._chat, content, entities, db=db, tenant_id=tenant_id, agent_id=agent_id
+        )
 
 
 def build_ingestion_service(

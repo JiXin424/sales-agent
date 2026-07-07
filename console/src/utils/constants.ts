@@ -62,6 +62,8 @@ export const PROMPT_CATEGORY_LABELS: Record<string, string> = {
   router: '任务路由',
   risk: '风险检查',
   coach: '教练辅导',
+  web: '联网搜索',
+  knowledge: '知识库',
 };
 
 // 非 task 类的 prompt_key（task 类用 TASK_TYPE_LABELS 的 12 项）
@@ -77,5 +79,15 @@ export const PROMPT_KEYS_BY_CATEGORY: Record<string, { key: string; label: strin
     { key: 'coach_sb_system', label: '卡点破框人设' },
     { key: 'coach_sb_split', label: '事实/解释拆分' },
     { key: 'coach_sb_card', label: '破框卡模板' },
+  ],
+  web: [{ key: 'web_analysis', label: '联网搜索结果分析' }],
+  knowledge: [
+    { key: 'entity_extraction', label: '实体抽取' },
+    { key: 'fact_extraction', label: '事实抽取' },
+    { key: 'image_interpret', label: '图像视觉解读' },
+    { key: 'md_optimize_system', label: 'MD 优化器 system 消息' },
+    { key: 'md_optimize_user', label: 'MD 优化器 user 模板' },
+    { key: 'ontology_term_extractor', label: '知识图谱搜索术语抽取' },
+    { key: 'ontology_response', label: '知识图谱回答' },
   ],
 };

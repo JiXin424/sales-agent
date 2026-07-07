@@ -4,7 +4,7 @@
 判断是否值得生成引导。输出足够 coach_guidance 决策，不暴露内部维度。
 
 输出字段：
-- scene_hint：场景（见 SCENE_HINTS）。
+- scene_hint：场景。
 - confidence：0..1。
 - observed_signals：命中的信号列表。
 - should_generate_guidance：bool。

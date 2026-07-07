@@ -55,11 +55,27 @@ async def extract_terms_node(state: dict, runtime: Runtime) -> dict:
         logger.info("Ontology entity extraction: no chat_model, using raw question")
         return {"search_terms": [question]}
 
+    # 解析 ontology_term_extractor prompt：runtime.context.get("db") 由生产入口
+    # （dingtalk/graph_stream.py:122 / online_conversation.py:228-233）注入；
+    # tenant_id/agent_id 直接从 state 取。db/ids 缺失时回退到模块常量。
+    from sales_agent.services.prompt_resolver_helper import resolve_knowledge_prompt
+    db = runtime.context.get("db")
+    tenant_id = state.get("tenant_id")
+    agent_id = state.get("agent_id")
+    prompt = await resolve_knowledge_prompt(
+        db,
+        "ontology_term_extractor",
+        tenant_id,
+        agent_id,
+        default=_ENTITY_EXTRACTION_PROMPT,
+        question=question,
+    )
+
     try:
         raw = await chat_model.generate(
             messages=[{
                 "role": "user",
-                "content": _ENTITY_EXTRACTION_PROMPT.format(question=question),
+                "content": prompt,
             }],
             temperature=0,
             max_tokens=100,

@@ -336,7 +336,7 @@ export interface MessageCount {
 
 // --- Prompts ---
 
-export type PromptCategory = 'task' | 'system' | 'router' | 'risk' | 'coach';
+export type PromptCategory = 'task' | 'system' | 'router' | 'risk' | 'coach' | 'web' | 'knowledge';
 
 export interface PromptVersion {
   id: string;

@@ -1,8 +1,8 @@
 """Tests for the generation node."""
 import pytest
 from langgraph.runtime import Runtime
-from sales_agent.graph.nodes.generation import generate_node
-from sales_agent.graph.state import ChatGraphState
+from sales_agent.graph.chat.nodes.generation import generate_node
+from sales_agent.graph.chat.state import ChatGraphState
 
 
 @pytest.mark.asyncio

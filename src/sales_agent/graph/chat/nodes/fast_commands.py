@@ -11,7 +11,7 @@ from __future__ import annotations
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from sales_agent.models.base import generate_id
-from sales_agent.graph.state import ChatGraphState
+from sales_agent.graph.chat.state import ChatGraphState
 
 _HELP_COMMANDS = {"帮助", "help", "？", "?"}
 _RESET_COMMANDS = {"新话题", "清空上下文", "重新开始", "忘掉前面", "/reset", "/new"}

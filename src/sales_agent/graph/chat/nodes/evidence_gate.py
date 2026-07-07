@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 
-from sales_agent.graph.state import ChatGraphState
+from sales_agent.graph.chat.state import ChatGraphState
 
 logger = logging.getLogger(__name__)
 

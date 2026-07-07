@@ -3,7 +3,7 @@
 from types import SimpleNamespace
 
 import pytest
-from sales_agent.graph.nodes.retrieval import _retrieve_via_ontology, _retrieve_via_rag
+from sales_agent.graph.chat.nodes.retrieval import _retrieve_via_ontology, _retrieve_via_rag
 
 
 def _fake_settings():
@@ -26,16 +26,16 @@ async def test_ontology_empty_triggers_web_fallback(monkeypatch):
     async def fake_query(local, runtime): return {"graph_rows": []}
     async def fake_vec(local, runtime): return {"graph_rows": [], "vector_fallback_used": True}
     def fake_compact(local): return {"compacted_evidence": {"entities": [], "facts": [], "source_documents": [], "confidence": 0.5}}
-    monkeypatch.setattr("sales_agent.graph.nodes.retrieval.extract_terms_node", fake_extract)
-    monkeypatch.setattr("sales_agent.graph.nodes.retrieval.graph_query_node", fake_query)
-    monkeypatch.setattr("sales_agent.graph.nodes.retrieval.vector_fallback_node", fake_vec)
-    monkeypatch.setattr("sales_agent.graph.nodes.retrieval.compact_evidence_node", fake_compact)
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.extract_terms_node", fake_extract)
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.graph_query_node", fake_query)
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.vector_fallback_node", fake_vec)
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.compact_evidence_node", fake_compact)
 
     async def fake_web(*, message, tenant_id, runtime, api_key, top_n):
         return {"ontology_context_text": "## 联网搜索分析\n网搜结论", "sources": [{"title": "T"}], "web_used": True}
-    monkeypatch.setattr("sales_agent.graph.nodes.retrieval.web_fallback_and_analyze", fake_web)
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.web_fallback_and_analyze", fake_web)
 
-    monkeypatch.setattr("sales_agent.graph.nodes.retrieval.get_settings", _fake_settings)
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.get_settings", _fake_settings)
 
     runtime = _FakeRuntime()
     state = {"message": "某问题", "tenant_id": "t1", "task_type": "knowledge_qa"}
@@ -52,14 +52,14 @@ async def test_ontology_nonempty_skips_web_fallback(monkeypatch):
     async def fake_query(local, runtime): return {"graph_rows": [{"name": "E1"}]}
     async def fake_vec(local, runtime): return {"graph_rows": [], "vector_fallback_used": False}
     def fake_compact(local): return {"compacted_evidence": {"entities": [{"name": "E1", "type": "Product"}], "facts": [{"subject": "E1", "predicate": "has", "object": "V"}], "source_documents": ["D1"], "confidence": 0.9}}
-    monkeypatch.setattr("sales_agent.graph.nodes.retrieval.extract_terms_node", fake_extract)
-    monkeypatch.setattr("sales_agent.graph.nodes.retrieval.graph_query_node", fake_query)
-    monkeypatch.setattr("sales_agent.graph.nodes.retrieval.vector_fallback_node", fake_vec)
-    monkeypatch.setattr("sales_agent.graph.nodes.retrieval.compact_evidence_node", fake_compact)
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.extract_terms_node", fake_extract)
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.graph_query_node", fake_query)
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.vector_fallback_node", fake_vec)
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.compact_evidence_node", fake_compact)
 
     def fail_web(*a, **kw): raise AssertionError("web fallback should NOT be called when ontology has facts")
-    monkeypatch.setattr("sales_agent.graph.nodes.retrieval.web_fallback_and_analyze", fail_web)
-    monkeypatch.setattr("sales_agent.graph.nodes.retrieval.get_settings", _fake_settings)
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.web_fallback_and_analyze", fail_web)
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.get_settings", _fake_settings)
 
     runtime = _FakeRuntime()
     state = {"message": "某问题", "tenant_id": "t1", "task_type": "knowledge_qa"}

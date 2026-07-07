@@ -45,19 +45,18 @@ from __future__ import annotations
 from langgraph.graph import StateGraph, START, END
 from langgraph.constants import TAG_HIDDEN
 
-from sales_agent.graph.state import ChatGraphState
-from sales_agent.graph.nodes.fast_commands import fast_command_node
-from sales_agent.graph.nodes.validation import validate_node
-from sales_agent.graph.nodes.tenant_resolve import resolve_tenant_node
-from sales_agent.graph.nodes.context_load import load_context_node
-from sales_agent.graph.nodes.routing import routing_node
-from sales_agent.graph.nodes.retrieval import retrieve_node
-from sales_agent.graph.nodes.evidence_gate import evidence_gate
-from sales_agent.graph.nodes.generation import generate_node
-from sales_agent.graph.nodes.risk_check import risk_check_node
-from sales_agent.graph.nodes.logging_node import log_node
-from sales_agent.graph.edges.path_conditions import is_fast_command, select_retrieval_path
-from sales_agent.graph.edges.risk_conditions import check_risk_result
+from sales_agent.graph.chat.state import ChatGraphState
+from sales_agent.graph.chat.nodes.fast_commands import fast_command_node
+from sales_agent.graph.chat.nodes.validation import validate_node
+from sales_agent.graph.chat.nodes.tenant_resolve import resolve_tenant_node
+from sales_agent.graph.chat.nodes.context_load import load_context_node
+from sales_agent.graph.chat.nodes.routing import routing_node
+from sales_agent.graph.chat.nodes.retrieval import retrieve_node
+from sales_agent.graph.chat.nodes.evidence_gate import evidence_gate
+from sales_agent.graph.chat.nodes.generation import generate_node
+from sales_agent.graph.chat.nodes.risk_check import risk_check_node
+from sales_agent.graph.chat.nodes.logging_node import log_node
+from sales_agent.graph.chat.edges import is_fast_command, select_retrieval_path, check_risk_result
 from sales_agent.graph.retry_policies import (
     LLM_RETRY_POLICY, LLM_TIMEOUT,
     DB_RETRY_POLICY,

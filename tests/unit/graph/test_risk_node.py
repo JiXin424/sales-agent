@@ -1,9 +1,9 @@
 """Tests for risk checking node."""
 import pytest
 from unittest.mock import MagicMock
-from sales_agent.graph.nodes.risk_check import risk_check_node
-from sales_agent.graph.edges.risk_conditions import check_risk_result
-from sales_agent.graph.state import ChatGraphState
+from sales_agent.graph.chat.nodes.risk_check import risk_check_node
+from sales_agent.graph.chat.edges import check_risk_result
+from sales_agent.graph.chat.state import ChatGraphState
 
 
 @pytest.fixture

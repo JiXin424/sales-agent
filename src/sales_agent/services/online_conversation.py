@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 from langgraph.graph.state import CompiledStateGraph
 
 from sales_agent.core.config import get_settings
-from sales_agent.graph.online_graph import build_online_graph
+from sales_agent.graph.online.graph import build_online_graph
 from sales_agent.services.agent_service import resolve_tenant_agent_id
 
 logger = logging.getLogger(__name__)

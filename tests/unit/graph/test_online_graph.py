@@ -22,8 +22,8 @@ from unittest.mock import AsyncMock
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
-from sales_agent.graph.online_graph import build_online_graph
-from sales_agent.graph.online_state import OnlineConversationState
+from sales_agent.graph.online.graph import build_online_graph
+from sales_agent.graph.online.state import OnlineConversationState
 from sales_agent.services.online_conversation import build_online_thread_id
 from sales_agent.services.structured_router_output import (
     ContextDecision,

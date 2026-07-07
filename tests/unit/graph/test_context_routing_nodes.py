@@ -17,11 +17,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
-from sales_agent.graph.online_graph import (
+from sales_agent.graph.online.graph import (
     build_online_graph,
 )
-from sales_agent.graph.nodes.context_resolution import context_resolution_node
-from sales_agent.graph.nodes.evidence_routing import evidence_routing_node
+from sales_agent.graph.online.nodes import context_resolution_node
+from sales_agent.graph.online.nodes import evidence_routing_node
 from sales_agent.models.conversation_topic import ConversationTopic
 from sales_agent.services.structured_router_output import (
     ClarificationDecision,

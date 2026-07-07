@@ -1,8 +1,8 @@
 """Tests for the routing node."""
 import pytest
 from unittest.mock import MagicMock
-from sales_agent.graph.nodes.routing import routing_node
-from sales_agent.graph.state import ChatGraphState
+from sales_agent.graph.chat.nodes.routing import routing_node
+from sales_agent.graph.chat.state import ChatGraphState
 from sales_agent.services.task_router import (
     GENERAL_COACHING, KNOWLEDGE_QA, OBJECTION_HANDLING,
     SCRIPT_GENERATION, EMOTIONAL_SUPPORT, CONVERSATION_REVIEW,

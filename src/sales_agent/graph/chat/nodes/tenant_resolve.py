@@ -9,7 +9,7 @@ import logging
 
 from langgraph.runtime import Runtime
 
-from sales_agent.graph.state import ChatGraphState
+from sales_agent.graph.chat.state import ChatGraphState
 from sales_agent.services.tenant_resolver import TenantResolver
 
 logger = logging.getLogger(__name__)

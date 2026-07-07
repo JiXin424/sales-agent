@@ -15,7 +15,7 @@ import time
 
 from langgraph.runtime import Runtime
 
-from sales_agent.graph.state import ChatGraphState
+from sales_agent.graph.chat.state import ChatGraphState
 from sales_agent.services.agent_executor import execute_agent
 from sales_agent.services.prompt_resolver_helper import resolve_execution_prompts
 

@@ -10,7 +10,7 @@ import logging
 from langgraph.runtime import Runtime
 from sqlalchemy import select
 
-from sales_agent.graph.state import ChatGraphState
+from sales_agent.graph.chat.state import ChatGraphState
 from sales_agent.models.conversation import ConversationMessage
 from sales_agent.core.config import get_settings
 

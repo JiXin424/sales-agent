@@ -11,9 +11,9 @@ Checkpoints:
     get_online_checkpointer_sync()-- Process-level InMemorySaver for Online Graph
 """
 
-from sales_agent.graph.chat_graph import build_chat_graph
+from sales_agent.graph.chat.graph import build_chat_graph
 from sales_agent.graph.checkpoints import get_checkpointer, get_checkpointer_sync, get_online_checkpointer_sync
-from sales_agent.graph.online_graph import build_online_graph
+from sales_agent.graph.online.graph import build_online_graph
 from sales_agent.graph.registry import GRAPH_REGISTRY
 
 __all__ = [

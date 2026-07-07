@@ -1,6 +1,6 @@
 """Tests for ChatGraphState."""
 import pytest
-from sales_agent.graph.state import (
+from sales_agent.graph.chat.state import (
     ChatGraphState,
     _reduce_coalesce,
     _reduce_merge_dict,

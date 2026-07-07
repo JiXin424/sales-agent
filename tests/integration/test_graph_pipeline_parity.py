@@ -1,7 +1,7 @@
 """Integration test: Phase 1 graph produces equivalent output to ChatPipeline."""
 import pytest
-from sales_agent.graph.chat_graph import build_chat_graph
-from sales_agent.graph.state import ChatGraphState
+from sales_agent.graph.chat.graph import build_chat_graph
+from sales_agent.graph.chat.state import ChatGraphState
 
 
 @pytest.mark.asyncio

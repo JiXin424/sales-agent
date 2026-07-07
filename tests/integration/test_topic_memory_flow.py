@@ -13,10 +13,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from sales_agent.graph.nodes.context_load import load_context_node
-from sales_agent.graph.nodes.routing import routing_node
-from sales_agent.graph.nodes.evidence_gate import evidence_gate
-from sales_agent.graph.state import ChatGraphState
+from sales_agent.graph.chat.nodes.context_load import load_context_node
+from sales_agent.graph.chat.nodes.routing import routing_node
+from sales_agent.graph.chat.nodes.evidence_gate import evidence_gate
+from sales_agent.graph.chat.state import ChatGraphState
 
 
 # ===================================================================
@@ -256,7 +256,7 @@ class TestTopicSummaryUpdate:
     @pytest.mark.asyncio
     async def test_log_node_passes_topic_id(self):
         """log_node passes topic_id to conversation_logger.log_conversation."""
-        from sales_agent.graph.nodes.logging_node import log_node
+        from sales_agent.graph.chat.nodes.logging_node import log_node
         from unittest.mock import MagicMock, patch, AsyncMock
 
         runtime = MagicMock()
@@ -274,7 +274,7 @@ class TestTopicSummaryUpdate:
         }
 
         with patch(
-            "sales_agent.graph.nodes.logging_node.conversation_logger.log_conversation",
+            "sales_agent.graph.chat.nodes.logging_node.conversation_logger.log_conversation",
             new_callable=AsyncMock,
         ) as mock_log:
             result = await log_node(state, runtime)

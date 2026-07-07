@@ -19,7 +19,7 @@ import logging
 
 from langgraph.runtime import Runtime
 
-from sales_agent.graph.state import ChatGraphState
+from sales_agent.graph.chat.state import ChatGraphState
 from sales_agent.core.config import get_settings
 from sales_agent.graph.retrieval.ontology_graph import (
     extract_terms_node,

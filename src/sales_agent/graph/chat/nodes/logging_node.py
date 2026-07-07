@@ -11,7 +11,7 @@ import logging
 from datetime import datetime, timezone
 
 from langgraph.runtime import Runtime
-from sales_agent.graph.state import ChatGraphState
+from sales_agent.graph.chat.state import ChatGraphState
 from sales_agent.services import conversation_logger
 from sales_agent.services.topic_manager import TOPIC_IDLE_TIMEOUT
 

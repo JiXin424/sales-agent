@@ -13,8 +13,8 @@ The evidence gate sits between retrieval and generation. It enforces the
 from __future__ import annotations
 
 import pytest
-from sales_agent.graph.nodes.evidence_gate import evidence_gate
-from sales_agent.graph.state import ChatGraphState
+from sales_agent.graph.chat.nodes.evidence_gate import evidence_gate
+from sales_agent.graph.chat.state import ChatGraphState
 
 
 def _make_state(
@@ -161,7 +161,7 @@ class TestSelectRetrievalPath:
 
     def test_knowledge_policy_none_skips_retrieval(self):
         """When knowledge_policy is 'none', return 'skip' even if needs_retrieval."""
-        from sales_agent.graph.edges.path_conditions import select_retrieval_path
+        from sales_agent.graph.chat.edges import select_retrieval_path
 
         state = self._make_state(needs_retrieval=True, knowledge_policy="none")
         result = select_retrieval_path(state)
@@ -169,7 +169,7 @@ class TestSelectRetrievalPath:
 
     def test_knowledge_policy_required_allows_retrieval(self):
         """When knowledge_policy is 'required', proceed to retrieval."""
-        from sales_agent.graph.edges.path_conditions import select_retrieval_path
+        from sales_agent.graph.chat.edges import select_retrieval_path
 
         state = self._make_state(needs_retrieval=True, knowledge_policy="required")
         result = select_retrieval_path(state)
@@ -177,7 +177,7 @@ class TestSelectRetrievalPath:
 
     def test_knowledge_policy_optional_allows_retrieval(self):
         """When knowledge_policy is 'optional', proceed to retrieval."""
-        from sales_agent.graph.edges.path_conditions import select_retrieval_path
+        from sales_agent.graph.chat.edges import select_retrieval_path
 
         state = self._make_state(needs_retrieval=True, knowledge_policy="optional")
         result = select_retrieval_path(state)
@@ -185,7 +185,7 @@ class TestSelectRetrievalPath:
 
     def test_no_needs_retrieval_skips(self):
         """When needs_retrieval is False, skip regardless of knowledge_policy."""
-        from sales_agent.graph.edges.path_conditions import select_retrieval_path
+        from sales_agent.graph.chat.edges import select_retrieval_path
 
         state = self._make_state(needs_retrieval=False, knowledge_policy="required")
         result = select_retrieval_path(state)

@@ -1,7 +1,7 @@
 """Tests for the ChatPipeline StateGraph."""
 import pytest
-from sales_agent.graph.chat_graph import build_chat_graph
-from sales_agent.graph.state import ChatGraphState
+from sales_agent.graph.chat.graph import build_chat_graph
+from sales_agent.graph.chat.state import ChatGraphState
 from langgraph.graph.state import StateGraph
 
 
@@ -60,9 +60,9 @@ async def test_parallel_retrieve_writes_ontology_context_text_without_crash():
     验证 reducer 合并成功、turn 完成且 sources 合并。
     """
     from langgraph.checkpoint.memory import InMemorySaver
-    import sales_agent.graph.nodes.retrieval as rmod
-    import sales_agent.graph.chat_graph as cgmod
-    from sales_agent.graph.edges.path_conditions import select_retrieval_path
+    import sales_agent.graph.chat.nodes.retrieval as rmod
+    import sales_agent.graph.chat.graph as cgmod
+    from sales_agent.graph.chat.edges import select_retrieval_path
     from langgraph.types import Send
 
     calls = []
@@ -103,7 +103,7 @@ async def test_parallel_retrieve_writes_ontology_context_text_without_crash():
     rmod.retrieve_node = spy
     cgmod.retrieve_node = spy
     mp = pytest.MonkeyPatch()
-    mp.setattr("sales_agent.graph.chat_graph.select_retrieval_path", force_fanout)
+    mp.setattr("sales_agent.graph.chat.graph.select_retrieval_path", force_fanout)
     try:
         builder = build_chat_graph()
         graph = builder.compile(checkpointer=InMemorySaver())

@@ -13,9 +13,9 @@ Legacy graphs (daily-eval, quick-session) are NOT registered here.
 
 from __future__ import annotations
 
-from sales_agent.graph.online_graph import build_online_graph
+from sales_agent.graph.online.graph import build_online_graph
 from sales_agent.graph.guided_flow.graph import build_guided_flow_graph
-from sales_agent.graph.chat_graph import build_chat_graph
+from sales_agent.graph.chat.graph import build_chat_graph
 
 GRAPH_REGISTRY: dict[str, dict] = {
     "online": {

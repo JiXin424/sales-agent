@@ -5,7 +5,7 @@ Mirrors `services/request_validator.validate_chat_request()`.
 
 from __future__ import annotations
 
-from sales_agent.graph.state import ChatGraphState
+from sales_agent.graph.chat.state import ChatGraphState
 
 
 def validate_node(state: ChatGraphState) -> dict:

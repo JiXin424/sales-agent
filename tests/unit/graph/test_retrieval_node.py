@@ -4,11 +4,11 @@ from types import SimpleNamespace
 import pytest
 from langgraph.runtime import Runtime
 from langgraph.types import Send
-from sales_agent.graph.nodes.retrieval import retrieve_node
-from sales_agent.graph.state import ChatGraphState
+from sales_agent.graph.chat.nodes.retrieval import retrieve_node
+from sales_agent.graph.chat.state import ChatGraphState
 from sales_agent.graph.retrieval.ontology_graph import compact_evidence_node
 from sales_agent.graph.retrieval.state import OntologyRetrievalState
-from sales_agent.graph.edges.path_conditions import select_retrieval_path
+from sales_agent.graph.chat.edges import select_retrieval_path
 
 
 @pytest.mark.asyncio

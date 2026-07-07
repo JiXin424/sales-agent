@@ -8,7 +8,8 @@ Includes support for:
 Reducer 约束（重要）：任何会被 ``Send`` 并行 fan-out 写入的字段，必须用
 ``Annotated[T, reducer]`` 声明合并策略，否则 LangGraph 合并并行结果时会抛
 ``InvalidUpdateError``（见 commit eb889df）。当前会被并行双路（ontology + rag）
-写入的字段：``sources``、``retrieval_info``、``skip_generation``、``stream_tokens``。
+写入的字段：``sources``、``retrieval_info``、``retrieval_result``、
+``ontology_context_text``、``skip_generation``、``stream_tokens``。
 新增任何被并行写的字段时，务必同步加 reducer。
 """
 
@@ -37,6 +38,22 @@ def _reduce_merge_dict(a: dict | None, b: dict | None) -> dict | None:
     if b:
         merged.update(b)
     return merged
+
+
+def _reduce_coalesce(a: Any, b: Any) -> Any:
+    """Reducer for single-value fields under parallel Send fan-out: keep the
+    first non-empty value. ``None`` / empty string / empty container are
+    treated as absent so the other parallel result wins.
+
+    Used for ``ontology_context_text`` (ontology 路权威，rag 路 web_fallback
+    也写) and ``retrieval_result`` (rag 路写) — 两路同时写时避免
+    ``InvalidUpdateError``，且任一路有值都不丢。
+    """
+    if not a:
+        return b
+    if not b:
+        return a
+    return a
 from typing_extensions import TypedDict
 
 from langgraph.managed.is_last_step import IsLastStep
@@ -87,9 +104,9 @@ class ChatGraphState(TypedDict, total=False):
     # === Retrieval ===
     retrieval_path: str                    # "ontology" | "rag" | "skip"
     retrieval_info: Annotated[dict[str, Any], _reduce_merge_dict]
-    retrieval_result: Any
+    retrieval_result: Annotated[Any, _reduce_coalesce]
     sources: Annotated[list[dict], add]  # P2: reducer merges parallel Send results
-    ontology_context_text: str             # ontology evidence text for generate_node
+    ontology_context_text: Annotated[str, _reduce_coalesce]  # ontology + rag(web) 并行写
     skip_generation: Annotated[bool, _reduce_or]
 
     # === Coach Guidance ===

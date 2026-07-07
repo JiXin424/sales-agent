@@ -67,3 +67,27 @@ async def test_ontology_nonempty_skips_web_fallback(monkeypatch):
 
     assert result["retrieval_info"]["web_search_used"] is False
     assert "E1" in result["ontology_context_text"]
+
+
+@pytest.mark.asyncio
+async def test_web_fallback_tags_source_type(monkeypatch):
+    """web_fallback_and_analyze 给每个 source 补 source_type=web。"""
+    from sales_agent.graph.retrieval.web_fallback import web_fallback_and_analyze
+    from sales_agent.services.web_search import WebSearchResult
+
+    async def fake_bocha(*, query, api_key, top_n):
+        return WebSearchResult(
+            query=query,
+            success=True,
+            sources=[{"title": "A", "url": "u1"}, {"title": "B", "url": "u2"}],
+            raw_answer="ans",
+        )
+    monkeypatch.setattr("sales_agent.graph.retrieval.web_fallback.bocha_search", fake_bocha)
+
+    runtime = _FakeRuntime()  # chat_model=None → 走 else 分支，不调 LLM
+    result = await web_fallback_and_analyze(
+        message="q", tenant_id="t1", runtime=runtime, api_key="k", top_n=3,
+    )
+    assert result is not None
+    assert all(s["source_type"] == "web" for s in result["sources"])
+    assert result["sources"][0]["title"] == "A"  # 原字段保留

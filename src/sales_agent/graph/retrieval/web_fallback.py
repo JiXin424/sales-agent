@@ -84,6 +84,6 @@ async def web_fallback_and_analyze(
     context_text = "## 联网搜索分析\n" + analysis_text
     return {
         "ontology_context_text": context_text,
-        "sources": web_result.sources,
+        "sources": [{"source_type": "web", **s} for s in web_result.sources],
         "web_used": True,
     }

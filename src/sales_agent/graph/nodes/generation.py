@@ -68,6 +68,7 @@ async def generate_node(state: ChatGraphState, runtime: Runtime) -> dict:
             "answer_dict": {
                 "summary": f"No model available for task: {task_type}",
                 "sections": [],
+                "sources": state.get("sources", []),
             },
             "raw_response": "{}",
             "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
@@ -115,6 +116,7 @@ async def generate_node(state: ChatGraphState, runtime: Runtime) -> dict:
         system_prompt_text=system_prompt_text,
         ontology_context=ontology_context,
     )
+    answer_dict["sources"] = state.get("sources", [])  # 透传来源供钉钉文末引用
     latency_ms = int((time.time() - start_time) * 1000)
     logger.info("Graph generation completed in %d ms for task %s", latency_ms, task_type)
 

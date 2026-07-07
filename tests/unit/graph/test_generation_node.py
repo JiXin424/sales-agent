@@ -45,3 +45,17 @@ async def test_generate_node_skip_generation():
     }
     result = await generate_node(state, runtime)
     assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_generate_node_passes_through_sources():
+    """generate_node 把 state.sources 透传进 answer_dict（no_model fallback 路径）。"""
+    runtime = Runtime(context={})
+    state: ChatGraphState = {
+        "tenant_id": "t1", "user_id": "u1",
+        "message": "hello", "conversation_id": "c1", "channel": "local",
+        "task_type": "general_sales_coaching",
+        "sources": [{"title": "S1", "source_type": "ontology"}],
+    }
+    result = await generate_node(state, runtime)
+    assert result["answer_dict"]["sources"] == [{"title": "S1", "source_type": "ontology"}]

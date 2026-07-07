@@ -13,6 +13,17 @@ Routing priority (highest first):
 3. ``guided_flows_enabled`` & ``active_flow`` & cancel command →  ``"cancel"``
 4. ``guided_flows_enabled`` & ``active_flow`` →  ``"advance"``
 5. Otherwise →  ``"chat"``
+
+File layout::
+
+    online/
+    ├── graph.py   ← this file:  graph builder only
+    ├── nodes.py   ← all 8 node functions + subgraph factories
+    ├── edges.py   ← route_online_message, route_context_resolution
+    └── state.py   ← OnlineConversationState
+
+Subgraph factories (``_get_guided_flow_graph`` / ``_get_chat_graph``) live
+in ``nodes.py`` to avoid a circular import with the ``chat_node`` function.
 """
 
 from __future__ import annotations

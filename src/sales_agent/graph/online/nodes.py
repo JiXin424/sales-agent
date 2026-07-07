@@ -3,9 +3,49 @@
 All node functions live here so ``online/graph.py`` contains only the
 graph builder.  This avoids circular imports (``chat_node`` needs the
 cached subgraph factories, which in turn need the subgraph builders).
+
+Quick index::
+
+    _unpack_context              — extract runtime ctx from RunnableConfig
+    _get_guided_flow_graph       — cached Guided Flow subgraph (no checkpointer)
+    _get_chat_graph              — cached Chat subgraph (no checkpointer)
+
+    normalize_turn_node          — set requested_flow + choose flow_action
+    chat_node                    — invoke cached Chat Graph, map response fields
+    duplicate_node               — handle duplicate events (no-op update)
+    clarification_response_node  — format clarification response kind
+    log_control_response_node    — persist control response to conversation log
+    log_flow_output_node         — persist guided-flow output to conversation log
+
+    _resolve_pending_turn        — helper: resolve a pending clarification on a topic
+    context_resolution_node      — resolve context/topic for current message
+    evidence_routing_node        — classify intent + evidence policy (resolved path)
+    direct_evidence_routing_node — classify intent for direct_chat path (topic_routing off)
 """
 
 from __future__ import annotations
+
+import json
+import logging
+from datetime import datetime, timezone
+from typing import Any
+
+from langchain_core.runnables import RunnableConfig
+from langgraph.graph.state import CompiledStateGraph
+
+from sales_agent.graph.chat.graph import build_chat_graph
+from sales_agent.graph.guided_flow.graph import build_guided_flow_graph
+from sales_agent.graph.guided_flow.triggers import is_cancel_command, resolve_requested_flow
+from sales_agent.graph.online.state import OnlineConversationState
+from sales_agent.models.conversation_topic import ConversationTopic
+from sales_agent.services import conversation_logger
+from sales_agent.services.context_resolver import resolve_context
+from sales_agent.services.evidence_router import route_intent_evidence
+from sales_agent.services.structured_router_output import (
+    ClarificationDecision,
+    ContextDecision,
+)
+from sales_agent.services.topic_manager import TopicManager, resolve_clarification
 
 import json
 import logging
@@ -56,6 +96,11 @@ def _unpack_context(config: RunnableConfig) -> dict[str, Any] | None:
     runtime = configurable.get("__pregel_runtime")
     ctx = getattr(runtime, "context", None) if runtime else None
     return ctx
+
+
+# ====================================================================
+# Subgraph factories (cached, no checkpointer — parent owns it)
+# ====================================================================
 
 
 def _get_guided_flow_graph() -> CompiledStateGraph:
@@ -308,6 +353,8 @@ async def log_flow_output_node(
 # context_resolution_node  (was nodes/context_resolution.py)
 # ====================================================================
 
+
+# ── helper: resolve a pending clarification on a topic ──────────────
 
 async def _resolve_pending_turn(
     *,

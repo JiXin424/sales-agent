@@ -36,9 +36,12 @@ def is_fast_command(state: ChatGraphState) -> str:
 def select_retrieval_path(state: ChatGraphState):
     """Select retrieval strategy. Supports Send fan-out for parallel retrieval.
 
-    When the config enables ``retrieval.parallel_enabled`` and the task
-    requires retrieval, this returns a list of ``Send`` objects that run
-    multiple retrieval backends concurrently.
+    Fan-out (ontology + RAG concurrently) is triggered when the task needs
+    retrieval and any of these hold (and Neo4j is configured):
+
+    - ``ontology.hybrid_retrieval`` is True (legacy-aligned hybrid switch)
+    - ``ontology.knowledge_engine == "hybrid"`` (mixed engine semantics)
+    - ``retrieval.parallel_enabled`` is True with an ontology-capable engine
 
     When ``knowledge_policy`` is ``"none"`` (set by the Evidence Router),
     retrieval is skipped regardless of ``needs_retrieval``.
@@ -48,9 +51,8 @@ def select_retrieval_path(state: ChatGraphState):
         "rag" — Traditional vector/hybrid/keyword retrieval (solo)
         "skip" — No retrieval needed
 
-        list[Send] — Parallel fan-out when ``parallel_enabled`` is True.
-                     Each Send carries a ``retrieval_backend`` hint so the
-                     retrieve_node can distinguish the source.
+        list[Send] — Parallel fan-out (ontology + rag). Each Send carries a
+                     ``retrieval_path`` hint so retrieve_node can route.
     """
     if not state.get("needs_retrieval"):
         return "skip"
@@ -63,13 +65,25 @@ def select_retrieval_path(state: ChatGraphState):
     from sales_agent.core.config import get_settings
     settings = get_settings()
 
-    use_ontology = (
-        settings.ontology.knowledge_engine == "ontology_neo4j"
-        and settings.neo4j.uri
-    )
+    engine = settings.ontology.knowledge_engine
+    neo4j_ready = bool(settings.neo4j.uri)
+    # 对齐 legacy chat_pipeline 语义：hybrid_retrieval 标志或 ontology_neo4j/hybrid
+    # 引擎声明使用本体。config 注释明确支持 hybrid（= 同时跑 ontology + RAG），
+    # 故 hybrid engine 值与 hybrid_retrieval 标志同样视为启用本体检索。
+    use_hybrid = settings.ontology.hybrid_retrieval
+    use_ontology = neo4j_ready and (use_hybrid or engine in ("ontology_neo4j", "hybrid"))
 
     # ── Send fan-out: parallel retrieval across backends ──────────
-    if getattr(settings.retrieval, "parallel_enabled", False) and use_ontology:
+    # 并行 fan-out 触发条件（任一）：
+    #   - hybrid_retrieval 标志：显式开启混合检索（与 legacy 一致）
+    #   - hybrid 引擎：语义即 ontology + RAG 混合
+    #   - parallel_enabled：保留 ontology_neo4j 默认并行行为
+    parallel = use_ontology and (
+        use_hybrid
+        or engine == "hybrid"
+        or getattr(settings.retrieval, "parallel_enabled", False)
+    )
+    if parallel:
         # Fan out to ontology + vector retrieval concurrently.
         # Each Send must carry the full node input so the node can
         # execute with complete context. Results merge via `sources: add`.

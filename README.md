@@ -49,6 +49,7 @@ v0 是本地可运行原型，支持 **HTTP API** 和 **钉钉单聊** 两种接
 - Agents 知识页新增入库面板（状态 / 任务 / 冲突可视化 + 启动入库）。
 - 支持上传 `.md` / `.txt` / `.doc` / `.docx` / `.pdf` / `.pptx` / `.xlsx` / `.jpg` / `.png` / `.webp` / `.bmp` / `.gif`；旧版 `.doc` 经 LibreOffice 无头转 `.docx` 后解析，`.xlsx` 用 openpyxl 按 sheet 抽取，图片用视觉 LLM 解读（需 `ontology.vision_enabled: true`）。
 - 「本体探索」调试页（`/agents/:id/ontology`）：三栏实时可视化检索过程 / 问答 / 喂给大模型的完整上下文（SSE 流式，复用图谱检索+回答引擎）。
+- **图谱+RAG 混合并行（`KNOWLEDGE_ENGINE=hybrid` 或 `HYBRID_RETRIEVAL=true`）**：graph 路径（钉钉 Stream 生产入口）下，LangGraph `Send` fan-out 同时执行 ontology 图谱检索与 RAG 检索，结果经 state reducer（`sources: add`）合并后统一进 `evidence_gate → generate`。与「混合检索 Hybrid RRF」（向量+关键词，`retrieval.mode: hybrid`）是两个不同维度的混合，可叠加。
 
 详见 [`docs/ontology-neo4j-ops.md`](docs/ontology-neo4j-ops.md)。
 

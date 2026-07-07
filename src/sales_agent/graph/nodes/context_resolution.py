@@ -255,7 +255,7 @@ async def context_resolution_node(
     # ── Step 3: Check / apply topic expiry ────────────────────────
     previous_topic_id: str | None = None
     if topic:
-        was_closed = await manager.close_if_expired(topic, now=now)
+        was_closed = await manager.close_if_expired(db, topic, now=now)
         if was_closed:
             previous_topic_id = topic.id
             topic = None

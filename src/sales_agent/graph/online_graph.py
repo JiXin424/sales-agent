@@ -28,7 +28,10 @@ from sales_agent.graph.chat_graph import build_chat_graph
 from sales_agent.graph.guided_flow.graph import build_guided_flow_graph
 from sales_agent.graph.guided_flow.triggers import is_cancel_command, resolve_requested_flow
 from sales_agent.graph.nodes.context_resolution import context_resolution_node
-from sales_agent.graph.nodes.evidence_routing import evidence_routing_node
+from sales_agent.graph.nodes.evidence_routing import (
+    direct_evidence_routing_node,
+    evidence_routing_node,
+)
 from sales_agent.graph.online_state import OnlineConversationState
 from sales_agent.services import conversation_logger
 
@@ -118,7 +121,9 @@ def normalize_turn_node(state: OnlineConversationState) -> dict[str, Any]:
         flow_action = "chat"
 
     # When topic routing is disabled, bypass context resolution and
-    # evidence routing — send chat messages straight to the chat node.
+    # evidence routing — but still classify intent via direct_evidence_routing
+    # so knowledge questions retrieve. Send chat messages to the chat node
+    # without context rewriting / clarify / topic management.
     topic_routing_enabled = state.get("topic_routing_enabled", False)
     if flow_action == "chat" and not topic_routing_enabled:
         flow_action = "direct_chat"
@@ -337,6 +342,7 @@ def build_online_graph() -> StateGraph:
     builder.add_node("guided_flow", _get_guided_flow_graph())
     builder.add_node("context_resolution", context_resolution_node)
     builder.add_node("evidence_routing", evidence_routing_node)
+    builder.add_node("direct_evidence_routing", direct_evidence_routing_node)
     builder.add_node("clarification_response", clarification_response_node)
     builder.add_node("log_control_response", log_control_response_node)
     builder.add_node("chat", chat_node)
@@ -356,7 +362,7 @@ def build_online_graph() -> StateGraph:
             "cancel": "guided_flow",
             "advance": "guided_flow",
             "chat": "context_resolution",
-            "direct_chat": "chat",
+            "direct_chat": "direct_evidence_routing",
         },
     )
 
@@ -377,6 +383,9 @@ def build_online_graph() -> StateGraph:
 
     # Resolved path
     builder.add_edge("evidence_routing", "chat")
+    # Direct-chat path (topic_routing off): still classify intent so knowledge
+    # questions retrieve; bypasses context_resolution/clarify only.
+    builder.add_edge("direct_evidence_routing", "chat")
     builder.add_edge("chat", END)
 
     # Guided flow path

@@ -8,7 +8,7 @@
  */
 
 import { type CSSProperties } from 'react';
-import type { NodeProps } from 'reactflow';
+import { Handle, Position, type NodeProps } from 'reactflow';
 
 /** 节点类型标签 + 配色（与 NodeLegend 图例一致）。 */
 type NodeKind = 'llm' | 'subgraph' | 'function' | 'terminal';
@@ -52,6 +52,9 @@ export function inferKind(name: string, calls_llm: boolean, type: 'function' | '
 
 const NODE_FONT = `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif`;
 
+/** Handle 透明：隐藏连接圆点但保留 edge attach 能力（reactflow 要求节点含 Handle 才能连边）。 */
+const handleStyle: CSSProperties = { opacity: 0 };
+
 /** 自定义 reactflow 节点。 */
 export function GraphNode({ data }: NodeProps<GraphNodeData>) {
   const { name, desc, kind, isSelected, dimmed } = data;
@@ -67,7 +70,13 @@ export function GraphNode({ data }: NodeProps<GraphNodeData>) {
       opacity: dimmed ? 0.25 : 1,
       boxShadow: isSelected ? '0 0 0 3px rgba(22,119,255,0.2)' : 'none',
     };
-    return <div style={terminalStyle}>{name === '__start__' ? 'START' : 'END'}</div>;
+    return (
+      <div style={terminalStyle}>
+        {name === '__start__' ? 'START' : 'END'}
+        {name === '__start__' && <Handle type="source" position={Position.Right} style={handleStyle} />}
+        {name === '__end__' && <Handle type="target" position={Position.Left} style={handleStyle} />}
+      </div>
+    );
   }
 
   const style: CSSProperties = {
@@ -88,11 +97,13 @@ export function GraphNode({ data }: NodeProps<GraphNodeData>) {
 
   return (
     <div style={style} className="gd-flow-node">
+      <Handle type="target" position={Position.Left} style={handleStyle} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
         <span style={badgeStyle}>{ks.badgeText}</span>
         <span style={{ fontWeight: 600, fontSize: 13, color: ks.nameColor }}>{name}</span>
       </div>
       {desc && <div style={{ fontSize: 11, color: '#595959' }}>{desc}</div>}
+      <Handle type="source" position={Position.Right} style={handleStyle} />
     </div>
   );
 }

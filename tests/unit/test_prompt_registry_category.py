@@ -24,7 +24,8 @@ async def test_resolve_system_builtin_default(db_session: AsyncSession, sample_t
     """无 DB 版本时，system prompt 回退到内置默认。"""
     reg = PromptRegistry(db_session)
     tpl = await reg.resolve_prompt("system", "system_constraint", sample_tenant)
-    assert "ToB 企业销售陪跑 Agent" in tpl
+    assert "网票福多多" in tpl
+    assert "资深销售前辈" in tpl
 
 
 @pytest.mark.asyncio

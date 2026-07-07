@@ -17,7 +17,7 @@ async def test_resolve_execution_prompts_returns_task_and_system(
         db_session, None, sample_tenant, "knowledge_qa"
     )
     assert "知识库" in task_tpl
-    assert "ToB 企业销售陪跑" in sys_tpl
+    assert "网票福多多" in sys_tpl
 
 
 @pytest.mark.asyncio

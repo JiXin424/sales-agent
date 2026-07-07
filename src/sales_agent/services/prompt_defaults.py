@@ -18,7 +18,7 @@ from dataclasses import dataclass
 class BuiltinPrompt:
     """一个内置 prompt 的元信息与模板。"""
 
-    category: str  # task | system | router | risk | coach
+    category: str  # task | system | router | risk | coach | web
     key: str  # 该类别下的具体标识
     template: str  # 模板正文（含 {placeholder}）
     required_placeholders: tuple[str, ...]  # 运行时 .format() 必须注入的占位符
@@ -108,10 +108,18 @@ def _coach_entries() -> list[BuiltinPrompt]:
     ]
 
 
+def _web_entry() -> list[BuiltinPrompt]:
+    from sales_agent.prompts.web_analysis_prompt import WEB_ANALYSIS_PROMPT
+    return [
+        BuiltinPrompt("web", "web_analysis", WEB_ANALYSIS_PROMPT, ("search_results",), "联网搜索结果分析"),
+    ]
+
+
 BUILTIN_PROMPTS: list[BuiltinPrompt] = [
     *_task_entries(),
     *_system_router_risk_entries(),
     *_coach_entries(),
+    *_web_entry(),
 ]
 
 

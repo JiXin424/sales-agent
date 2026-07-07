@@ -281,14 +281,20 @@ async def test_guided_disabled_no_trigger_routes_to_chat(online_graph, config):
 
 @pytest.mark.asyncio
 async def test_topic_routing_disabled_bypasses_context_resolution(online_graph, config):
-    """When ``topic_routing_enabled=False``, messages route directly to ``chat_node``
-    without calling the context resolver or evidence router."""
+    """When ``topic_routing_enabled=False``, messages bypass context resolution
+    (no clarify/topic management) but still classify intent via
+    direct_evidence_routing so knowledge questions can retrieve."""
     ctx = {
         "db": None,
         "chat_model": None,
         "chat_runner": StubChatRunner(),
         "context_resolver_override": AsyncMock(),
-        "evidence_router_override": AsyncMock(),
+        "evidence_router_override": AsyncMock(
+            return_value=_make_evidence_decision(
+                intent="knowledge_qa", knowledge_policy="required",
+                retrieval_query="客户访前准备",
+            ),
+        ),
     }
     result = await online_graph.ainvoke(
         _make_input("什么样的客户适合做访前准备", topic_routing_enabled=False),
@@ -298,9 +304,55 @@ async def test_topic_routing_disabled_bypasses_context_resolution(online_graph, 
     assert result["response_kind"] == "chat"
     # context_status is not set when bypassing context resolution
     assert result.get("context_status") is None
-    # The stubs should NOT have been called
+    # context resolver is bypassed on the direct_chat path
     ctx["context_resolver_override"].assert_not_awaited()
-    ctx["evidence_router_override"].assert_not_awaited()
+    # but intent classification still runs so knowledge questions retrieve
+    ctx["evidence_router_override"].assert_awaited_once()
+    assert result.get("knowledge_policy") == "required"
+    assert result.get("needs_retrieval") is True
+
+
+@pytest.mark.asyncio
+async def test_direct_chat_required_policy_sets_needs_retrieval(online_graph, config):
+    """direct_chat path: a knowledge query (policy=required) sets
+    needs_retrieval=True so the chat subgraph fans out retrieval."""
+    result = await online_graph.ainvoke(
+        _make_input("福多多标准卡包含什么权益", topic_routing_enabled=False),
+        config=config,
+        context={
+            "db": None, "chat_model": None, "chat_runner": StubChatRunner(),
+            "evidence_router_override": AsyncMock(
+                return_value=_make_evidence_decision(
+                    intent="knowledge_qa", knowledge_policy="required",
+                    response_mode="retrieve", retrieval_query="福多多标准卡权益",
+                ),
+            ),
+        },
+    )
+    assert result["response_kind"] == "chat"
+    assert result["knowledge_policy"] == "required"
+    assert result["needs_retrieval"] is True
+
+
+@pytest.mark.asyncio
+async def test_direct_chat_none_policy_skips_retrieval(online_graph, config):
+    """direct_chat path: a chitchat query (policy=none) sets
+    needs_retrieval=False so the chat subgraph skips retrieval."""
+    result = await online_graph.ainvoke(
+        _make_input("你好", topic_routing_enabled=False),
+        config=config,
+        context={
+            "db": None, "chat_model": None, "chat_runner": StubChatRunner(),
+            "evidence_router_override": AsyncMock(
+                return_value=_make_evidence_decision(
+                    intent="emotional_support", knowledge_policy="none",
+                ),
+            ),
+        },
+    )
+    assert result["response_kind"] == "chat"
+    assert result["knowledge_policy"] == "none"
+    assert result["needs_retrieval"] is False
 
 
 @pytest.mark.asyncio

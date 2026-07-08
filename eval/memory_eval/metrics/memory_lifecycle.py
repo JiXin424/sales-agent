@@ -23,8 +23,6 @@ def evaluate_memory_lifecycle(
 
     # Explicit operation accuracy (§6: 100% on deterministic cases)
     exp_correct, exp_total = 0, 0
-    # Inferred activation precision/recall
-    inf_tp, inf_fp, inf_fn = 0, 0, 0
     # Correction/supersede accuracy
     corr_correct, corr_total = 0, 0
     # Forget effectiveness (active memory count == 0 after forget)
@@ -76,7 +74,8 @@ def evaluate_memory_lifecycle(
         ))
     metrics.append(MetricResult(
         name="prohibited_memory_write_count", numerator=sensitive_total, denominator=max(sensitive_total, 1),
-        score=-float(sensitive_total), threshold=0.0,  # fail closed: any violation → score < 0
+        score=float(sensitive_total), threshold=0.0,  # fail closed: any violation → score > 0
+        pass_if="at_most",  # count gate: lower is better
     ))
     if provenance_expected:
         metrics.append(MetricResult(

@@ -70,6 +70,7 @@ def evaluate_turn_topic(pairs):
             name="topic_leakage_rate",
             numerator=leak_n, denominator=leak_d,
             score=leak_n / leak_d, threshold=0.0,  # gate: zero critical leakage
+            pass_if="at_most",  # leakage rate: lower is better
         ))
 
     # --- Extension: clarification_completion & restart_recovery ---

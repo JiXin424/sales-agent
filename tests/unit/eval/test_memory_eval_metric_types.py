@@ -71,3 +71,15 @@ def test_passes_property_branches():
     assert MetricResult(
         name="x", score=0.95, threshold=0.9
     ).passes is True
+
+
+def test_passes_at_most_direction():
+    # at_most (count/leakage gates): pass when score <= threshold.
+    # A prohibited write (score=1.0, threshold=0.0) must fail the gate.
+    assert MetricResult(
+        name="x", score=1.0, threshold=0.0, pass_if="at_most"
+    ).passes is False
+    # Non-violation (score=0.0, threshold=0.0) passes.
+    assert MetricResult(
+        name="x", score=0.0, threshold=0.0, pass_if="at_most"
+    ).passes is True

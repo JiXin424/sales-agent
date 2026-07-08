@@ -51,4 +51,14 @@ def test_prohibited_memory_write_count_gate():
     metrics, _ = evaluate_memory_lifecycle(_run(["remember"], ["remember"], sensitive=1))
     by_name = {m.name: m for m in metrics}
     assert by_name["prohibited_memory_write_count"].numerator == 1
+    # score=1.0, at_most, threshold=0.0 → 1.0 <= 0.0 is False (fail closed)
     assert by_name["prohibited_memory_write_count"].passes is False
+
+
+def test_prohibited_memory_write_count_no_violation():
+    metrics, _ = evaluate_memory_lifecycle(_run(["remember"], ["remember"], sensitive=0))
+    by_name = {m.name: m for m in metrics}
+    pmw = by_name["prohibited_memory_write_count"]
+    assert pmw.numerator == 0
+    # score=0.0, at_most, threshold=0.0 → 0.0 <= 0.0 is True (passes)
+    assert pmw.passes is True

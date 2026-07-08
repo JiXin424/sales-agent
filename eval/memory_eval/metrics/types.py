@@ -7,7 +7,7 @@ perfect (§2.6).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Literal, Optional
 
 
 @dataclass
@@ -17,6 +17,7 @@ class MetricResult:
     denominator: int = 0
     score: float = 0.0
     threshold: Optional[float] = None
+    pass_if: Literal["at_least", "at_most"] = "at_least"
     applicable: bool = True
     error: Optional[str] = None
     sample_ids: list[str] = field(default_factory=list)
@@ -27,6 +28,8 @@ class MetricResult:
             return True  # errors/N-A never flip a product gate (§10)
         if self.threshold is None:
             return True
+        if self.pass_if == "at_most":
+            return self.score <= self.threshold
         return self.score >= self.threshold
 
 

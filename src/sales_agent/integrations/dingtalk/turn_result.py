@@ -40,6 +40,11 @@ class DingTalkTurnResult:
     last_event_id: str | None = None
     latency_ms: int = 0
     error: str | None = None
+    memory_operation: str | None = None
+    memory_status: str | None = None
+    memory_reason_code: str | None = None
+    memory_ids: list[str] | None = None
+    memory_candidate_count: int = 0
 
 
 __all__ = ["DingTalkTurnResult"]

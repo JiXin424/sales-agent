@@ -76,6 +76,7 @@ from .optimization_auth import (
     OptimizationApiCredential,
     OptimizationCommandAudit,
 )
+from .atomic_memory import AtomicMemory, MemoryOutboxJob, MemoryAuditEvent
 from .quick_session import QuickSession
 
 
@@ -160,4 +161,7 @@ __all__ = [
     "OptimizationApiCredential",
     "OptimizationCommandAudit",
     "QuickSession",
+    "AtomicMemory",
+    "MemoryOutboxJob",
+    "MemoryAuditEvent",
 ]

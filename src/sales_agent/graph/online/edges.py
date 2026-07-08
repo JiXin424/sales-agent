@@ -12,7 +12,7 @@ When ``scenario_coach_enabled`` is set, ``chat`` and ``direct_chat``
     divert to the ``scenario_coach`` node first (the original flow_action
     is preserved in state so ``route_after_scenario`` can resume the
     correct downstream path on a miss). Returns one of ``"duplicate"``,
-    ``"reset"``, ``"start"``, ``"cancel"``, ``"advance"``, ``"chat"``,
+    ``"reset"``, ``"memory_command"``, ``"start"``, ``"cancel"``, ``"advance"``, ``"chat"``,
     ``"direct_chat"``, or ``"scenario_coach"``.
     """
     flow_action = state.get("flow_action", "chat")

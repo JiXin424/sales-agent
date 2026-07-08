@@ -68,6 +68,12 @@ TURN_SCOPED_DEFAULTS: dict[str, Any] = {
     "retrieval_query": None,
     "needs_retrieval": None,
     "route_trace": None,
+    # Long-term memory defaults
+    "memory_operation": None,
+    "memory_status": None,
+    "memory_reason_code": None,
+    "memory_ids": [],
+    "memory_candidate_count": 0,
 }
 
 
@@ -78,6 +84,7 @@ def build_online_turn_input(
     guided_flows_enabled: bool, topic_routing_enabled: bool,
     scenario_coach_enabled: bool = False,
     reset_requested: bool = False,
+    long_term_memory_enabled: bool = False,
 ) -> OnlineConversationState:
     return {
         **copy.deepcopy(TURN_SCOPED_DEFAULTS),
@@ -94,6 +101,7 @@ def build_online_turn_input(
         "topic_routing_enabled": topic_routing_enabled,
         "scenario_coach_enabled": scenario_coach_enabled,
         "reset_requested": reset_requested,
+        "long_term_memory_enabled": long_term_memory_enabled,
     }
 
 
@@ -294,6 +302,7 @@ async def prepare_online_turn(
         topic_routing_enabled=settings.topic_routing.enabled,
         scenario_coach_enabled=settings.scenario_coach.enabled,
         reset_requested=reset_requested,
+        long_term_memory_enabled=settings.long_term_memory.enabled,
     )
     return PreparedOnlineTurn(
         graph=get_online_graph(checkpointer=checkpointer),

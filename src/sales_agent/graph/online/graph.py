@@ -12,7 +12,8 @@ Routing priority (highest first):
 2. ``guided_flows_enabled`` & a ``requested_flow`` trigger  →  ``"start"``
 3. ``guided_flows_enabled`` & ``active_flow`` & cancel command →  ``"cancel"``
 4. ``guided_flows_enabled`` & ``active_flow`` →  ``"advance"``
-5. Otherwise →  ``"chat"``
+5. **Memory command** — ``long_term_memory_enabled`` & explicit memory command
+6. Otherwise →  ``"chat"``
 
 File layout::
 
@@ -45,10 +46,12 @@ from sales_agent.graph.online.nodes import (
     context_resolution_node,
     direct_evidence_routing_node,
     duplicate_node,
+    enqueue_memory_candidate_node,
     evidence_routing_node,
     log_control_response_node,
     log_flow_output_node,
     log_scenario_response_node,
+    memory_command_node,
     normalize_turn_node,
     scenario_coach_node,
     reset_context_node,
@@ -99,6 +102,8 @@ def build_online_graph() -> StateGraph:
     builder.add_node("log_flow_output", log_flow_output_node)
     builder.add_node("scenario_coach", scenario_coach_node)
     builder.add_node("log_scenario_response", log_scenario_response_node)
+    builder.add_node("memory_command", memory_command_node)
+    builder.add_node("enqueue_memory_candidate", enqueue_memory_candidate_node)
 
     # ── Edges ──────────────────────────────────────────────────────
     builder.add_edge(START, "normalize_turn")
@@ -110,6 +115,7 @@ def build_online_graph() -> StateGraph:
         {
             "duplicate": "duplicate",
             "reset": "reset_context",
+            "memory_command": "memory_command",
             "start": "guided_flow",
             "cancel": "guided_flow",
             "advance": "guided_flow",
@@ -162,12 +168,14 @@ def build_online_graph() -> StateGraph:
     # Direct-chat path (topic_routing off): still classify intent so knowledge
     # questions retrieve; bypasses context_resolution/clarify only.
     builder.add_edge("direct_evidence_routing", "chat")
-    builder.add_edge("chat", END)
+    builder.add_edge("chat", "enqueue_memory_candidate")
+    builder.add_edge("enqueue_memory_candidate", END)
 
     # Guided flow path
     builder.add_edge("guided_flow", "log_flow_output")
     builder.add_edge("log_flow_output", END)
     builder.add_edge("duplicate", END)
+    builder.add_edge("memory_command", END)
 
     builder.add_edge("log_scenario_response", END)
 

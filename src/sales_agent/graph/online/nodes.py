@@ -47,6 +47,9 @@ from sales_agent.services.structured_router_output import (
 )
 from sales_agent.services.topic_manager import TopicManager, resolve_clarification
 
+from sales_agent.core.config import get_settings
+from sales_agent.scenarios import get_scenario_registry, match_scenario
+
 import json
 import logging
 from datetime import datetime, timezone
@@ -345,6 +348,107 @@ async def log_flow_output_node(
             )
         except Exception:
             logger.warning("Failed to log guided flow turn", exc_info=True)
+
+    return {"last_event_id": state.get("event_id")}
+
+
+# ====================================================================
+# scenario_coach
+# ====================================================================
+
+
+async def scenario_coach_node(
+    state: OnlineConversationState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """Match the user message against preset sales scenarios.
+
+    On a high-confidence match: set ``answer_dict`` (preset answer + manual
+    source citation) and ``response_kind="scenario"`` so the graph
+    short-circuits to the log node + END. On a miss: passthrough (return
+    only ``last_event_id``), leaving ``flow_action`` intact so
+    ``route_after_scenario`` resumes the normal downstream path.
+
+    Fail-open: any matcher failure is treated as a miss (lesson #34).
+    """
+    ctx = _unpack_context(config)
+    chat_model = ctx.get("chat_model") if ctx else None
+    message = state.get("message", "")
+    threshold = get_settings().scenario_coach.confidence_threshold
+
+    matcher_fn = ctx.get("scenario_matcher_override") if ctx else None
+    if matcher_fn is not None:
+        decision = await matcher_fn(
+            message=message, chat_model=chat_model, confidence_threshold=threshold
+        )
+    else:
+        decision = await match_scenario(
+            message=message, chat_model=chat_model, confidence_threshold=threshold
+        )
+
+    if decision.matched_question_id is None:
+        logger.debug("scenario_coach: no match (reason=%s)", decision.reason_code)
+        return {"last_event_id": state.get("event_id")}
+
+    registry = get_scenario_registry()
+    question = registry.get_question(decision.matched_question_id)
+    if question is None:
+        logger.warning("scenario_coach: matched id %s not in registry", decision.matched_question_id)
+        return {"last_event_id": state.get("event_id")}
+
+    answer_dict = {
+        "summary": question.answer_summary,
+        "sections": [
+            {"title": s.title, "content": s.content} for s in question.answer_sections
+        ],
+        "sources": [
+            {
+                "title": registry.source_name,
+                "display_title": registry.source_name,
+                "source_type": "scenario_coach",
+            }
+        ],
+    }
+    logger.info(
+        "scenario_coach: matched %s (confidence=%.2f)",
+        decision.matched_question_id,
+        decision.confidence,
+    )
+    return {
+        "answer_dict": answer_dict,
+        "response_kind": "scenario",
+        "last_event_id": state.get("event_id"),
+    }
+
+
+async def log_scenario_response_node(
+    state: OnlineConversationState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """Persist a scenario-coach preset answer to the conversation log.
+
+    Mirrors ``log_flow_output_node`` but with task_type/path="scenario".
+    """
+    ctx = _unpack_context(config)
+    db = ctx.get("db") if ctx else None
+
+    if db is not None:
+        answer_dict = state.get("answer_dict", {})
+        try:
+            await conversation_logger.log_conversation(
+                db,
+                tenant_id=state.get("tenant_id", ""),
+                user_id=state.get("user_id", ""),
+                channel=state.get("channel", "local"),
+                agent_id=state.get("agent_id"),
+                conversation_id=state.get("conversation_id", ""),
+                message=state.get("original_message") or state.get("message", ""),
+                task_type="scenario",
+                answer_dict=answer_dict,
+                path="scenario",
+            )
+        except Exception:
+            logger.warning("Failed to log scenario response", exc_info=True)
 
     return {"last_event_id": state.get("event_id")}
 

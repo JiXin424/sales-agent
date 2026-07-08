@@ -17,6 +17,10 @@ from sales_agent.services.memory.repository import AtomicMemoryRepository
 logger = logging.getLogger(__name__)
 
 
+def compute_backoff_seconds(attempts: int) -> int:
+    return min(300, 2 ** max(1, attempts))
+
+
 @dataclass(frozen=True)
 class OutboxProcessResult:
     candidate_count: int
@@ -89,7 +93,7 @@ async def run_memory_outbox_once(*, session_factory, chat_model, batch_size: int
                     row.status = "dead"
                 else:
                     row.status = "pending"
-                    row.available_at = _now() + timedelta(seconds=min(300, 2 ** row.attempts))
+                    row.available_at = _now() + timedelta(seconds=compute_backoff_seconds(row.attempts))
         await db.commit()
         return processed
 

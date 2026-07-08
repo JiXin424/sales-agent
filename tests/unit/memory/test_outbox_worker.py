@@ -50,3 +50,10 @@ async def test_process_outbox_payload_stores_candidate_without_user_reply():
 
     assert result.candidate_count == 1
     assert repo.stored == [("u1", "sales_region", "conv1", "event1")]
+
+
+def test_backoff_delay_is_bounded():
+    from sales_agent.services.memory.outbox_worker import compute_backoff_seconds
+
+    assert compute_backoff_seconds(1) == 2
+    assert compute_backoff_seconds(9) == 300

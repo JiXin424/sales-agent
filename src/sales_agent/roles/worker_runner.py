@@ -84,6 +84,47 @@ async def run() -> None:
     except Exception as e:
         logger.warning("Coach scheduler init skipped: %s", e)
 
+    # 长期记忆出箱 Worker
+    memory_task = None
+    if settings.long_term_memory.enabled and settings.long_term_memory.outbox_worker_enabled:
+        try:
+            from sqlalchemy import select
+            from sales_agent.services.memory.outbox_worker import memory_outbox_loop
+            from sales_agent.services.tenant_resolver import TenantResolver
+            from sales_agent.core.database import get_session_factory
+            from sales_agent.models.tenant import Tenant
+
+            factory = get_session_factory()
+            async with factory() as db:
+                tenant = (
+                    await db.execute(
+                        select(Tenant)
+                        .where(Tenant.status == "active")
+                        .order_by(Tenant.created_at.asc())
+                        .limit(1)
+                    )
+                ).scalar_one()
+                tenant_resolver = TenantResolver(db)
+                tenant_info = await tenant_resolver.resolve(tenant.id)
+                provider = tenant_resolver.get_model_provider(tenant_info)
+                memory_task = asyncio.create_task(
+                    memory_outbox_loop(
+                        chat_model=provider.chat,
+                        poll_interval_seconds=settings.long_term_memory.outbox_poll_interval_seconds,
+                        batch_size=settings.long_term_memory.outbox_batch_size,
+                        max_attempts=settings.long_term_memory.outbox_max_attempts,
+                    )
+                )
+                logger.info(
+                    "Memory outbox worker started (tenant=%s, poll=%ss, batch=%d, max_attempts=%d)",
+                    tenant.id,
+                    settings.long_term_memory.outbox_poll_interval_seconds,
+                    settings.long_term_memory.outbox_batch_size,
+                    settings.long_term_memory.outbox_max_attempts,
+                )
+        except Exception as e:
+            logger.warning("Memory outbox worker init skipped: %s", e)
+
     logger.info("Worker runner entering keepalive loop")
 
     # 保活循环：等待取消信号
@@ -99,6 +140,13 @@ async def run() -> None:
                 await stop_dingtalk_worker()
             except Exception as e:
                 logger.warning("Failed to stop DingTalk HTTP worker: %s", e)
+        if memory_task is not None:
+            memory_task.cancel()
+            try:
+                await memory_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("Memory outbox worker stopped")
         await close_online_runtime()
         await close_db()
         logger.info("Worker runner stopped cleanly")

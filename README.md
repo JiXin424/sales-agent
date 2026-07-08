@@ -516,7 +516,9 @@ docker compose up -d postgres
 ### 生产部署 — Dedicated Mode（多租户，每租户独立容器）
 
 仓库内置一份**已纳入 git 追踪的模板** `secrets/example.env`（仅此一个文件在 `secrets/` 下被追踪，
-真实租户 env 仍被 `.gitignore` 忽略）。
+真实租户 env 仍被 `.gitignore` 忽略）。该文件与根目录 `.env.example` 均为**软链**，
+共同指向唯一权威真源 `deploy/tenant.env.example`——改模板只需改这一处，且会随 CI/CD
+自动发布到无源码目标机（每次部署由 `deploy-remote.sh` 落盘到目标机 `secrets/example.env`）。
 
 ```bash
 # 1. 从模板为每个租户创建 .env 文件（example.env 本身永远不会被部署）
@@ -567,14 +569,14 @@ Docker 镜像、不推源码。为让这些机器也能停服务/查健康，每
 sales-agent/
 ├── docker-compose.yml              # Docker Compose（PostgreSQL + 多租户 Agent）
 ├── pyproject.toml                  # Python 项目配置
-├── .env.example                    # 环境变量模板
+├── .env.example                    # 环境变量模板（软链 → deploy/tenant.env.example）
 ├── .gitignore                      # Git 忽略（含 .env 和 secrets/）
 ├── config/
 │   └── default.yaml                # 全局默认配置（含延迟优化配置）
 ├── scripts/
 │   └── init-db.sql                 # 数据库初始化（pgvector 扩展）
 ├── secrets/                        # 租户密钥（不入 git）
-│   └── example.env                 #   租户 env 模板（neo4j.env.example 同级）
+│   └── example.env                 #   租户 env 模板（软链 → ../deploy/tenant.env.example，唯一权威真源）
 ├── data/sales-agent/tenants/       # 租户知识库
 │   └── taishan/documents/    #   产品介绍、FAQ、案例
 ├── eval/
@@ -814,7 +816,7 @@ PYTHONPATH=src pytest tests/integration/test_pilot_api.py -v
 
 | 日期 | 摘要 |
 |------|------|
-| [2026-07-08](changelog/2026-07-08.md) | scenario-coach: E2E 修复 + Durable Short-Term Memory（持久化短期记忆）：PostgreSQL LangGraph 持久化、稳定 Thread ID、Turn-scoped reset、Advisory lock、Bounded topic restore、标准/流式路径统一、钉钉重复投递静默、Reset 状态机、24 场景评估门控。详见 [`docs/runbooks/short-term-memory.md`](docs/runbooks/short-term-memory.md)。 |
+| [2026-07-08](changelog/2026-07-08.md) | scenario-coach: E2E 修复 + Durable Short-Term Memory（持久化短期记忆）：PostgreSQL LangGraph 持久化、稳定 Thread ID、Turn-scoped reset、Advisory lock、Bounded topic restore、标准/流式路径统一、钉钉重复投递静默、Reset 状态机、24 场景评估门控。详见 [`docs/runbooks/short-term-memory.md`](docs/runbooks/short-term-memory.md)。**+ 统一租户 env 模板**（同日）：三份漂移模板收敛为唯一权威真源 `deploy/tenant.env.example`（按最全的 `taishan.env` 补齐 `DINGTALK_MEDIA_*`/`EMBEDDING_*`/`BOCHA_API_KEY` 等），`secrets/example.env`+`.env.example` 改软链；`deploy/Dockerfile` COPY + `deploy-remote.sh` 每次部署幂等落盘到无源码机 `secrets/example.env`——根治「无源码机看不到新增 env 变量」（fuduoduo scenarios 不生效的深层因）。 |
 | [2026-07-07](changelog/2026-07-07.md) | **新增「会话历史」页：真实钉钉会话 checkpoint 只读回看（不 fork / 不 replay / 不动生产）**: LangGraph time-travel 此前只覆盖图调试 `debug:` 测试 run（真实会话被 `graph_debug._ensure_debug_thread` 403）。新增独立 router `conversation_history.py`（prefix `/agents/{agent_id}/history`），**仅 3 个 GET**（会话列表 / checkpoint 时间轴 / 单点 state），用 `conversation_id` 作 thread_id 调 `aget_state_history` 读回钉钉生产写入的 PG checkpoint；复用 graph_debug helper（DRY）。前端新增 `ConversationHistoryPage`（会话列表 + 手动输入兜底 + CheckpointDAG 时间轴 + JsonNode state viewer，均只读复用），挂 AgentLayout 子路由 `/agents/:agentId/history` + 侧边栏菜单。严格只读：AST/grep 证零 POST/aupdate_state/astream，不改 graph_stream/online_graph，无 DB migration。粒度=online graph 节点边界。后端 import + 前端 tsc 通过 + 接入 grep 持久化验证；真实会话端到端待部署。风险：state 含敏感数据，端点无强鉴权（同 graph_debug），依赖内网 |
 | [2026-07-07](changelog/2026-07-07.md) | **钉钉端置信度引用改造（删正文自报 + 文末编号来源列表）**: ① 删 `prompts/system.py:88`「库类别→固定百分比」自报规则（原竞品库=80% 等硬编码），换为系统文末统一附来源——正文不再出现 `(置信度NN%)`。② 新增 `integrations/dingtalk/citation.py` 的 `format_citation_block`（ontology→知识图谱 / web→网络搜索 / 其余→知识库，≤3 条按 title 去重），`graph_stream` finalize 时拼到正文末尾（方案 A 代码层拼接，LLM 不参与，标题原样精确）。③ `generate_node` 透传 `state.sources` 进 `answer_dict`；web 兜底 sources 补 `source_type=web`。ontology confidence=0.8 硬编码保留在 metadata 不显示。dingtalk 93 + graph 49 单测通过；端到端 stream 验证待部署 |
 | [2026-07-07](changelog/2026-07-07.md) | **清理 prompt 死代码 + 补注册 2 个 resolver + 三个 router prompt 运行时走 PromptRegistry + web 兜底默认启用**: ① 删零调用死代码 `services/context_loader.py::maybe_update_summary`（含内联 `summary_prompt`，全仓 grep 零残留）+ `ontology/img_parser.py::image_to_text`（保留 `IMAGE_INTERPRET_PROMPT`/`is_image_file`/`get_image_mime_type`，`ingestion_service` 仍走自有 `_image_to_text_via_vision`）。② `WebSearchConfig.enabled` 默认 False→True；无 `BOCHA_API_KEY` 时 `web_fallback_and_analyze` 仍安全 return None（`retrieve_node` 微开销可接受）。③ `BUILTIN_PROMPTS` 补注册 `router/context_resolver` + `router/clarification_resolver`（24→26），`/builtin`/`/effective` API 自动列出无需前端改；新增 `prompt_resolver_helper.resolve_router_prompt(db,key,tenant_id,agent_id,default)` helper（db 空或 resolve 抛错回退常量），三个 router service（`resolve_context`/`resolve_clarification`/`route_intent_evidence`）加可选 `db/tenant_id/agent_id` 参数、运行时走三级回退让后台编辑生效；`context_resolution_node` + `evidence_routing_node` 从 state 取 ids、ctx 取 db 传入；30 个单测不传 db 走旧常量路径零改动全过。④ `ChatPipeline` 强化 deprecation docstring（生产零调用，仅 `eval/deepeval_*.py` 依赖，待迁移后整文件删除），新建 `tasks/todo_eval_migrate_to_graph.md` 记录迁移工作。topic_routing 默认 OFF → 生产零行为变化。29 个 router service 单测通过 |

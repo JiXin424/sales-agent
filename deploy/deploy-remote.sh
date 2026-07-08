@@ -23,6 +23,16 @@ export $(grep -E '^NEO4J_PASSWORD=' "$WORKSPACE/secrets/neo4j.env" | xargs)
 
 echo "[deploy-remote] env=${ENV} app=${APP_IMAGE} workspace=${WORKSPACE} project=${PROJECT}"
 
+# 0. 同步租户 env 权威模板到目标机 secrets/example.env。
+#    无源码机没有源码仓库，本模板是它看到最新完整变量清单的唯一来源。
+#    只写保留名 example.env（deploy-release.sh / compose 都不会部署它），
+#    绝不触碰真实 <tenant>.env。幂等覆盖 → 模板随每次 CI/CD 部署自动更新。
+if [ -f /deploy/tenant.env.example ]; then
+  mkdir -p "$WORKSPACE/secrets"
+  cp -f /deploy/tenant.env.example "$WORKSPACE/secrets/example.env" \
+    && echo "[deploy-remote] 已同步 env 模板 → secrets/example.env"
+fi
+
 # 1. pull app 镜像 + frontend 镜像，retag 成 compose 引用的本地 tag(compose 里用 sales-agent:latest / sales-agent-frontend:latest)
 docker pull "$APP_IMAGE"
 docker tag "$APP_IMAGE" sales-agent:latest

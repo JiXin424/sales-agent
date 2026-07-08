@@ -6,5 +6,8 @@ RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.aliyun.com|g; s|dl-4.alpinelinux.or
 WORKDIR /deploy
 COPY deploy-remote.sh /deploy/deploy-remote.sh
 COPY compose-*.yml /deploy/
+# 租户 env 权威模板：随镜像发到无源码机，deploy-remote.sh 每次部署落盘到
+# 目标机 secrets/example.env，供运维参照最新完整变量清单编辑 <tenant>.env。
+COPY tenant.env.example /deploy/tenant.env.example
 RUN chmod +x /deploy/deploy-remote.sh
 ENTRYPOINT ["/deploy/deploy-remote.sh"]

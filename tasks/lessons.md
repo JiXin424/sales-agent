@@ -28,6 +28,7 @@
 - #29 CI fan-out `cmd || echo` 吞 exit code → 校验失败 job 仍 success  `[deploy]`
 - #32 ci-fanout 部署 prod2(本机)会 stash+reset 本机工作区  `[deploy]`
 - #39 多机手动部署:compose `NEO4J_PASSWORD` 插值因宿主不同(source 各异)漂移→误碰共享 db/neo4j;`--no-deps` 是保险丝;`docker save|gzip|ssh|load` 绕 registry 推镜像  `[deploy]`
+- #40 无源码机 env 模板投递:模板必放 `deploy/`(唯一进 deploy 镜像的位置)+`deploy-remote.sh` 落盘 `secrets/example.env`;软链单一真源消除三份漂移;新增 env 变量必须同步模板否则「本地好、服务器坏」  `[deploy]`
 
 ## graph / LangGraph  (6 条)  → [lessons/langgraph.md](lessons/langgraph.md)
 - #20 跨层 response 形状契约必须写死;checkpoint 字段别假设,probe dump  `[graph]`

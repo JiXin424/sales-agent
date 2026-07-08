@@ -107,7 +107,7 @@ def assemble_report(
     for group, (metrics, cms) in [
         ("deterministic_state_safety", evaluate_turn_topic(pairs)),
         ("persistence_isolation", evaluate_memory_lifecycle(pairs)),
-        ("persistence_isolation", (evaluate_recall_profile(pairs)[0], {})),
+        ("persistence_isolation", evaluate_recall_profile(pairs)),
         ("trajectory", evaluate_conversation(pairs)),
     ]:
         for metric in metrics:
@@ -187,8 +187,18 @@ def _make_restart_runtime():
     return _do
 
 
-async def _bind_test_database(test_db: str) -> None:
+async def _bind_test_database(test_db: str) -> dict:
     """Rebind the app session factory AND the online checkpointer to ``test_db``.
+
+    Returns a snapshot dict containing the original values of every global
+    that this function mutates, so the caller can restore them in a ``finally``
+    block and avoid poisoning the process for any later code::
+
+        snapshot = await _bind_test_database(test_url)
+        try:
+            ...
+        finally:
+            await _restore_database(snapshot)
 
     The checkpointer (``initialize_production_checkpointer``), the app session
     factory (``get_session_factory``), and the graph nodes all read the DB URL
@@ -204,6 +214,15 @@ async def _bind_test_database(test_db: str) -> None:
     from sales_agent.core.config import get_settings
 
     settings = get_settings()
+
+    # Snapshot originals before mutating.
+    snapshot = {
+        "database_url": settings.database.url,
+        "long_term_memory_enabled": settings.long_term_memory.enabled,
+        "engine": database._engine,
+        "session_factory": database._session_factory,
+    }
+
     settings.database.url = test_db
     # The memory_command routing gate reads this flag from the turn input,
     # which prepare_online_turn seeds from settings.long_term_memory.enabled.
@@ -226,6 +245,29 @@ async def _bind_test_database(test_db: str) -> None:
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    return snapshot
+
+
+async def _restore_database(snapshot: dict) -> None:
+    """Restore global DB settings and cached engine/factory from a snapshot.
+
+    Disposes the test engine (if one was created), resets the settings
+    singleton back to the original URL and memory flag, and restores the
+    cached ``_engine`` / ``_session_factory`` module globals.
+    """
+    import sales_agent.core.database as database
+    from sales_agent.core.config import get_settings
+
+    # Dispose the test engine that _bind_test_database created.
+    if database._engine is not None:
+        await database._engine.dispose()
+
+    settings = get_settings()
+    settings.database.url = snapshot["database_url"]
+    settings.long_term_memory.enabled = snapshot["long_term_memory_enabled"]
+    database._engine = snapshot["engine"]
+    database._session_factory = snapshot["session_factory"]
 
 
 async def _seed_eval_fixtures(factory, tenant_id: str, agent_id: str) -> None:
@@ -282,7 +324,7 @@ async def run_graph_multiturn(args) -> int:
 
     # Rebind the whole app stack (session factory + checkpointer) to the test DB,
     # create app tables, and seed the tenant/agent the graph resolves against.
-    await _bind_test_database(test_db)
+    snapshot = await _bind_test_database(test_db)
     from sales_agent.core.database import get_session_factory
     from sales_agent.services.online_conversation import (
         close_online_runtime,
@@ -329,6 +371,7 @@ async def run_graph_multiturn(args) -> int:
                 pairs.append((s, run))
     finally:
         await close_online_runtime()
+        await _restore_database(snapshot)
 
     report = assemble_report(pairs, collect_version_bundle(dataset_version=Path(args.dataset).stem))
     out = write_report(report, args.output)

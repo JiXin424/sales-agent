@@ -36,6 +36,24 @@ class AtomicMemoryRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
+    async def _enqueue_profile_rebuild(
+        self,
+        scope: MemoryScope,
+        *,
+        reason: str,
+        source_memory_id: str | None,
+    ) -> None:
+        try:
+            from sales_agent.services.memory.profile_repository import UserMemoryProfileRepository
+            profile_repo = UserMemoryProfileRepository(self.db)
+            await profile_repo.enqueue_profile_rebuild(
+                scope,
+                reason=reason,
+                source_memory_id=source_memory_id,
+            )
+        except Exception:
+            logger.warning("profile rebuild enqueue failed", exc_info=True)
+
     # ------------------------------------------------------------------
     # Conversion helpers
     # ------------------------------------------------------------------
@@ -210,6 +228,7 @@ class AtomicMemoryRepository:
                 reason_code="explicit_confirmed",
                 memory_id=row.id,
             )
+            await self._enqueue_profile_rebuild(scope, reason="memory_activated", source_memory_id=row.id)
             return MemoryOperationResult(
                 operation="remember",
                 status="success",
@@ -316,6 +335,7 @@ class AtomicMemoryRepository:
                     reason_code="user_requested",
                     memory_id=memory_id,
                 )
+                await self._enqueue_profile_rebuild(scope, reason="memory_deleted", source_memory_id=memory_id)
             return MemoryOperationResult(
                 operation="forget",
                 status="success",
@@ -454,6 +474,7 @@ class AtomicMemoryRepository:
                 reason_code="corroborated_two_evidence",
                 memory_id=existing.id,
             )
+            await self._enqueue_profile_rebuild(scope, reason="memory_activated", source_memory_id=existing.id)
             return MemoryOperationResult(
                 operation="candidate",
                 status="success",
@@ -530,4 +551,7 @@ class AtomicMemoryRepository:
                 .where(AtomicMemory.id.in_(ids))
                 .values(status="expired", updated_at=current.isoformat())
             )
+            for row in rows:
+                scope = MemoryScope(tenant_id=row.tenant_id, agent_id=row.agent_id, user_id=row.subject_id)
+                await self._enqueue_profile_rebuild(scope, reason="memory_expired", source_memory_id=row.id)
         return ExpiryResult(expired_count=len(ids), memory_ids=ids)

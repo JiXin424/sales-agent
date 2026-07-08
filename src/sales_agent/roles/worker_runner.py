@@ -84,6 +84,27 @@ async def run() -> None:
     except Exception as e:
         logger.warning("Coach scheduler init skipped: %s", e)
 
+    # 用户画像投影 Worker
+    profile_task = None
+    if settings.user_profile_memory.enabled and settings.user_profile_memory.worker_enabled:
+        try:
+            from sales_agent.services.memory.profile_worker import profile_rebuild_loop
+            profile_task = asyncio.create_task(
+                profile_rebuild_loop(
+                    poll_interval_seconds=settings.user_profile_memory.worker_poll_interval_seconds,
+                    batch_size=settings.user_profile_memory.rebuild_batch_size,
+                    max_attempts=settings.user_profile_memory.rebuild_max_attempts,
+                )
+            )
+            logger.info(
+                "Profile rebuild worker started (poll=%ss, batch=%d, max_attempts=%d)",
+                settings.user_profile_memory.worker_poll_interval_seconds,
+                settings.user_profile_memory.rebuild_batch_size,
+                settings.user_profile_memory.rebuild_max_attempts,
+            )
+        except Exception as e:
+            logger.warning("Profile rebuild worker init skipped: %s", e)
+
     # 长期记忆出箱 Worker
     memory_task = None
     if settings.long_term_memory.enabled and settings.long_term_memory.outbox_worker_enabled:
@@ -140,6 +161,13 @@ async def run() -> None:
                 await stop_dingtalk_worker()
             except Exception as e:
                 logger.warning("Failed to stop DingTalk HTTP worker: %s", e)
+        if profile_task is not None:
+            profile_task.cancel()
+            try:
+                await profile_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("Profile rebuild worker stopped")
         if memory_task is not None:
             memory_task.cancel()
             try:

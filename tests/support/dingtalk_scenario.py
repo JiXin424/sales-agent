@@ -29,7 +29,23 @@ class ExpectedTurn(BaseModel):
     active_flow: str | None = None
     flow_stage: str | None = None
     reply_contains: list[str] = Field(default_factory=list)
+    reply_not_contains: list[str] = Field(default_factory=list)
     reply_count: int = 1
+    # User profile memory recall expectations
+    memory_operation: str | None = None
+    memory_status: str | None = None
+    profile_ready: bool | None = None
+    profile_value: str | None = None
+    forbidden_profile_value: str | None = None
+    selected_memory_ids_min: int | None = None
+    selected_memory_ids_max: int | None = None
+    memory_context_max_items: int | None = None
+    memory_context_max_chars: int | None = None
+    must_not_restore_old_topic: bool | None = None
+    knowledge_policy: str | None = None
+    selected_memory_types: list[str] = Field(default_factory=list)
+    knowledge_override_violations: int | None = None
+    memory_degraded: bool | None = None
 
 
 class ScenarioTurn(BaseModel):

@@ -38,8 +38,8 @@ class TestNodeEdgeCounts:
     @pytest.mark.parametrize(
         "graph_id,expected_nodes,expected_edges",
         [
-            ("online", 14, 21),
-            ("online", 13, 20),
+            ("online", 15, 25),
+            ("online", 15, 25),
             ("guided-flow", 5, 6),
             ("chat", 12, 14),
         ],
@@ -50,14 +50,14 @@ class TestNodeEdgeCounts:
         assert len(g.edges) == expected_edges
 
     def test_online_node_count_not_stuck_at_two(self):
-        """Regression: every graph used to report node_count=2. online has 14."""
+        """Regression: every graph used to report node_count=2. online has 15."""
         g = _graph("online")
         assert len(g.nodes) != 2
-        assert len(g.nodes) == 14
-        """Regression: every graph used to report node_count=2. online has 13."""
+        assert len(g.nodes) == 15
+        """Regression: every graph used to report node_count=2. online has 15."""
         g = _graph("online")
         assert len(g.nodes) != 2
-        assert len(g.nodes) == 13
+        assert len(g.nodes) == 15
 
 
 class TestIdentifySubgraphNodes:
@@ -266,8 +266,8 @@ class TestEdges:
     """edges 字段从 compiled graph 取, source/target 必须是合法节点 id。"""
 
     @pytest.mark.parametrize("graph_id,expected_edges", [
-        ("online", 21),
-        ("online", 20),
+        ("online", 25),
+        ("online", 25),
         ("chat", 14),
         ("guided-flow", 6),
     ])

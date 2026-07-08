@@ -20,6 +20,7 @@ import logging
 from collections.abc import Awaitable, Callable
 
 from sales_agent.integrations.dingtalk.citation import format_citation_block
+from sales_agent.core.config import get_settings
 from sales_agent.services.online_conversation import get_online_graph
 from sales_agent.services.response_formatter import format_text_output
 from sales_agent.services.online_conversation import (
@@ -140,6 +141,7 @@ async def handle_dingtalk_stream_via_graph(
     Returns:
         The final graph state dict (with ``thread_id`` for shared identity).
     """
+    settings = get_settings()
     prepared = await prepare_online_turn(
         db=db,
         tenant_id=tenant_id,

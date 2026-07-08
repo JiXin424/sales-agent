@@ -77,6 +77,7 @@ from .optimization_auth import (
     OptimizationCommandAudit,
 )
 from .atomic_memory import AtomicMemory, MemoryOutboxJob, MemoryAuditEvent
+from .user_memory_profile import UserMemoryProfile, UserProfileRebuildJob
 from .quick_session import QuickSession
 
 
@@ -164,4 +165,6 @@ __all__ = [
     "AtomicMemory",
     "MemoryOutboxJob",
     "MemoryAuditEvent",
+    "UserMemoryProfile",
+    "UserProfileRebuildJob",
 ]

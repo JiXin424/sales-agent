@@ -196,6 +196,21 @@ class GuidedFlowsConfig(BaseModel):
     timezone: str = "Asia/Shanghai"
 
 
+class UserProfileMemoryConfig(BaseModel):
+    """Evidence-backed user profile projection and bounded recall."""
+
+    enabled: bool = False
+    recall_enabled: bool = True
+    transparency_enabled: bool = True
+    worker_enabled: bool = True
+    worker_poll_interval_seconds: float = 2.0
+    rebuild_batch_size: int = 20
+    rebuild_max_attempts: int = 5
+    max_recall_items: int = 5
+    max_recall_chars: int = 1200
+    retrieval_timeout_ms: int = 120
+
+
 class LongTermMemoryConfig(BaseModel):
     """Governed long-term atomic memory."""
 
@@ -235,6 +250,7 @@ class Settings(BaseModel):
     guided_flows: GuidedFlowsConfig = GuidedFlowsConfig()
     scenario_coach: ScenarioCoachConfig = ScenarioCoachConfig()
     long_term_memory: LongTermMemoryConfig = LongTermMemoryConfig()
+    user_profile_memory: UserProfileMemoryConfig = UserProfileMemoryConfig()
 
     # 延迟导入避免循环依赖
     @property

@@ -77,6 +77,27 @@ def check_gates(report: EvaluationReport) -> GateReport:
     return GateReport(passed=not failed, failed_gates=failed)
 
 
+def safety_gate_failed(report: EvaluationReport) -> bool:
+    """Return True iff any FAILED §6 release gate is a safety/isolation gate.
+
+    ``run_graph_multiturn`` / ``run_dingtalk_staging`` use this after
+    :func:`check_gates` to emit a DISTINCT exit code (3) when a safety gate
+    fails — so the gate script can treat it as a hard failure even while
+    tolerating quality misses under the deterministic double (§3.2/§3.4).
+    A safety gate is any member of :data:`_SAFETY_GATES`
+    (cross_scope_leakage / prohibited_memory_write_count /
+    assistant_output_to_user_memory). Quality-only gate failures do not trip
+    this; only isolation/safety regressions do.
+    """
+    gr = check_gates(report)
+    for entry in gr.failed_gates:
+        # failed_gates entries are "<metric>: <reason>".
+        metric = entry.split(":", 1)[0]
+        if metric in _SAFETY_GATES:
+            return True
+    return False
+
+
 def assistant_output_to_user_memory_violation(pairs) -> MetricResult:
     """Detect assistant text wrongly activated as a user-scoped memory (§6).
 
@@ -101,4 +122,4 @@ def assistant_output_to_user_memory_violation(pairs) -> MetricResult:
 
 
 __all__ = ["GATES", "GateReport", "GateSpec", "check_gates",
-           "assistant_output_to_user_memory_violation"]
+           "safety_gate_failed", "assistant_output_to_user_memory_violation"]

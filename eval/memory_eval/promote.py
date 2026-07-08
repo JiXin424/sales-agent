@@ -5,8 +5,14 @@ with an explicit expected state/outcome. The pure functions here are the
 unit-tested gate; :func:`run_promote_trace` in ``runner.py`` is the DB-backed
 mode that persists a ``PromotedRegression`` (status ``draft``).
 
-* §9.2 — anonymization drops outbound replies and any free-text that could
-  identify a user.
+* §9.2 — anonymization hashes the scope, drops outbound replies, and removes the
+  raw conversation dump. The per-turn user ``input`` is RETAINED verbatim in the
+  draft so a reviewer can reproduce the failure (§9.5); it MUST be
+  human-anonymized during the draft → reviewed → committed review flow (§9)
+  before the scenario enters a committed dataset. ``validate_dataset`` at
+  promote-time catches STRUCTURED identifiers (phone/email/id/secret) but NOT
+  free-text PII (names, addresses) — detecting free-text PII is the human
+  reviewer's job, not the automated gate's.
 * §9.3 — the trace is classified into one of the §9.3 root-cause categories.
 * §9.4 — a minimal regression scenario with explicit expected is produced and
   MUST pass ``validate_dataset`` before it can be committed to the suite.
@@ -38,12 +44,22 @@ _ROOT_CATEGORIES = (
 
 
 def anonymize_trace(trace: dict[str, Any]) -> dict[str, Any]:
-    """Drop outbound replies and any free-text that could identify a user (§9.2).
+    """Hash the scope and drop outbound replies (§9.2).
 
-    Outbound replies (``reply`` / ``outbound``) and any raw conversation dump are
-    removed; the structured per-turn ``input`` is retained because the resulting
-    scenario is re-validated by :func:`validate_dataset` (which rejects secrets
-    and direct identifiers) before it can be committed.
+    The scope identifiers (tenant/agent/user/thread) are already hashed upstream
+    in ``build_eval_trace``. This function drops outbound replies
+    (``reply`` / ``outbound``) and any raw conversation dump.
+
+    The per-turn user ``input`` is RETAINED verbatim — NOT redacted — so that a
+    reviewer can reproduce the failure (§9.5 reproducibility). Redacting the
+    input would break reproduction. The retained ``input`` MUST be
+    human-anonymized during the draft → reviewed → committed review flow (§9)
+    before the scenario enters a committed dataset.
+
+    :func:`validate_dataset` (run at promote-time in ``runner.py``) catches
+    STRUCTURED identifiers (phone/email/id/secret) but NOT free-text PII such as
+    names or addresses embedded in natural-language utterances — detecting
+    free-text PII is the human reviewer's responsibility, not this function's.
     """
     out = copy.deepcopy(trace)
     for t in out.get("turns", []):
@@ -82,9 +98,12 @@ def build_regression_scenario(
     :class:`ExpectedTurn`. The scenario is tagged with the classified root cause
     so the regression suite can group promoted scenarios by failure category.
 
-    The returned scenario is constructed to pass :func:`validate_dataset`:
-    ``anonymize_trace`` must have already scrubbed identifying free-text, and the
-    caller is responsible for passing non-identifying inputs.
+    The returned scenario is constructed to pass :func:`validate_dataset` for
+    STRUCTURED identifiers (phone/email/id/secret). The per-turn ``input`` is
+    retained verbatim from the trace (so a reviewer can reproduce the failure,
+    §9.5) and is NOT redacted here — free-text PII in those inputs MUST be
+    scrubbed by a human reviewer during the draft → reviewed → committed review
+    flow (§9) before the scenario enters a committed dataset.
     """
     raw_turns = trace.get("turns") or [{"input": "<redacted>"}]
     last_index = len(raw_turns) - 1

@@ -45,3 +45,14 @@ async def test_judge_timeout_is_reported_not_fatal():
     by_name = {m.name: m for m in metrics}
     assert by_name["semantic_relevance"].error is not None
     assert by_name["semantic_relevance"].passes is True   # error never flips gate (§10)
+
+
+@pytest.mark.asyncio
+async def test_not_pass_scores_zero():
+    # "NOT PASS" must NOT be scored as a pass (§10): the verdict is a negative,
+    # so the score must be 0.0, not 1.0. A bare substring check would wrongly
+    # match the "PASS" inside "NOT PASS".
+    metrics = await evaluate_semantic(_pair(), judge=_FakeJudge("NOT PASS"), timeout_seconds=2.0)
+    by_name = {m.name: m for m in metrics}
+    assert by_name["semantic_relevance"].error is None
+    assert by_name["semantic_relevance"].score == 0.0

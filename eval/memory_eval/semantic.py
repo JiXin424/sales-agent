@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any
 
 from eval.memory_eval.metrics.types import MetricResult
@@ -27,7 +28,13 @@ async def _judge_one(judge, prompt: str, timeout_seconds: float) -> tuple[float,
             judge.generate([{"role": "user", "content": prompt}]), timeout=timeout_seconds,
         )
         verdict = (raw or "").strip().upper()
-        score = 1.0 if "PASS" in verdict or "GOOD" in verdict else 0.0
+        # Token-level detection so "NOT PASS" is not mistaken for "PASS" (§10).
+        # A bare substring check ("PASS" in verdict) wrongly scores "NOT PASS"
+        # as a pass; the word-boundary regex with a NOT-PASS exclusion fixes it.
+        has_pass = bool(re.search(r"\bPASS\b", verdict)) and not bool(
+            re.search(r"\bNOT\s+PASS\b", verdict)
+        )
+        score = 1.0 if has_pass or bool(re.search(r"\bGOOD\b", verdict)) else 0.0
         return score, None
     except asyncio.TimeoutError:
         return 0.0, "judge timeout"

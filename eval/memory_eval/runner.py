@@ -24,7 +24,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 from eval.memory_eval.dataset import DatasetValidationError, load_scenarios, validate_dataset
-from eval.memory_eval.gates import assistant_output_to_user_memory_violation, check_gates
+from eval.memory_eval.gates import (
+    assistant_output_to_user_memory_violation,
+    check_gates,
+    safety_gate_failed,
+)
 from eval.memory_eval.metrics.conversation import evaluate_conversation
 from eval.memory_eval.metrics.memory_lifecycle import evaluate_memory_lifecycle
 from eval.memory_eval.metrics.recall_profile import evaluate_recall_profile
@@ -423,11 +427,18 @@ async def run_graph_multiturn(args) -> int:
 
     report = assemble_report(pairs, collect_version_bundle(dataset_version=Path(args.dataset).stem))
     _apply_release_gates(report)
+    safety_failed = safety_gate_failed(report)
     out = write_report(report, args.output)
     print(
         f"graph-multiturn: {'PASS' if report.thresholds_met else 'FAIL'}  "
         f"scenarios={len(pairs)} report={out}"
     )
+    # Safety/isolation gates must stay fail-closed even under the deterministic
+    # double: rc=3 distinguishes a safety violation from an expected quality
+    # miss (rc=1) so the gate script can hard-fail on a real isolation
+    # regression (Spec 4 §6). rc=2 stays "invalid execution".
+    if safety_failed:
+        return 3
     return 0 if report.thresholds_met else 1
 
 
@@ -689,11 +700,18 @@ async def run_dingtalk_staging(args) -> int:
         pairs, collect_version_bundle(dataset_version=Path(args.dataset).stem)
     )
     _apply_release_gates(report)
+    safety_failed = safety_gate_failed(report)
     out = write_report(report, args.output)
     print(
         f"dingtalk-staging: {'PASS' if report.thresholds_met else 'FAIL'}  "
         f"scenarios={len(pairs)} report={out}"
     )
+    # Safety/isolation gates must stay fail-closed even under the deterministic
+    # double: rc=3 distinguishes a safety violation from an expected quality
+    # miss (rc=1) so the gate script can hard-fail on a real isolation
+    # regression (Spec 4 §6). rc=2 stays "invalid execution".
+    if safety_failed:
+        return 3
     return 0 if report.thresholds_met else 1
 
 
@@ -734,12 +752,25 @@ def compare_reports(baseline: dict, candidate: dict) -> dict:
             labels[name] = "fixed"
         else:
             delta = cm["score"] - bm["score"]
-            if delta > REGRESSION_TOLERANCE:
-                labels[name] = "improved"
-            elif delta < -REGRESSION_TOLERANCE:
-                labels[name] = "regressed"
+            # Direction-aware labelling (§7): for ``at_most`` safety metrics
+            # (leakage / prohibited-write / assistant-output counts) an INCREASE
+            # is a regression and a DECREASE is an improvement — the inverse of
+            # the default ``at_least`` quality metrics. ``pass_if`` is serialized
+            # by ``_metric_to_dict`` so compare can tell direction.
+            if cm.get("pass_if", "at_least") == "at_most":
+                if delta > REGRESSION_TOLERANCE:
+                    labels[name] = "regressed"
+                elif delta < -REGRESSION_TOLERANCE:
+                    labels[name] = "improved"
+                else:
+                    labels[name] = "unchanged"
             else:
-                labels[name] = "unchanged"
+                if delta > REGRESSION_TOLERANCE:
+                    labels[name] = "improved"
+                elif delta < -REGRESSION_TOLERANCE:
+                    labels[name] = "regressed"
+                else:
+                    labels[name] = "unchanged"
     for name in base:
         if name not in cand:
             labels[name] = "removed"

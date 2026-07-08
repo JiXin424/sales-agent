@@ -32,15 +32,21 @@ python3 eval/memory_eval/runner.py unit-memory \
 # The deterministic model double can never meet §6 quality thresholds
 # (explicit_operation_accuracy >= 1.0, recall >= 0.9), so rc=1 is expected.
 # Quality gates are enforced by model-multiturn (real model, Spec §3.3/§6).
+# rc=3 means a SAFETY/isolation gate failed (cross_scope_leakage /
+# prohibited_memory_write_count / assistant_output_to_user_memory) — that is a
+# real isolation regression and must hard-fail the gate even though we tolerate
+# the rc=1 quality miss under the double.
 echo "--- Phase B: graph-multiturn (§3.2) ---"
-phase_b_rc=0
+set +e
 python3 eval/memory_eval/runner.py graph-multiturn \
   --dataset eval/memory/datasets/multiturn_v1.jsonl \
-  --output "${OUTPUT_DIR}/graph-multiturn" \
-  || phase_b_rc=$?
+  --output "${OUTPUT_DIR}/graph-multiturn"
+phase_b_rc=$?
+set -e
 case "$phase_b_rc" in
   0) ;;
   1) echo "Phase B: graph-multiturn quality thresholds not met under the deterministic double (expected — quality gates are enforced by model-multiturn, Spec §3.3/§6)" ;;
+  3) echo "Phase B FAILED: safety/isolation gate violated"; rc=1 ;;
   *) echo "Phase B FAILED"; rc=1 ;;
 esac
 

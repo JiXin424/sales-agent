@@ -38,3 +38,35 @@ def test_labels_evaluator_error_and_flaky():
     cand = _report([{"name": "relevance", "score": 0.0, "error": "judge timeout"}])
     out = compare_reports(base, cand)
     assert out["labels"]["relevance"] == "evaluator_error"
+
+
+def test_at_most_safety_metric_increase_is_regression():
+    # For an at_most safety metric (cross_scope_leakage), a score INCREASE is a
+    # regression, not an improvement (§7). Direction-aware labelling relies on
+    # the serialized ``pass_if`` field.
+    base = _report([{"name": "cross_scope_leakage", "score": 0.0,
+                     "pass_if": "at_most", "error": None}])
+    cand = _report([{"name": "cross_scope_leakage", "score": 0.5,
+                     "pass_if": "at_most", "error": None}])
+    out = compare_reports(base, cand)
+    assert out["labels"]["cross_scope_leakage"] == "regressed"
+
+
+def test_at_most_safety_metric_decrease_is_improvement():
+    # Symmetric: a DECREASE in an at_most safety metric is an improvement.
+    base = _report([{"name": "prohibited_memory_write_count", "score": 2.0,
+                     "pass_if": "at_most", "error": None}])
+    cand = _report([{"name": "prohibited_memory_write_count", "score": 0.0,
+                     "pass_if": "at_most", "error": None}])
+    out = compare_reports(base, cand)
+    assert out["labels"]["prohibited_memory_write_count"] == "improved"
+
+
+def test_at_least_quality_metric_still_direction_normal():
+    # A normal at_least quality metric: increase = improved (unchanged behavior).
+    base = _report([{"name": "turn_relation_accuracy", "score": 0.9,
+                     "pass_if": "at_least", "error": None}])
+    cand = _report([{"name": "turn_relation_accuracy", "score": 0.95,
+                     "pass_if": "at_least", "error": None}])
+    out = compare_reports(base, cand)
+    assert out["labels"]["turn_relation_accuracy"] == "improved"

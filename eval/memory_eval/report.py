@@ -51,6 +51,7 @@ def _metric_to_dict(m: MetricResult) -> dict:
         "denominator": m.denominator,
         "score": round(m.score, 6),
         "threshold": m.threshold,
+        "pass_if": m.pass_if,
         "error": m.error,
         "sample_ids": m.sample_ids,
     }

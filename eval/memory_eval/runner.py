@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from eval.memory_eval.dataset import DatasetValidationError, load_scenarios, validate_dataset
+from eval.memory_eval.gates import assistant_output_to_user_memory_violation, check_gates
 from eval.memory_eval.metrics.conversation import evaluate_conversation
 from eval.memory_eval.metrics.memory_lifecycle import evaluate_memory_lifecycle
 from eval.memory_eval.metrics.recall_profile import evaluate_recall_profile
@@ -101,9 +102,11 @@ def assemble_report(
         total_scenarios=len(pairs),
         total_turns=sum(len(s.turns) for s, _ in pairs),
     )
-    # TODO(Task 16): add assistant_output_to_user_memory_violation(pairs) to
-    # persistence_isolation once gates.py exists. Do not fail the build on its
-    # absence here.
+    # Assistant-output-to-user-memory violation (§6): counts assistant text
+    # wrongly activated as a user-scoped memory. Added before the metric modules
+    # so it lands in the persistence_isolation group alongside the other safety
+    # gates (prohibited_memory_write_count / cross_scope_leakage).
+    report.add_metric("persistence_isolation", assistant_output_to_user_memory_violation(pairs))
     for group, (metrics, cms) in [
         ("deterministic_state_safety", evaluate_turn_topic(pairs)),
         ("persistence_isolation", evaluate_memory_lifecycle(pairs)),
@@ -115,6 +118,23 @@ def assemble_report(
         for name, cm in cms.items():
             report.add_confusion(name, cm)
     return report
+
+
+def _apply_release_gates(report: EvaluationReport) -> None:
+    """Enforce the §6 release gate list (fail-closed) before writing a report.
+
+    The per-metric ``thresholds_met`` flag already flips on each metric's own
+    ``pass_if`` threshold. This adds the authoritative §6 gate list on top:
+    every release gate is checked, and an isolation/safety gate that was never
+    evaluated counts as a FAILURE. Gate failures are merged into
+    ``report.failures`` so the exit code (and written report) reflects both
+    signals. Call this between :func:`assemble_report` and :func:`write_report`
+    in every report-emitting mode.
+    """
+    gr = check_gates(report)
+    if not gr.passed:
+        report.thresholds_met = False
+        report.failures.extend(gr.failed_gates)
 
 
 def _load_or_fail(dataset: str) -> list[MultiturnScenario]:
@@ -374,6 +394,7 @@ async def run_graph_multiturn(args) -> int:
         await _restore_database(snapshot)
 
     report = assemble_report(pairs, collect_version_bundle(dataset_version=Path(args.dataset).stem))
+    _apply_release_gates(report)
     out = write_report(report, args.output)
     print(
         f"graph-multiturn: {'PASS' if report.thresholds_met else 'FAIL'}  "
@@ -474,6 +495,7 @@ async def run_model_multiturn(args) -> int:
         pairs, collect_version_bundle(dataset_version=Path(args.dataset).stem)
     )
     report.consistency = consistency
+    _apply_release_gates(report)
     out = write_report(report, args.output)
     print(
         f"model-multiturn: {'PASS' if report.thresholds_met else 'FAIL'}  "
@@ -638,6 +660,7 @@ async def run_dingtalk_staging(args) -> int:
     report = assemble_report(
         pairs, collect_version_bundle(dataset_version=Path(args.dataset).stem)
     )
+    _apply_release_gates(report)
     out = write_report(report, args.output)
     print(
         f"dingtalk-staging: {'PASS' if report.thresholds_met else 'FAIL'}  "

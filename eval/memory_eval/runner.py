@@ -35,7 +35,7 @@ from eval.memory_eval.model_double import (
     TurnScript,
 )
 from eval.memory_eval.report import EvaluationReport, write_report
-from eval.memory_eval.schema import MultiturnScenario, ScenarioRun
+from eval.memory_eval.schema import MultiturnScenario, ObservedTurn, ScenarioRun
 from eval.memory_eval.scenario_runner import ScenarioRunner
 from eval.memory_eval.versions import collect_version_bundle
 
@@ -482,14 +482,174 @@ async def run_model_multiturn(args) -> int:
     return 0 if report.thresholds_met else 1
 
 
+# --- dingtalk-staging (Spec 4 §3.4) ---
+
+
+async def run_dingtalk_staging(args) -> int:
+    """§3.4: normalized HTTP/stream events through ``handle_dingtalk_event``.
+
+    Drives the real DingTalk processor against the test DB with staging users,
+    deterministic model doubles, and a :class:`PublicReplyCapture` that keeps
+    ONLY public outbound delivery (dropping ``[internal]``/``[audit]``/
+    ``[memory-internal]`` prefixed messages). Restart + worker-switch steps
+    between turns are honored via the runtime re-init callback. Agent
+    resolution runs naturally against a seeded tenant-default agent (no
+    monkeypatching).
+
+    Refuses a non-test DB (rc=2, §11). Returns 0 when all quality thresholds
+    are met, 1 otherwise.
+    """
+    import dataclasses
+
+    test_db = os.environ.get("TEST_DATABASE_URL", "")
+    if "test" not in test_db:
+        print("dingtalk-staging requires TEST_DATABASE_URL containing 'test'", file=sys.stderr)
+        return 2  # invalid execution (§11)
+
+    scenarios = _load_or_fail(args.dataset)
+    scripts = build_scripts_from_scenarios(scenarios)
+    double = ScriptedModelDouble(scripts)
+    embedding_double = DeterministicEmbeddingDouble()
+
+    # Rebind the whole app stack (session factory + checkpointer) to the test DB,
+    # create app tables, and seed the tenant/agent the processor resolves against.
+    snapshot = await _bind_test_database(test_db)
+    from sales_agent.core.config import get_settings
+    from sales_agent.core.database import get_session_factory
+    from sales_agent.integrations.dingtalk.config import DingTalkConfig
+    from sales_agent.integrations.dingtalk.processor import handle_dingtalk_event
+    from sales_agent.services.online_conversation import (
+        close_online_runtime,
+        initialize_online_runtime,
+    )
+    from eval.memory_eval.dingtalk_capture import PublicReplyCapture
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    settings = get_settings()
+    await _seed_eval_fixtures(get_session_factory, args.tenant_id, args.agent_id)
+    restart_runtime = _make_restart_runtime()
+    config = DingTalkConfig()
+
+    pairs: list[tuple[MultiturnScenario, ScenarioRun]] = []
+    await close_online_runtime()
+    try:
+        await initialize_online_runtime()
+        # Per-invocation token keeps the Online Graph's duplicate-event detection
+        # honest: thread_id is derived from session_user_id (the DingTalk
+        # sender_id), so a fresh token yields fresh thread_ids and a re-run
+        # against the persistent test DB is not classified as a duplicate.
+        run_token = uuid.uuid4().hex[:8]
+
+        # Inject deterministic model doubles at the resolution boundary.
+        # ``handle_dingtalk_event`` calls ``invoke_online_turn`` internally
+        # without exposing model params, so the doubles must be injected where
+        # ``resolve_online_models`` is called (mirroring graph-multiturn's
+        # injection of the same doubles via the ctx dict).
+        async def _resolve_with_doubles(*, db, tenant_id, chat_model=None, embedding_model=None):
+            return double, embedding_double
+
+        with patch(
+            "sales_agent.services.online_conversation.resolve_online_models",
+            _resolve_with_doubles,
+        ):
+            for s in scenarios:
+                observed: list[ObservedTurn] = []
+                # Fresh session per scenario (same pattern as graph-multiturn).
+                async with get_session_factory()() as db:
+                    runtime = SimpleNamespace(tenant_id=args.tenant_id)
+                    for i, turn in enumerate(s.turns):
+                        # Advance the scripted double to THIS turn's script.
+                        double.set_turn(s.id, i)
+
+                        # Restart step (§3.4): close + re-init the online
+                        # runtime between turns to exercise cold-start state
+                        # recovery from the checkpointer.
+                        if turn.restart_before:
+                            await restart_runtime()
+
+                        # Worker-switch (§3.4): the worker_id label is noted
+                        # but does not rebind agent resolution — in production
+                        # the DingTalk channel resolves to one agent per tenant
+                        # regardless of which worker processes the event.
+                        # Agent resolution runs naturally against the seeded
+                        # tenant-default agent (no monkeypatch).
+
+                        cap = PublicReplyCapture()
+                        result = await handle_dingtalk_event(
+                            db,
+                            config,
+                            settings,
+                            runtime,
+                            event_id=turn.event_id or f"{s.id}-{i}",
+                            corp_id="staging-corp",
+                            sender_id=f"{s.id}-sender-{run_token}",
+                            sender_name="staging",
+                            message_type="text",
+                            text=turn.input,
+                            dingtalk_conversation_id=f"{s.id}-dt-{run_token}",
+                            reply_fn=cap.reply,
+                        )
+                        # Query normalized keys for the active memories written
+                        # this turn (mirrors _default_capture in
+                        # scenario_runner.py — memory_ids are UUIDs, but
+                        # active_memory_keys must be the human-readable
+                        # normalized_key values the metrics compare against).
+                        active_keys: list[str] = []
+                        if result.memory_ids:
+                            from sqlalchemy import select
+                            from sales_agent.models.atomic_memory import AtomicMemory
+
+                            rows = (
+                                await db.execute(
+                                    select(AtomicMemory.normalized_key).where(
+                                        AtomicMemory.id.in_(result.memory_ids),
+                                        AtomicMemory.status == "active",
+                                    )
+                                )
+                            ).scalars().all()
+                            active_keys = list(rows)
+                        observed.append(
+                            ObservedTurn(
+                                turn_index=i,
+                                result=dataclasses.asdict(result),
+                                replies=cap.public_replies,
+                                active_topic_ids=[],
+                                closed_topic_ids=[],
+                                active_memory_keys=active_keys,
+                                selected_memory_ids=result.selected_memory_ids or [],
+                                duplicate=result.response_kind == "duplicate",
+                            )
+                        )
+                        # Persist this turn's writes so the next turn (and the
+                        # checkpointer) see consistent state.
+                        await db.commit()
+                pairs.append(
+                    (s, ScenarioRun(scenario_id=s.id, observed=observed, final_state={}))
+                )
+    finally:
+        await close_online_runtime()
+        await _restore_database(snapshot)
+
+    report = assemble_report(
+        pairs, collect_version_bundle(dataset_version=Path(args.dataset).stem)
+    )
+    out = write_report(report, args.output)
+    print(
+        f"dingtalk-staging: {'PASS' if report.thresholds_met else 'FAIL'}  "
+        f"scenarios={len(pairs)} report={out}"
+    )
+    return 0 if report.thresholds_met else 1
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     """CLI dispatcher for the seven documented modes (Spec 4 §11).
 
-    Async modes (``graph-multiturn``, ``model-multiturn`` and the later
-    ``dingtalk-staging`` / ``online-sample`` / ``promote-trace``) all route
-    through one ``asyncio.run(_async_dispatch(args))`` so later tasks only add
-    a branch to ``_async_dispatch``. ``unit-memory`` and ``compare`` stay
-    synchronous.
+    Async modes (``graph-multiturn``, ``model-multiturn``,
+    ``dingtalk-staging``, and the later ``online-sample`` / ``promote-trace``)
+    all route through one ``asyncio.run(_async_dispatch(args))`` so later tasks
+    only add a branch to ``_async_dispatch``. ``unit-memory`` and ``compare``
+    stay synchronous.
     """
     parser = argparse.ArgumentParser(
         prog="memory-eval", description="Spec 4 memory evaluation"
@@ -517,6 +677,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--no-credentials", action="store_true",
                    help="assert credentials are absent (forces rc=2, invalid execution)")
 
+    p = sub.add_parser(
+        "dingtalk-staging",
+        help="drive the real DingTalk processor with staging users (§3.4)",
+    )
+    p.add_argument("--dataset", default=DEFAULT_DATASET)
+    p.add_argument("--output", default=f"{DEFAULT_OUTPUT}/dingtalk-staging")
+    p.add_argument("--tenant-id", default="eval-tenant")
+    p.add_argument("--agent-id", default="eval-agent")
+
     args = parser.parse_args(argv)
 
     # All async modes share one event loop / dispatch entry point.
@@ -537,18 +706,19 @@ def main(argv: Optional[list[str]] = None) -> int:
 async def _async_dispatch(args) -> int:
     """Route async modes to their handlers (Spec 4 §11).
 
-    Later tasks register ``dingtalk-staging`` / ``online-sample`` /
-    ``promote-trace`` here. Keeping a single dispatch entry point means
-    ``main`` only needs one ``asyncio.run`` call regardless of how many async
-    modes exist.
+    Later tasks register ``online-sample`` / ``promote-trace`` here. Keeping
+    a single dispatch entry point means ``main`` only needs one
+    ``asyncio.run`` call regardless of how many async modes exist.
     """
     if args.mode == "graph-multiturn":
         return await run_graph_multiturn(args)
     if args.mode == "model-multiturn":
         return await run_model_multiturn(args)
-    # Later async modes (dingtalk-staging / online-sample / promote-trace) are
-    # registered by Tasks 14/19/21. Reaching here means the subparser accepted
-    # a mode that has no handler yet — treat as invalid execution.
+    if args.mode == "dingtalk-staging":
+        return await run_dingtalk_staging(args)
+    # Later async modes (online-sample / promote-trace) are registered by
+    # Tasks 19/21. Reaching here means the subparser accepted a mode that has
+    # no handler yet — treat as invalid execution.
     raise SystemExit(f"unhandled async mode: {args.mode}")
 
 

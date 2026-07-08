@@ -865,13 +865,14 @@ async def run_promote_trace(args) -> int:
 
     Reads a ``MemoryEvalTraceRecord`` by id, anonymizes it (§9.2), classifies its
     root cause (§9.3), builds a minimal regression scenario with the explicit
-    expected state/outcome (§9.4), and persists a ``PromotedRegression`` with
-    status ``draft`` and ``anonymized=True``. The persisted scenario is exactly
-    what :func:`build_regression_scenario` produces, so it has already passed
-    :func:`validate_dataset` at promotion time.
+    expected state/outcome (§9.4), and **validates the built scenario via
+    :func:`validate_dataset`** (rejects secrets, direct identifiers, unreviewed
+    tags — §9.4/§10).  If validation fails the promotion is refused (rc=2) and
+    no ``PromotedRegression`` row is persisted.
 
-    Returns ``2`` (invalid execution, §11) when the trace id is unknown; ``0``
-    once the draft regression is committed.
+    Returns ``2`` (invalid execution, §11) when the trace id is unknown **or**
+    when the built scenario fails the anonymization/structure gate; ``0`` once
+    the draft regression is committed.
     """
     import json
 
@@ -902,6 +903,11 @@ async def run_promote_trace(args) -> int:
             scenario_id=args.scenario_id,
             expected=json.loads(args.expected) if args.expected else {},
         )
+        errors = validate_dataset([scenario])
+        if errors:
+            for e in errors:
+                print(f"PROMOTE REJECTED: {e}", file=sys.stderr)
+            return 2  # invalid execution — refuse to persist a scenario that fails the anonymization/structure gate (§9.4/§10)
         pr = PromotedRegression(
             tenant_id=rec.tenant_id,
             source_trace_id=args.trace_id,

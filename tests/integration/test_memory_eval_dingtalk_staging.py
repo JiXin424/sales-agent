@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 
 import pytest
 
@@ -21,8 +22,13 @@ async def test_dingtalk_staging_captures_public_reply(tmp_path):
     if "test" not in os.environ.get("TEST_DATABASE_URL", ""):
         pytest.skip("TEST_DATABASE_URL not set to a test database")
 
-    # Minimal dataset: one explicit-remember scenario. The deterministic model
-    # double is scripted from the expected fields by build_scripts_from_scenarios.
+    # Dataset mixes an explicit-remember scenario (memory_command, bypasses
+    # tenant_resolve) with a chat-path scenario that routes through the chat
+    # node → resolve_tenant → TenantResolver.resolve → check_tenant_match.
+    # The chat-path turn is the regression guard for the standalone-CLI
+    # tenant-mismatch defect: run_dingtalk_staging's turn loop has no
+    # try/except, so a TenantMismatchError would propagate and fail this test
+    # (rather than being silently absorbed).
     ds = tmp_path / "ds.jsonl"
     ds.write_text(
         json.dumps(
@@ -39,6 +45,29 @@ async def test_dingtalk_staging_captures_public_reply(tmp_path):
                             "memory_operation": "remember",
                             "active_memory_keys": ["sales_region"],
                             "reply_contains": ["华东"],
+                        },
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "id": "dt-chat-001",
+                "version": 1,
+                "tags": ["chat"],
+                "turns": [
+                    {
+                        "input": "帮我看看福多多产品怎么讲",
+                        # Unique per invocation: the chat path enqueues an
+                        # ``infer_candidates`` row keyed by (tenant, event_id),
+                        # so a deterministic id would collide on the persistent
+                        # test DB across re-runs.
+                        "event_id": f"dt-chat-001-1-{uuid.uuid4().hex[:8]}",
+                        "expected": {
+                            "turn_relation": "new",
+                            "reply_contains": ["福多多"],
                         },
                     }
                 ],
@@ -64,10 +93,16 @@ async def test_dingtalk_staging_captures_public_reply(tmp_path):
     assert rc in (0, 1), f"unexpected rc={rc}"
     assert (tmp_path / "out" / "report.json").exists(), "report.json not written"
 
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    # Both scenarios processed — the chat-path turn (which hits resolve_tenant)
+    # did not abort the run with TenantMismatchError.
+    assert report["total_scenarios"] == 2, (
+        f"expected both scenarios processed, got {report['total_scenarios']}"
+    )
+
     # Non-hollow execution: the staging runner must have genuinely driven the
     # DingTalk processor through the Online Graph. The memory_command node
     # observed memory_operation == "remember" and produced a public reply.
-    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
     persistence = {
         m["name"]: m for m in report.get("groups", {}).get("persistence_isolation", [])
     }

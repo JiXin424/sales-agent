@@ -207,14 +207,14 @@ def _make_restart_runtime():
     return _do
 
 
-async def _bind_test_database(test_db: str) -> dict:
+async def _bind_test_database(test_db: str, tenant_id: str | None = None) -> dict:
     """Rebind the app session factory AND the online checkpointer to ``test_db``.
 
     Returns a snapshot dict containing the original values of every global
     that this function mutates, so the caller can restore them in a ``finally``
     block and avoid poisoning the process for any later code::
 
-        snapshot = await _bind_test_database(test_url)
+        snapshot = await _bind_test_database(test_url, tenant_id)
         try:
             ...
         finally:
@@ -228,9 +228,16 @@ async def _bind_test_database(test_db: str) -> dict:
     bug where only the checkpointer was patched while ``get_session_factory``
     still bound to the unreachable ``localhost:5432`` dev DB.
 
+    When ``tenant_id`` is given, the dedicated-mode ``TenantRuntime`` singleton
+    is rebound to it so chat-path turns (which hit the graph's ``resolve_tenant``
+    node → ``TenantResolver.resolve`` → ``check_tenant_match``) do not raise
+    ``TenantMismatchError``. ``load_dotenv()`` does not override an already-set
+    env var, so setting ``TENANT_ID`` here wins over any ``.env`` value.
+
     The §11 "refuse a non-test DB" contract is enforced by the caller's guard.
     """
     import sales_agent.core.database as database
+    import sales_agent.core.tenant_runtime as tenant_runtime
     from sales_agent.core.config import get_settings
 
     settings = get_settings()
@@ -241,7 +248,16 @@ async def _bind_test_database(test_db: str) -> dict:
         "long_term_memory_enabled": settings.long_term_memory.enabled,
         "engine": database._engine,
         "session_factory": database._session_factory,
+        "tenant_id_env": os.environ.get("TENANT_ID"),
     }
+
+    # Rebind the dedicated-mode tenant runtime so ``check_tenant_match`` passes
+    # for the eval tenant (chat-path turns route through ``resolve_tenant``).
+    if tenant_id is not None:
+        os.environ["TENANT_ID"] = tenant_id
+        # Force a rebuild on the next ``get_tenant_runtime()`` call; the prior
+        # singleton was built from the old env value and would mismatch.
+        tenant_runtime._runtime = None
 
     settings.database.url = test_db
     # The memory_command routing gate reads this flag from the turn input,
@@ -274,9 +290,12 @@ async def _restore_database(snapshot: dict) -> None:
 
     Disposes the test engine (if one was created), resets the settings
     singleton back to the original URL and memory flag, and restores the
-    cached ``_engine`` / ``_session_factory`` module globals.
+    cached ``_engine`` / ``_session_factory`` module globals. Also restores
+    the original ``TENANT_ID`` env var and drops the tenant-runtime singleton
+    so it rebuilds lazily from the restored env on next use.
     """
     import sales_agent.core.database as database
+    import sales_agent.core.tenant_runtime as tenant_runtime
     from sales_agent.core.config import get_settings
 
     # Dispose the test engine that _bind_test_database created.
@@ -288,6 +307,15 @@ async def _restore_database(snapshot: dict) -> None:
     settings.long_term_memory.enabled = snapshot["long_term_memory_enabled"]
     database._engine = snapshot["engine"]
     database._session_factory = snapshot["session_factory"]
+
+    # Restore TENANT_ID and drop the singleton so the next consumer rebuilds it
+    # from the restored env (avoid leaking the eval tenant into later code).
+    original_tenant = snapshot.get("tenant_id_env")
+    if original_tenant is None:
+        os.environ.pop("TENANT_ID", None)
+    else:
+        os.environ["TENANT_ID"] = original_tenant
+    tenant_runtime._runtime = None
 
 
 async def _seed_eval_fixtures(factory, tenant_id: str, agent_id: str) -> None:
@@ -344,7 +372,7 @@ async def run_graph_multiturn(args) -> int:
 
     # Rebind the whole app stack (session factory + checkpointer) to the test DB,
     # create app tables, and seed the tenant/agent the graph resolves against.
-    snapshot = await _bind_test_database(test_db)
+    snapshot = await _bind_test_database(test_db, args.tenant_id)
     from sales_agent.core.database import get_session_factory
     from sales_agent.services.online_conversation import (
         close_online_runtime,
@@ -535,7 +563,7 @@ async def run_dingtalk_staging(args) -> int:
 
     # Rebind the whole app stack (session factory + checkpointer) to the test DB,
     # create app tables, and seed the tenant/agent the processor resolves against.
-    snapshot = await _bind_test_database(test_db)
+    snapshot = await _bind_test_database(test_db, args.tenant_id)
     from sales_agent.core.config import get_settings
     from sales_agent.core.database import get_session_factory
     from sales_agent.integrations.dingtalk.config import DingTalkConfig

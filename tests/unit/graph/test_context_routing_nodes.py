@@ -708,3 +708,74 @@ async def test_pending_continue_through_graph(online_graph, config, mock_topic, 
     assert result.get("response_kind") == "chat"
     assert result.get("context_status") == "resolved"
     mock_topic_manager.resolve_pending.assert_awaited_once()
+
+
+# ===================================================================
+# Completed Guided Flow followed by a normal message routes to chat
+# ===================================================================
+
+
+@pytest.mark.asyncio
+async def test_completed_flow_then_normal_message_routes_to_chat(online_graph, config):
+    """After a Guided Flow completes (completed_flow set, active_flow cleared),
+    the next ordinary message must route to chat — NOT advance the completed
+    flow. This must still hold after the Task 6 reset additions."""
+    await online_graph.ainvoke(
+        {
+            "tenant_id": "t1", "agent_id": "a1", "user_id": "u1",
+            "session_user_id": "u1", "channel": "dingtalk",
+            "conversation_id": "c1", "message": "访前准备",
+            "event_id": "e-start",
+            "guided_flows_enabled": True,
+        },
+        config=config,
+        context={"db": None, "chat_model": None, "chat_runner": StubChatRunner()},
+    )
+    for i, msg in enumerate(
+        ["客户是CTO", "他们在评估方案", "希望下周签约"], start=2,
+    ):
+        await online_graph.ainvoke(
+            {
+                "tenant_id": "t1", "agent_id": "a1", "user_id": "u1",
+                "session_user_id": "u1", "channel": "dingtalk",
+                "conversation_id": "c1", "message": msg,
+                "event_id": f"e-adv-{i}",
+                "guided_flows_enabled": True,
+            },
+            config=config,
+            context={"db": None, "chat_model": None, "chat_runner": StubChatRunner()},
+        )
+
+    state_after = await online_graph.aget_state(config)
+    assert state_after.values.get("active_flow") is None
+
+    result = await online_graph.ainvoke(
+        {
+            "tenant_id": "t1", "agent_id": "a1", "user_id": "u1",
+            "session_user_id": "u1", "channel": "dingtalk",
+            "conversation_id": "c1", "message": "帮我总结一下",
+            "event_id": "e-after",
+            "guided_flows_enabled": True,
+            "topic_routing_enabled": True,
+        },
+        config=config,
+        context={
+            "db": None,
+            "chat_model": None,
+            "chat_runner": StubChatRunner(),
+            "context_resolver_override": AsyncMock(
+                return_value=_make_context_decision(
+                    turn_relation="continue",
+                    standalone_query="帮我总结一下",
+                ),
+            ),
+            "evidence_router_override": AsyncMock(
+                return_value=_make_evidence_decision(
+                    intent="general_sales_coaching",
+                    knowledge_policy="none",
+                ),
+            ),
+        },
+    )
+    assert result.get("response_kind") == "chat"
+    assert result.get("active_flow") is None

@@ -147,10 +147,14 @@ def normalize_turn_node(state: OnlineConversationState) -> dict[str, Any]:
     Routing priority (first match wins):
 
     1. **Duplicate** — ``event_id`` matches ``last_event_id``.
-    2. **Start** — guided flows enabled & a requested-flow trigger.
-    3. **Cancel** — guided flows enabled & active flow & cancel command.
-    4. **Advance** — guided flows enabled & active flow.
-    5. **Chat** — default.
+    2. **Reset** — ``reset_requested`` is ``True`` (Task 6).
+    3. **Start** — guided flows enabled & a requested-flow trigger.
+    4. **Cancel** — guided flows enabled & active flow & cancel command.
+    5. **Advance** — guided flows enabled & active flow.
+    6. **Chat** — default.
+
+    Reset must not fire on a duplicate — a redelivered reset event is a
+    no-op, not a second state clear.
     """
     guided_enabled = state.get("guided_flows_enabled", False)
     message = state.get("message", "")
@@ -167,6 +171,8 @@ def normalize_turn_node(state: OnlineConversationState) -> dict[str, Any]:
 
     if event_id and event_id == last_event_id:
         flow_action = "duplicate"
+    elif state.get("reset_requested"):
+        flow_action = "reset"
     elif guided_enabled and requested_flow:
         flow_action = "start"
     elif guided_enabled and state.get("active_flow") and is_cancel_command(message):
@@ -313,7 +319,8 @@ async def log_control_response_node(
                 path="clarify",
             )
         except Exception:
-            logger.warning("Failed to log control response", exc_info=True)
+            logger.exception("Failed to persist completed online turn")
+            raise
 
     return {"last_event_id": state.get("event_id")}
 
@@ -356,9 +363,93 @@ async def log_flow_output_node(
                 path="guided_flow",
             )
         except Exception:
-            logger.warning("Failed to log guided flow turn", exc_info=True)
+            logger.exception("Failed to persist completed online turn")
+            raise
 
     return {"last_event_id": state.get("event_id")}
+
+
+# ====================================================================
+# reset_context_node (Task 6)
+# ====================================================================
+
+
+# Reset confirmation emitted when a reset command carries no remaining
+# message suffix. The user is told a new topic is open and prompted to
+# state what they want to work on next.
+_RESET_CONFIRMATION = "已开启新话题。你可以直接说当前要处理的销售问题。"
+
+
+async def reset_context_node(
+    state: OnlineConversationState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """Close the active Topic + clear pending clarification + clear guided
+    flow state, then either emit the reset confirmation (empty message) or
+    hand the remaining message to ``context_resolution`` for a clean topic
+    (force_new_topic).
+
+    Routing (wired in ``graph.py``)::
+
+        reset_context --empty message--> log_control_response --> END
+        reset_context --remaining message--> context_resolution --> ...
+
+    This node does NOT set ``last_event_id``: the empty-message path is
+    logged by ``log_control_response_node`` (which sets it after a
+    successful log), and the remaining-message path is logged by the Chat
+    Graph's ``log_node``. A failed terminal node therefore cannot write
+    ``last_event_id``.
+    """
+    ctx = _unpack_context(config)
+    db = ctx.get("db") if ctx else None
+    now = ctx.get("now") or datetime.now(timezone.utc)
+
+    # Close the active Topic in the caller transaction. Uses the same
+    # scope/db pattern as context_resolution_node.
+    scope = {
+        "tenant_id": state.get("tenant_id", ""),
+        "agent_id": state.get("agent_id", ""),
+        "user_id": state.get("user_id", ""),
+        "channel": state.get("channel", ""),
+    }
+
+    if db is not None:
+        manager: TopicManager = (
+            ctx.get("topic_manager") if ctx and "topic_manager" in ctx
+            else TopicManager()
+        )
+        topic = await manager.get_active_topic(db, **scope)
+        if topic is not None:
+            topic.status = "closed"
+            topic.closed_at = now
+            topic.pending_clarification_json = None
+            await db.flush()
+
+    # Common state: clear flow + force a clean topic for whatever follows.
+    base: dict[str, Any] = {
+        "active_flow": None,
+        "flow_stage": None,
+        "flow_payload": {},
+        "force_new_topic": True,
+        "turn_relation": "new",
+        "pending_clarification_id": None,
+        "clarification_state": None,
+    }
+
+    message = (state.get("message") or "").strip()
+    if not message:
+        # Empty suffix → emit the reset confirmation and route to
+        # log_control_response (which sets last_event_id after logging).
+        return {
+            **base,
+            "answer_dict": {"summary": _RESET_CONFIRMATION, "sections": []},
+            "response_kind": "reset",
+        }
+
+    # Remaining suffix → context_resolution creates a clean topic and
+    # routes through evidence_routing → chat. The message is already the
+    # suffix (the processor strips the reset command before invoking).
+    return base
 
 
 # ====================================================================
@@ -833,6 +924,48 @@ async def context_resolution_node(
     }
     conversation_id = state.get("conversation_id", "")
     event_id = state.get("event_id") or ""
+
+    # ── force_new_topic: reset cleared the slate; create a clean topic ──
+    # reset_context_node already closed the active topic; we must NOT
+    # restore the just-closed topic (or any other) — skip active/restorable
+    # selection entirely and create a brand-new topic for the remaining
+    # message. The flag is cleared in the output so it doesn't persist.
+    if state.get("force_new_topic"):
+        if db is None and "topic_manager" not in (ctx or {}):
+            return {
+                "context_status": "resolved",
+                "standalone_query": message,
+                "original_message": original_message,
+                "turn_relation": "new",
+                "force_new_topic": False,
+                "pending_clarification_id": None,
+                "clarification_state": None,
+            }
+        topic = await manager.create_topic(
+            db,
+            tenant_id=scope["tenant_id"],
+            agent_id=scope["agent_id"],
+            user_id=scope["user_id"],
+            channel=scope["channel"],
+            conversation_id=conversation_id,
+            summary=message,
+            current_goal=message,
+            now=now,
+        )
+        if db is not None:
+            await db.flush()
+        return {
+            "context_status": "resolved",
+            "topic_id": topic.id,
+            "turn_relation": "new",
+            "standalone_query": message,
+            "retained_entities": [],
+            "retracted_goals": [],
+            "original_message": original_message,
+            "force_new_topic": False,
+            "pending_clarification_id": None,
+            "clarification_state": None,
+        }
 
     # ── Passthrough mode ──────────────────────────────────────────
     # When there is no DB and no injected topic_manager, skip topic

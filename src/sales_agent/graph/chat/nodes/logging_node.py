@@ -60,8 +60,9 @@ async def log_node(state: ChatGraphState, runtime: Runtime) -> dict:
             path_reason=state.get("path_reason", ""),
             topic_id=topic_id,
         )
-    except Exception as e:
-        logger.warning("Failed to log conversation: %s", e)
+    except Exception:
+        logger.exception("Failed to persist completed online turn")
+        raise
 
     # ── Topic summary update after successful turn ──────────────────
     if topic_id and db is not None:

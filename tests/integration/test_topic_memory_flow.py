@@ -283,3 +283,32 @@ class TestTopicSummaryUpdate:
         # Verify topic_id was passed through
         call_kwargs = mock_log.call_args[1]
         assert call_kwargs.get("topic_id") == "topic_xyz"
+
+    @pytest.mark.asyncio
+    async def test_log_node_reraises_when_log_conversation_fails(self):
+        """log_node must re-raise when log_conversation raises — a failed
+        terminal persistence is not swallowable. The worker/session owner
+        retains commit/rollback responsibility (Task 6 Step 6)."""
+        from sales_agent.graph.chat.nodes.logging_node import log_node
+
+        runtime = MagicMock()
+        db = AsyncMock()
+        runtime.context = {"db": db}
+
+        state: ChatGraphState = {
+            "tenant_id": "t1",
+            "user_id": "u1",
+            "message": "test",
+            "conversation_id": "c1",
+            "channel": "local",
+            "topic_id": "topic_xyz",
+            "answer_dict": {"summary": "ok", "sections": []},
+        }
+
+        with patch(
+            "sales_agent.graph.chat.nodes.logging_node.conversation_logger.log_conversation",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("db connection lost"),
+        ):
+            with pytest.raises(RuntimeError, match="db connection lost"):
+                await log_node(state, runtime)

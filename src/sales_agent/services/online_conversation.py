@@ -6,6 +6,9 @@ Provides:
 - ``build_online_turn_input`` — constructor for fresh turn input
 - ``get_online_graph`` — cached compiled Online Graph (process-level
   PostgreSQL checkpoint singleton)
+- ``resolve_online_models`` — resolve chat + embedding models for a tenant
+- ``prepare_online_turn`` — resolve agent/models/graph + build stable thread
+  ID and new-turn input WITHOUT invoking the Graph (Task 6)
 - ``invoke_online_turn`` — public API to process a single turn
 - ``initialize_online_runtime`` — initialize the checkpoint and compile graph
 - ``close_online_runtime`` — close the checkpoint and clear cached graph
@@ -15,6 +18,7 @@ from __future__ import annotations
 
 import copy
 import logging
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -30,6 +34,7 @@ from sales_agent.graph.online.graph import build_online_graph
 from sales_agent.graph.online.state import OnlineConversationState
 from sales_agent.services.agent_service import resolve_tenant_agent_id
 from sales_agent.services.online_turn_lock import acquire_online_turn_lock
+from sales_agent.services.tenant_resolver import TenantResolver
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +216,111 @@ def get_online_graph(*, checkpointer=None) -> CompiledStateGraph:
 
 
 # ====================================================================
+# Prepared turn contract (Task 6)
+# ====================================================================
+
+
+@dataclass(frozen=True)
+class PreparedOnlineTurn:
+    """Immutable bundle of everything needed to invoke the Online Graph.
+
+    Resolved once by ``prepare_online_turn`` so that the standard
+    (``invoke_online_turn``) and streaming (``handle_dingtalk_stream_via_graph``)
+    paths share identical thread ID, input state, config, context, and Graph.
+    Neither path builds its own thread ID or duplicates the input dict.
+    """
+
+    graph: CompiledStateGraph
+    thread_id: str
+    input_state: OnlineConversationState
+    config: dict[str, Any]
+    context: dict[str, Any]
+
+
+async def resolve_online_models(
+    *, db, tenant_id: str, chat_model=None, embedding_model=None,
+) -> tuple[Any, Any]:
+    """Resolve the chat + embedding models for a tenant.
+
+    Returns the injected pair as-is when both are provided; otherwise
+    resolves the missing one(s) from the tenant config via
+    :class:`TenantResolver`.
+    """
+    if chat_model is not None and embedding_model is not None:
+        return chat_model, embedding_model
+    resolver = TenantResolver(db)
+    tenant_info = await resolver.resolve(tenant_id)
+    provider = resolver.get_model_provider(tenant_info)
+    return chat_model or provider.chat, embedding_model or provider.embedding
+
+
+async def prepare_online_turn(
+    *,
+    db,
+    tenant_id: str,
+    agent_id: str | None,
+    user_id: str,
+    session_user_id: str,
+    channel: str,
+    conversation_id: str,
+    message: str,
+    entry_action: str | None = None,
+    event_id: str | None = None,
+    reset_requested: bool = False,
+    chat_model=None,
+    embedding_model=None,
+    now: datetime | None = None,
+    checkpointer=None,
+) -> PreparedOnlineTurn:
+    """Resolve the agent + models, build the stable thread ID and new-turn
+    input, and select the strict cached/test-injected Graph.
+
+    This does NOT invoke or stream — it returns a
+    :class:`PreparedOnlineTurn` that the caller feeds to
+    ``graph.ainvoke``/``graph.astream`` after acquiring the advisory lock.
+    Centralising this here guarantees the standard and streaming paths use
+    the same thread ID, input, config, context, and Graph.
+    """
+    agent = await resolve_tenant_agent_id(db, tenant_id, agent_id)
+    resolved_chat, resolved_embedding = await resolve_online_models(
+        db=db,
+        tenant_id=tenant_id,
+        chat_model=chat_model,
+        embedding_model=embedding_model,
+    )
+    thread_id = build_online_thread_id(
+        tenant_id, agent.id, channel, session_user_id,
+    )
+    settings = get_settings()
+    input_state = build_online_turn_input(
+        tenant_id=tenant_id,
+        agent_id=agent.id,
+        user_id=user_id,
+        session_user_id=session_user_id,
+        channel=channel,
+        conversation_id=conversation_id,
+        message=message,
+        entry_action=entry_action,
+        event_id=event_id,
+        guided_flows_enabled=settings.guided_flows.enabled,
+        topic_routing_enabled=settings.topic_routing.enabled,
+        reset_requested=reset_requested,
+    )
+    return PreparedOnlineTurn(
+        graph=get_online_graph(checkpointer=checkpointer),
+        thread_id=thread_id,
+        input_state=input_state,
+        config={"configurable": {"thread_id": thread_id}},
+        context={
+            "db": db,
+            "chat_model": resolved_chat,
+            "embedding_model": resolved_embedding,
+            "now": now,
+        },
+    )
+
+
+# ====================================================================
 # Public API
 # ====================================================================
 
@@ -227,6 +337,7 @@ async def invoke_online_turn(
     message: str,
     entry_action: str | None = None,
     event_id: str | None = None,
+    reset_requested: bool = False,
     chat_model=None,
     embedding_model=None,
     now: datetime | None = None,
@@ -234,15 +345,10 @@ async def invoke_online_turn(
 ) -> dict:
     """Process a single online conversation turn.
 
-    This is the public production entry point.  It:
-
-    1. Resolves the tenant agent via ``resolve_tenant_agent_id``.
-    2. Reads ``guided_flows`` settings.
-    3. Resolves model providers if *chat_model* / *embedding_model* are
-       not supplied.
-    4. Builds a date-scoped thread ID.
-    5. Obtains (or reuses) the compiled Online Graph.
-    6. Invokes the graph and returns the final state.
+    This is the public production entry point.  It prepares the turn
+    (resolve agent + models, build thread ID + input, select Graph),
+    acquires the transaction-scoped advisory lock for the thread, invokes
+    the Graph, and returns the final state with ``thread_id`` merged in.
 
     Args:
         db: Async SQLAlchemy session.
@@ -256,6 +362,8 @@ async def invoke_online_turn(
         message: User message text.
         entry_action: Optional entry action for flow triggering.
         event_id: Optional event ID for deduplication.
+        reset_requested: When ``True``, the Graph clears active flow/topic
+            state before processing (Task 6 reset semantics).
         chat_model: Chat model instance.  If ``None``, resolved from
             tenant config via ``TenantResolver``.
         embedding_model: Embedding model instance.  If ``None``,
@@ -266,53 +374,10 @@ async def invoke_online_turn(
     Returns:
         The final graph state dict after processing the turn.
     """
-    # 1. Resolve agent
-    agent = await resolve_tenant_agent_id(db, tenant_id, agent_id)
-
-    # 2. Get settings
-    settings = get_settings()
-
-    # 3. Resolve models if not provided — do this once here so that
-    #    individual graph nodes never need to create providers.
-    resolved_chat_model = chat_model
-    resolved_embedding_model = embedding_model
-
-    if resolved_chat_model is None or resolved_embedding_model is None:
-        from sales_agent.services.tenant_resolver import TenantResolver
-
-        resolver = TenantResolver(db)
-        tenant_info = await resolver.resolve(tenant_id)
-        model_provider = resolver.get_model_provider(tenant_info)
-        if resolved_chat_model is None:
-            resolved_chat_model = model_provider.chat
-        if resolved_embedding_model is None:
-            resolved_embedding_model = model_provider.embedding
-
-    # 4. Build thread ID
-    thread_id = build_online_thread_id(
-        tenant_id,
-        agent.id,
-        channel,
-        session_user_id,
-    )
-
-    # 4b. Acquire the transaction-scoped advisory lock for this thread
-    # BEFORE invoking the Graph. This serializes same-thread turns across
-    # worker processes: a concurrent worker delivering a turn for the same
-    # thread blocks here until this caller's transaction commits/rolls
-    # back, guaranteeing the second worker sees the latest checkpoint.
-    # The caller owns the transaction and must commit/rollback after the
-    # Graph invocation and persistence complete; this acquires the lock
-    # but does not manage the transaction lifecycle.
-    await acquire_online_turn_lock(db, thread_id)
-
-    # 5. Get graph
-    graph = get_online_graph(checkpointer=checkpointer)
-
-    # 6. Build input
-    input_state = build_online_turn_input(
+    prepared = await prepare_online_turn(
+        db=db,
         tenant_id=tenant_id,
-        agent_id=agent.id,
+        agent_id=agent_id,
         user_id=user_id,
         session_user_id=session_user_id,
         channel=channel,
@@ -320,22 +385,26 @@ async def invoke_online_turn(
         message=message,
         entry_action=entry_action,
         event_id=event_id,
-        guided_flows_enabled=settings.guided_flows.enabled,
-        topic_routing_enabled=settings.topic_routing.enabled,
+        reset_requested=reset_requested,
+        chat_model=chat_model,
+        embedding_model=embedding_model,
+        now=now,
+        checkpointer=checkpointer,
     )
 
-    # 7. Invoke
-    result = await graph.ainvoke(
-        input_state,
-        config={"configurable": {"thread_id": thread_id}},
-        context={
-            "db": db,
-            "chat_model": resolved_chat_model,
-            "embedding_model": resolved_embedding_model,
-            "now": now,
-        },
+    # Acquire the transaction-scoped advisory lock for this thread BEFORE
+    # invoking the Graph. This serializes same-thread turns across worker
+    # processes. The caller owns the transaction and must commit/rollback
+    # after the Graph invocation and persistence complete; this acquires
+    # the lock but does not manage the transaction lifecycle.
+    await acquire_online_turn_lock(db, prepared.thread_id)
+
+    graph_result = await prepared.graph.ainvoke(
+        prepared.input_state,
+        prepared.config,
+        context=prepared.context,
     )
 
     # Thread the thread_id into the result so callers/tests can observe
     # identity. Harmless for existing callers that use result.get(...).
-    return {**result, "thread_id": thread_id}
+    return {**graph_result, "thread_id": prepared.thread_id}

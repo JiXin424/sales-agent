@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
@@ -562,3 +562,228 @@ async def test_initialize_online_runtime_compiles_once(monkeypatch):
     mock_init.assert_awaited_once()
     # Verify compile was called once with the saver
     mock_compile.assert_called_once_with(mock_saver)
+
+
+# ====================================================================
+# Reset state-machine (Task 6)
+# ====================================================================
+
+
+def test_normalize_turn_reset_priority_after_duplicate():
+    """reset_requested=True must NOT fire on a duplicate event — duplicate
+    detection wins over reset so a redelivered reset cannot clear state twice."""
+    from sales_agent.graph.online.nodes import normalize_turn_node
+
+    state = {
+        "guided_flows_enabled": True,
+        "message": "重新开始",
+        "event_id": "ev-1",
+        "last_event_id": "ev-1",  # duplicate
+        "reset_requested": True,
+    }
+    result = normalize_turn_node(state)
+    assert result["flow_action"] == "duplicate"
+
+
+def test_normalize_turn_reset_when_requested():
+    """reset_requested=True (non-duplicate) sets flow_action='reset'."""
+    from sales_agent.graph.online.nodes import normalize_turn_node
+
+    state = {
+        "guided_flows_enabled": True,
+        "message": "重新开始",
+        "event_id": "ev-1",
+        "last_event_id": "ev-0",  # not duplicate
+        "reset_requested": True,
+    }
+    result = normalize_turn_node(state)
+    assert result["flow_action"] == "reset"
+
+
+@pytest.mark.asyncio
+async def test_reset_clears_active_flow(online_graph, config):
+    """A reset_requested turn with an empty message clears active flow state
+    and emits the reset confirmation, routing through log_control_response."""
+    await online_graph.ainvoke(
+        _make_input("小赢欣赏", event_id="e1"),
+        config=config,
+        context=_CONTEXT,
+    )
+    result = await online_graph.ainvoke(
+        _make_input("", event_id="e2", reset_requested=True),
+        config=config,
+        context=_CONTEXT,
+    )
+    assert result["active_flow"] is None
+    assert result["flow_stage"] is None
+    assert result["flow_payload"] == {}
+    assert result.get("force_new_topic") is True
+    assert result["turn_relation"] == "new"
+    assert result["response_kind"] == "reset"
+    assert "已开启新话题" in result["answer_dict"]["summary"]
+    assert result["last_event_id"] == "e2"
+
+
+@pytest.mark.asyncio
+async def test_reset_with_remaining_message_reaches_chat(online_graph, config):
+    """A reset with a remaining suffix clears flow state and routes the
+    suffix through context_resolution -> evidence_routing -> chat in the
+    SAME turn. force_new_topic makes context_resolution create a clean topic."""
+    await online_graph.ainvoke(
+        _make_input("小赢欣赏", event_id="e1"),
+        config=config,
+        context=_CONTEXT,
+    )
+    result = await online_graph.ainvoke(
+        _make_input("帮我写开场白", event_id="e2", reset_requested=True),
+        config=config,
+        context=_CONTEXT,
+    )
+    assert result["active_flow"] is None
+    assert result["flow_stage"] is None
+    assert result["response_kind"] == "chat"
+    assert result.get("context_status") == "resolved"
+    assert result.get("force_new_topic") is not True
+    assert result["last_event_id"] == "e2"
+
+
+@pytest.mark.asyncio
+async def test_thread_id_unchanged_across_reset(online_graph):
+    """The thread ID is stable across a reset — reset is an explicit state
+    transition, not a new random conversation ID."""
+    tid = "test:stable-reset-thread"
+    cfg = {"configurable": {"thread_id": tid}}
+
+    await online_graph.ainvoke(
+        _make_input("小赢欣赏", event_id="e1"),
+        config=cfg,
+        context=_CONTEXT,
+    )
+    await online_graph.ainvoke(
+        _make_input("", event_id="e2", reset_requested=True),
+        config=cfg,
+        context=_CONTEXT,
+    )
+    state = await online_graph.aget_state(cfg)
+    assert state.config["configurable"]["thread_id"] == tid
+    assert state.values.get("active_flow") is None
+
+
+@pytest.mark.asyncio
+async def test_reset_does_not_advance_old_flow_on_next_message(online_graph, config):
+    """After a reset, the next ordinary message does NOT advance the old
+    guided flow — it routes to context_resolution / chat as a new turn."""
+    await online_graph.ainvoke(
+        _make_input("小赢欣赏", event_id="e1"),
+        config=config,
+        context=_CONTEXT,
+    )
+    await online_graph.ainvoke(
+        _make_input("", event_id="e2", reset_requested=True),
+        config=config,
+        context=_CONTEXT,
+    )
+    result = await online_graph.ainvoke(
+        _make_input("今天见了一个客户", event_id="e3"),
+        config=config,
+        context=_CONTEXT,
+    )
+    assert result["response_kind"] == "chat"
+    assert result.get("active_flow") is None
+    assert result.get("flow_stage") is None
+
+
+# ====================================================================
+# Persistence failure re-raises (Task 6 Step 6)
+# ====================================================================
+
+
+@pytest.mark.asyncio
+async def test_log_control_response_node_raises_on_log_failure():
+    """log_control_response_node must re-raise when log_conversation fails."""
+    from sales_agent.graph.online.nodes import log_control_response_node
+    from types import SimpleNamespace
+
+    cfg = {
+        "configurable": {
+            "__pregel_runtime": SimpleNamespace(context={"db": AsyncMock()}),
+        }
+    }
+    with patch(
+        "sales_agent.graph.online.nodes.conversation_logger.log_conversation",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("db down"),
+    ):
+        with pytest.raises(RuntimeError, match="db down"):
+            await log_control_response_node(
+                {
+                    "tenant_id": "t1", "agent_id": "a1", "user_id": "u1",
+                    "channel": "dingtalk", "conversation_id": "c1",
+                    "message": "reset", "event_id": "ev-1",
+                    "answer_dict": {"summary": "已开启新话题"},
+                },
+                cfg,
+            )
+
+
+@pytest.mark.asyncio
+async def test_log_flow_output_node_raises_on_log_failure():
+    """log_flow_output_node must re-raise when log_conversation fails."""
+    from sales_agent.graph.online.nodes import log_flow_output_node
+    from types import SimpleNamespace
+
+    cfg = {
+        "configurable": {
+            "__pregel_runtime": SimpleNamespace(context={"db": AsyncMock()}),
+        }
+    }
+    with patch(
+        "sales_agent.graph.online.nodes.conversation_logger.log_conversation",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("db down"),
+    ):
+        with pytest.raises(RuntimeError, match="db down"):
+            await log_flow_output_node(
+                {
+                    "tenant_id": "t1", "agent_id": "a1", "user_id": "u1",
+                    "channel": "dingtalk", "conversation_id": "c1",
+                    "message": "advance", "event_id": "ev-1",
+                    "active_flow": "small_win_appreciation",
+                    "answer_dict": {"summary": "ok"},
+                },
+                cfg,
+            )
+
+
+@pytest.mark.asyncio
+async def test_graph_guided_flow_log_failure_reraises(online_graph, config):
+    """When log_flow_output_node's log_conversation raises, the Graph
+    invocation re-raises and last_event_id is NOT advanced."""
+    # Use a context that includes a truthy db so log_flow_output_node
+    # actually calls log_conversation (it skips when db is None).
+    live_ctx = {**{k: v for k, v in _CONTEXT.items()}, "db": MagicMock()}
+
+    # Start a guided flow so active_flow is set.
+    await online_graph.ainvoke(
+        _make_input("小赢欣赏", event_id="e1"),
+        config=config,
+        context=live_ctx,
+    )
+    state_before = await online_graph.aget_state(config)
+    prior_last_event_id = state_before.values.get("last_event_id")
+
+    # Patch at the source module so ALL importers see the side-effect.
+    with patch(
+        "sales_agent.services.conversation_logger.log_conversation",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("db down"),
+    ):
+        with pytest.raises(RuntimeError, match="db down"):
+            await online_graph.ainvoke(
+                _make_input("今天主动联系了一个一直没回复的客户", event_id="e2"),
+                config=config,
+                context=live_ctx,
+            )
+
+    state_after = await online_graph.aget_state(config)
+    assert state_after.values.get("last_event_id") == prior_last_event_id

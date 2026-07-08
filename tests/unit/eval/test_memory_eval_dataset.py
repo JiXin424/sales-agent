@@ -38,10 +38,23 @@ def test_validate_rejects_secrets_and_identifiers(tmp_path):
             id="s2",
             turns=[ScenarioTurn(input="用户 13800138000 的信息", expected={})],
         ),
+        MultiturnScenario(
+            id="s3",
+            turns=[ScenarioTurn(input="身份证 110101199003071234", expected={})],
+        ),
+        MultiturnScenario(
+            id="s4",
+            turns=[ScenarioTurn(input="联系 a@b.com", expected={})],
+        ),
     ]
     errors = validate_dataset(scenarios)
     assert any("secret" in e.lower() or "password" in e.lower() for e in errors)
-    assert any("direct identifier" in e.lower() for e in errors)
+    # Phone identifier (s2)
+    assert any("direct identifier" in e.lower() and "phone" in e.lower() for e in errors)
+    # ID-card identifier (s3)
+    assert any("direct identifier" in e.lower() and "id card" in e.lower() for e in errors)
+    # Email identifier (s4)
+    assert any("direct identifier" in e.lower() and "email" in e.lower() for e in errors)
 
 
 def test_validate_rejects_duplicate_ids(tmp_path):

@@ -34,7 +34,7 @@ class OnlineConversationState(TypedDict, total=False):
     topic_routing_enabled: bool
     scenario_coach_enabled: bool
     requested_flow: str | None
-    flow_action: str  # "duplicate" | "start" | "cancel" | "advance" | "chat" | "direct_chat" | "reset" | "memory_command"
+    flow_action: str  # "duplicate" | "start" | "cancel" | "advance" | "chat" | "direct_chat" | "reset" | "memory_command" | "profile_transparency"
     active_flow: str | None
     flow_stage: str | None
     flow_payload: dict[str, Any]

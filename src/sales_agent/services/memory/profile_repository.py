@@ -141,6 +141,7 @@ class UserMemoryProfileRepository:
                 .where(UserProfileRebuildJob.available_at <= utc_now())
                 .order_by(UserProfileRebuildJob.created_at.asc())
                 .limit(limit)
+                .with_for_update(skip_locked=True)
             )
         ).scalars().all()
 

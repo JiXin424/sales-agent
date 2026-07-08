@@ -180,7 +180,7 @@ def normalize_turn_node(state: OnlineConversationState) -> dict[str, Any]:
         flow_action = "duplicate"
     elif state.get("reset_requested"):
         flow_action = "reset"
-    elif state.get("user_profile_memory_enabled") and detect_transparency_command(message):
+    elif state.get("user_profile_memory_enabled") and get_settings().user_profile_memory.transparency_enabled and detect_transparency_command(message):
         flow_action = "profile_transparency"
     elif state.get("long_term_memory_enabled") and detect_memory_command(message):
         flow_action = "memory_command"
@@ -238,6 +238,8 @@ async def profile_recall_node(
                 "memory_trace": {"degraded": True, "degradation_reason": "missing_db"},
             }
         settings = get_settings()
+        if not settings.user_profile_memory.recall_enabled:
+            return {}
         result = await retrieve_user_memory_context(
             db=db,
             scope=MemoryScope(

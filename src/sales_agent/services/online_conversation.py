@@ -219,6 +219,7 @@ async def invoke_online_turn(
         "event_id": event_id,
         "guided_flows_enabled": settings.guided_flows.enabled,
         "topic_routing_enabled": settings.topic_routing.enabled,
+        "scenario_coach_enabled": settings.scenario_coach.enabled,
     }
 
     # 7. Invoke

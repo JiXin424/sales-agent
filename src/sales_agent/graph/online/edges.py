@@ -8,10 +8,17 @@ from sales_agent.graph.online.state import OnlineConversationState
 def route_online_message(state: OnlineConversationState) -> str:
     """Return the destination node name based on ``flow_action``.
 
-    Returns one of ``"duplicate"``, ``"start"``, ``"cancel"``,
-    ``"advance"``, ``"chat"``, or ``"direct_chat"``.
+    When ``scenario_coach_enabled`` is set, ``chat`` and ``direct_chat``
+    divert to the ``scenario_coach`` node first (the original flow_action
+    is preserved in state so ``route_after_scenario`` can resume the
+    correct downstream path on a miss). Returns one of ``"duplicate"``,
+    ``"start"``, ``"cancel"``, ``"advance"``, ``"chat"``, ``"direct_chat"``,
+    or ``"scenario_coach"``.
     """
-    return state.get("flow_action", "chat")
+    flow_action = state.get("flow_action", "chat")
+    if state.get("scenario_coach_enabled", False) and flow_action in ("chat", "direct_chat"):
+        return "scenario_coach"
+    return flow_action
 
 
 def route_context_resolution(state: OnlineConversationState) -> str:

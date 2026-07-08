@@ -301,38 +301,32 @@ class TestStreamingPath:
         mock_settings = MagicMock()
         mock_settings.guided_flows.enabled = True
 
-        mock_checkpointer = MagicMock()
-
         with patch(
-            "sales_agent.integrations.dingtalk.graph_stream.get_checkpointer",
-            return_value=mock_checkpointer,
+            "sales_agent.integrations.dingtalk.graph_stream.get_settings",
+            return_value=mock_settings,
         ):
             with patch(
-                "sales_agent.integrations.dingtalk.graph_stream.get_settings",
-                return_value=mock_settings,
-            ):
-                with patch(
-                    "sales_agent.integrations.dingtalk.graph_stream.get_online_graph",
-                    return_value=mock_graph,
-                ) as mock_get_online:
-                    from sales_agent.integrations.dingtalk.graph_stream import (
-                        handle_dingtalk_stream_via_graph,
-                    )
+                "sales_agent.integrations.dingtalk.graph_stream.get_online_graph",
+                return_value=mock_graph,
+            ) as mock_get_online:
+                from sales_agent.integrations.dingtalk.graph_stream import (
+                    handle_dingtalk_stream_via_graph,
+                )
 
-                    result = await handle_dingtalk_stream_via_graph(
-                        tenant_id="test_tenant",
-                        user_id="internal_user_001",
-                        dingtalk_user_id="ding_user_001",
-                        message="Test message",
-                        conversation_id="conv_001",
-                        agent_id="agent_123",
-                        event_id="event_001",
-                        reply_fn=reply_fn,
-                        card_sender=mock_card_sender,
-                        db=MagicMock(),
-                        chat_model=MagicMock(),
-                        embedding_model=MagicMock(),
-                    )
+                result = await handle_dingtalk_stream_via_graph(
+                    tenant_id="test_tenant",
+                    user_id="internal_user_001",
+                    dingtalk_user_id="ding_user_001",
+                    message="Test message",
+                    conversation_id="conv_001",
+                    agent_id="agent_123",
+                    event_id="event_001",
+                    reply_fn=reply_fn,
+                    card_sender=mock_card_sender,
+                    db=MagicMock(),
+                    chat_model=MagicMock(),
+                    embedding_model=MagicMock(),
+                )
 
         # Must have used get_online_graph
         mock_get_online.assert_called_once()
@@ -366,33 +360,30 @@ class TestStreamingPath:
         mock_settings.guided_flows.enabled = True
 
         with patch(
-            "sales_agent.integrations.dingtalk.graph_stream.get_checkpointer",
+            "sales_agent.integrations.dingtalk.graph_stream.get_settings",
+            return_value=mock_settings,
         ):
             with patch(
-                "sales_agent.integrations.dingtalk.graph_stream.get_settings",
-                return_value=mock_settings,
+                "sales_agent.integrations.dingtalk.graph_stream.get_online_graph",
+                return_value=mock_graph,
             ):
-                with patch(
-                    "sales_agent.integrations.dingtalk.graph_stream.get_online_graph",
-                    return_value=mock_graph,
-                ):
-                    from sales_agent.integrations.dingtalk.graph_stream import (
-                        handle_dingtalk_stream_via_graph,
-                    )
+                from sales_agent.integrations.dingtalk.graph_stream import (
+                    handle_dingtalk_stream_via_graph,
+                )
 
-                    await handle_dingtalk_stream_via_graph(
-                        tenant_id="test_tenant",
-                        user_id="internal_user_001",
-                        dingtalk_user_id="ding_user_001",
-                        message="Test",
-                        conversation_id="conv_001",
-                        agent_id="agent_123",
-                        event_id="event_001",
-                        reply_fn=reply_fn,
-                        card_sender=mock_card_sender,
-                        db=MagicMock(),
-                        chat_model=MagicMock(),
-                    )
+                await handle_dingtalk_stream_via_graph(
+                    tenant_id="test_tenant",
+                    user_id="internal_user_001",
+                    dingtalk_user_id="ding_user_001",
+                    message="Test",
+                    conversation_id="conv_001",
+                    agent_id="agent_123",
+                    event_id="event_001",
+                    reply_fn=reply_fn,
+                    card_sender=mock_card_sender,
+                    db=MagicMock(),
+                    chat_model=MagicMock(),
+                )
 
         assert captured_state.get("session_user_id") == "ding_user_001"
         assert captured_state.get("event_id") == "event_001"

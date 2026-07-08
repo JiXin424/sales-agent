@@ -24,6 +24,10 @@ async def run() -> None:
     from sales_agent.core.config import get_settings
     from sales_agent.core.database import init_db, close_db
     from sales_agent.core.tenant_runtime import get_tenant_runtime
+    from sales_agent.services.online_conversation import (
+        initialize_online_runtime,
+        close_online_runtime,
+    )
 
     settings = get_settings()
     config = settings.dingtalk
@@ -31,6 +35,10 @@ async def run() -> None:
     # 初始化数据库
     await init_db()
     logger.info("Database initialized (worker runner)")
+
+    # 初始化 Online Graph runtime
+    await initialize_online_runtime()
+    logger.info("Online runtime initialized (worker runner)")
 
     # 加载 TenantRuntime
     runtime = get_tenant_runtime()
@@ -91,6 +99,7 @@ async def run() -> None:
                 await stop_dingtalk_worker()
             except Exception as e:
                 logger.warning("Failed to stop DingTalk HTTP worker: %s", e)
+        await close_online_runtime()
         await close_db()
         logger.info("Worker runner stopped cleanly")
 

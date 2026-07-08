@@ -18,7 +18,6 @@ import uuid
 from collections.abc import Awaitable, Callable
 
 from sales_agent.core.config import get_settings
-from sales_agent.graph.checkpoints import get_checkpointer
 from sales_agent.integrations.dingtalk.citation import format_citation_block
 from sales_agent.services.online_conversation import get_online_graph
 
@@ -77,10 +76,9 @@ async def handle_dingtalk_stream_via_graph(
     Returns:
         The final graph state dict.
     """
-    checkpointer = await get_checkpointer()
     settings = get_settings()
 
-    graph = get_online_graph(checkpointer=checkpointer)
+    graph = get_online_graph()
 
     thread_id = conversation_id or str(uuid.uuid4())
     config = {

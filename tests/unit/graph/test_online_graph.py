@@ -11,20 +11,28 @@ Covers:
 - ``last_event_id`` tracking
 - Fresh saver / no active flow on new thread
 - Same-thread state carry-over
+- Strict get_online_graph requires initialized runtime
+- initialize_online_runtime compiles exactly once
 """
 
 from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from sales_agent.graph.online.graph import build_online_graph
 from sales_agent.graph.online.state import OnlineConversationState
-from sales_agent.services.online_conversation import build_online_thread_id
+from sales_agent.graph.checkpoint_runtime import CheckpointUnavailableError
+from sales_agent.services.online_conversation import (
+    build_online_thread_id,
+    get_online_graph,
+    initialize_online_runtime,
+    _online_graph,
+)
 from sales_agent.services.structured_router_output import (
     ContextDecision,
     EvidenceDecision,
@@ -497,3 +505,56 @@ def test_thread_id_same_day_same_user_is_identical():
     tid1 = build_online_thread_id("t1", "a1", "dingtalk", "u1", now=now)
     tid2 = build_online_thread_id("t1", "a1", "dingtalk", "u1", now=now)
     assert tid1 == tid2
+
+
+# ====================================================================
+# Strict get_online_graph and initialization
+# ====================================================================
+
+
+def test_default_online_graph_requires_initialized_runtime(monkeypatch):
+    """Default get_online_graph() raises CheckpointUnavailableError if runtime not initialized."""
+    # Clear any existing graph
+    monkeypatch.setattr("sales_agent.services.online_conversation._online_graph", None)
+    with pytest.raises(CheckpointUnavailableError):
+        get_online_graph()
+
+
+def test_get_online_graph_with_checkpointer_works_without_initialization():
+    """get_online_graph(checkpointer=...) works even if runtime not initialized (for tests)."""
+    checkpointer = InMemorySaver()
+    graph = get_online_graph(checkpointer=checkpointer)
+    assert graph is not None
+
+
+@pytest.mark.asyncio
+async def test_initialize_online_runtime_compiles_once(monkeypatch):
+    """initialize_online_runtime() calls initialize_production_checkpointer once and _compile_online_graph once."""
+    # Setup mocks
+    mock_saver = object()
+    mock_compiled = object()
+    mock_init = AsyncMock(return_value=mock_saver)
+    mock_compile = MagicMock(return_value=mock_compiled)
+
+    # Patch the module-level variables and functions
+    monkeypatch.setattr("sales_agent.services.online_conversation._online_graph", None)
+    monkeypatch.setattr(
+        "sales_agent.services.online_conversation.initialize_production_checkpointer",
+        mock_init,
+    )
+    monkeypatch.setattr(
+        "sales_agent.services.online_conversation._compile_online_graph",
+        mock_compile,
+    )
+
+    # First call
+    first = await initialize_online_runtime()
+    # Second call (should return cached)
+    second = await initialize_online_runtime()
+
+    # Verify both calls return the same object
+    assert first is second is mock_compiled
+    # Verify init was called once
+    mock_init.assert_awaited_once()
+    # Verify compile was called once with the saver
+    mock_compile.assert_called_once_with(mock_saver)

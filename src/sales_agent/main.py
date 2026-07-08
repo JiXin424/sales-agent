@@ -30,6 +30,10 @@ async def lifespan(app: FastAPI):
 
     from sales_agent.core.database import init_db
     from sales_agent.core.tenant_runtime import get_tenant_runtime
+    from sales_agent.services.online_conversation import (
+        initialize_online_runtime,
+        close_online_runtime,
+    )
 
     # 解析当前角色
     role = _settings.app.get_process_role()
@@ -37,6 +41,9 @@ async def lifespan(app: FastAPI):
 
     # 初始化数据库
     await init_db()
+
+    # 初始化 Online Graph runtime
+    await initialize_online_runtime()
 
     # Bootstrap Neo4j ontology schema (constraints + vector index) when enabled.
     # 仅在启用 ontology_neo4j 引擎且配置了 Neo4j 时执行；失败仅告警，不阻断启动。
@@ -139,7 +146,10 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning("Failed to stop DingTalk http worker: %s", e)
 
+    from sales_agent.services.online_conversation import close_online_runtime
     from sales_agent.core.database import close_db
+
+    await close_online_runtime()
     await close_db()
 
 

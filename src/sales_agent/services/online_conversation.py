@@ -4,8 +4,10 @@ Provides:
 
 - ``build_online_thread_id`` — thread ID with date in Shanghai timezone
 - ``get_online_graph`` — cached compiled Online Graph (process-level
-  ``InMemorySaver`` singleton)
+  PostgreSQL checkpoint singleton)
 - ``invoke_online_turn`` — public API to process a single turn
+- ``initialize_online_runtime`` — initialize the checkpoint and compile graph
+- ``close_online_runtime`` — close the checkpoint and clear cached graph
 """
 
 from __future__ import annotations
@@ -18,6 +20,11 @@ from zoneinfo import ZoneInfo
 from langgraph.graph.state import CompiledStateGraph
 
 from sales_agent.core.config import get_settings
+from sales_agent.graph.checkpoint_runtime import (
+    CheckpointUnavailableError,
+    close_production_checkpointer,
+    initialize_production_checkpointer,
+)
 from sales_agent.graph.online.graph import build_online_graph
 from sales_agent.services.agent_service import resolve_tenant_agent_id
 
@@ -29,6 +36,47 @@ logger = logging.getLogger(__name__)
 # ====================================================================
 
 _online_graph: CompiledStateGraph | None = None
+
+
+# ====================================================================
+# Online Graph compilation seam
+# ====================================================================
+
+
+def _compile_online_graph(checkpointer) -> CompiledStateGraph:
+    """Compile the Online Graph with the given checkpointer."""
+    return build_online_graph().compile(checkpointer=checkpointer)
+
+
+# ====================================================================
+# Online Graph lifecycle
+# ====================================================================
+
+
+async def initialize_online_runtime() -> CompiledStateGraph:
+    """Initialize the Online Graph runtime: connect to checkpoint DB and compile graph.
+
+    Idempotent: returns cached graph if already initialized.
+
+    Returns:
+        Compiled Online Graph with PostgreSQL checkpointer.
+
+    Raises:
+        CheckpointUnavailableError: if checkpoint DB connection fails.
+    """
+    global _online_graph
+    if _online_graph is not None:
+        return _online_graph
+    saver = await initialize_production_checkpointer()
+    _online_graph = _compile_online_graph(saver)
+    return _online_graph
+
+
+async def close_online_runtime() -> None:
+    """Close the Online Graph runtime: close checkpoint DB pool and clear cached graph."""
+    global _online_graph
+    _online_graph = None
+    await close_production_checkpointer()
 
 
 # ====================================================================
@@ -82,36 +130,37 @@ def get_online_graph(*, checkpointer=None) -> CompiledStateGraph:
     """Return the compiled online conversation graph.
 
     The graph is compiled once and cached when using the default
-    process-level checkpointer.  Pass *checkpointer* to inject a specific
-    checkpointer (for tests); production callers should omit it and let
-    the function use the process-level default.
+    process-level PostgreSQL checkpointer.  Pass *checkpointer* to inject a
+    specific checkpointer (for tests); production callers should omit it
+    and use the cached initialized graph.
 
     Production callers **must not** create a new checkpointer per request
     — the process-level singleton is shared across all turns.
 
     Args:
-        checkpointer: Optional LangGraph checkpointer.  If ``None``, a
-            process-level :class:`InMemorySaver` singleton is used.
+        checkpointer: Optional LangGraph checkpointer.  If provided, compiles
+            a fresh graph with this checkpointer (for testing only). If
+            ``None``, returns the cached initialized graph (production path).
 
     Returns:
         A compiled :class:`CompiledStateGraph` ready for ``ainvoke``.
+
+    Raises:
+        CheckpointUnavailableError: if no checkpointer is provided and the
+            runtime hasn't been initialized via ``initialize_online_runtime()``.
     """
     global _online_graph
 
     if checkpointer is not None:
         # Non-default checkpointer (e.g. from tests) — skip caching so
         # every call gets a fresh compilation with the injected saver.
-        return build_online_graph().compile(checkpointer=checkpointer)
+        return _compile_online_graph(checkpointer)
 
-    # Default path: use the process-level singleton and cache the result.
-    if _online_graph is not None:
-        return _online_graph
-
-    from sales_agent.graph.checkpoints import get_online_checkpointer_sync
-
-    _online_graph = build_online_graph().compile(
-        checkpointer=get_online_checkpointer_sync()
-    )
+    # Default path: use the cached initialized graph.
+    if _online_graph is None:
+        raise CheckpointUnavailableError(
+            "Online Graph is unavailable before startup initialization"
+        )
     return _online_graph
 
 

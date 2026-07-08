@@ -29,7 +29,7 @@ from deepeval_test_cases import (
 
 
 class SalesAgentModelCallback:
-    """将 sales-agent 的 ChatPipeline 包装成 deepeval optimizer 需要的回调。
+    """将 sales-agent 的 Online Graph 包装成 deepeval optimizer 需要的回调。
 
     optimizer 会给回调传入不同的 prompt 变体，
     回调负责用这些 prompt 调 Agent、返回生成的文本。

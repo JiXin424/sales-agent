@@ -42,7 +42,7 @@ _RECOGNITION_TEXT_KEYS = {
 
 
 class DingTalkMediaAdapter:
-    """Convert DingTalk media messages into text for ChatPipeline."""
+    """Convert DingTalk media messages into text for the Online Graph."""
 
     def __init__(
         self,

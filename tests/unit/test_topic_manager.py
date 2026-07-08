@@ -661,6 +661,114 @@ async def test_resolve_pending_cancel_closes_topic(db_session):
 # ===================================================================
 
 
+# ===================================================================
+# Restore Anchor + Scoped History Tests
+# ===================================================================
+
+
+@pytest.mark.asyncio
+async def test_create_restore_anchor_stores_topic_restore_payload(db_session):
+    """create_restore_anchor creates an active anchor with a topic_restore payload."""
+    from sales_agent.services.structured_router_output import TopicScope
+
+    mgr = TopicManager()
+    now = dt()
+    cand_a = ConversationTopic(
+        id="cand-a", tenant_id="t1", agent_id="a1", user_id="u1", channel="dingtalk",
+        conversation_id="c1", status="closed", summary="话题A",
+        closed_at=dt(-timedelta(minutes=40)), last_active_at=dt(-timedelta(minutes=41)),
+        expires_at=dt(-timedelta(minutes=40)),
+    )
+    cand_b = ConversationTopic(
+        id="cand-b", tenant_id="t1", agent_id="a1", user_id="u1", channel="dingtalk",
+        conversation_id="c1", status="closed", summary="话题B",
+        closed_at=dt(-timedelta(minutes=50)), last_active_at=dt(-timedelta(minutes=51)),
+        expires_at=dt(-timedelta(minutes=50)),
+    )
+    db_session.add_all([cand_a, cand_b])
+    await db_session.flush()
+
+    scope = TopicScope(tenant_id="t1", agent_id="a1", user_id="u1", channel="dingtalk")
+    anchor = await mgr.create_restore_anchor(
+        db_session,
+        scope=scope,
+        conversation_id="c1",
+        event_id="evt-anchor",
+        original_message="继续",
+        candidates=[cand_a, cand_b],
+        now=now,
+    )
+
+    assert anchor.status == "active"
+    assert anchor.pending_clarification_json is not None
+    pending = json.loads(anchor.pending_clarification_json)
+    assert pending["kind"] == "topic_restore"
+    assert pending["event_id"] == "evt-anchor"
+    assert pending["original_message"] == "继续"
+    assert pending["candidate_topic_ids"] == ["cand-a", "cand-b"]
+    assert pending["candidate_summaries"] == ["话题A", "话题B"]
+    assert "created_at" in pending
+    # Anchor carries no retained goal/entities.
+    assert anchor.current_goal == ""
+    assert anchor.summary == ""
+    assert json.loads(anchor.key_entities_json) == []
+
+
+@pytest.mark.asyncio
+async def test_load_recent_topic_messages_filters_by_topic_and_orders_chronologically(db_session):
+    """load_recent_topic_messages returns only the given topic's latest 6,
+    in chronological (oldest-first) order."""
+    from sales_agent.models.conversation import ConversationMessage
+    from sales_agent.services.structured_router_output import TopicScope
+
+    mgr = TopicManager()
+    target = "t-target"
+    other = "t-other"
+    # created_at is a Text column of ISO strings; lexicographic order is
+    # chronological for ISO 8601. Use distinct increasing timestamps.
+    base = dt(-timedelta(minutes=10))
+    seq = 0
+
+    def ts() -> str:
+        nonlocal seq
+        t = base + timedelta(seconds=seq)
+        seq += 1
+        return t.isoformat()
+
+    for i in range(4):
+        db_session.add(ConversationMessage(
+            tenant_id="t1", agent_id="a1", user_id="u1", conversation_id="c1",
+            topic_id=target, role="user", content=f"u{i}",
+            created_at=ts(),
+        ))
+        db_session.add(ConversationMessage(
+            tenant_id="t1", agent_id="a1", user_id="u1", conversation_id="c1",
+            topic_id=target, role="assistant", content=f"a{i}",
+            created_at=ts(),
+        ))
+    # Messages on a different topic must not leak.
+    db_session.add(ConversationMessage(
+        tenant_id="t1", agent_id="a1", user_id="u1", conversation_id="c1",
+        topic_id=other, role="user", content="leak",
+        created_at=ts(),
+    ))
+    await db_session.flush()
+
+    scope = TopicScope(tenant_id="t1", agent_id="a1", user_id="u1", channel="dingtalk")
+    recent = await mgr.load_recent_topic_messages(
+        db_session, scope=scope, conversation_id="c1", topic_id=target, limit=6,
+    )
+    contents = [m["content"] for m in recent]
+    assert "leak" not in contents
+    assert len(recent) <= 6
+    # Only user/assistant roles.
+    assert all(m["role"] in ("user", "assistant") for m in recent)
+    # Newest 6 of the 8 target messages, in chronological (oldest-first) order.
+    # Insertion order u0<a0<u1<a1<u2<a2<u3<a3 → newest 6 = u1,a1,u2,a2,u3,a3.
+    assert contents[0] == "u1"
+    assert contents[-1] == "a3"
+
+
 @pytest.mark.asyncio
 async def test_scope_filters_by_tenant_agent_user_channel(db_session):
     """get_active_topic scoped to tenant+agent+user+channel."""

@@ -103,7 +103,7 @@ async def _execute_via_graph(
         "usage": result.get("usage") or {},
         "conversation_id": result.get("conversation_id", conversation_id) or generate_id(),
         "response_kind": response_kind,
-        "route_confidence": result.get("route_confidence", 1.0),
+        "route_confidence": result.get("route_confidence") or 1.0,
         "run_id": result.get("run_id"),
     }
 
@@ -151,7 +151,7 @@ async def chat(req: ChatRequest, db: DbSession) -> ChatResponse:
             risk=risk_result,
             debug=DebugInfo(
                 retrieval_query="",
-                route_confidence=result.get("route_confidence", 1.0),
+                route_confidence=result.get("route_confidence") or 1.0,
                 prompt_version="v0",
                 run_id=result.get("run_id") or generate_id(),
                 model=runtime.chat_model or "default",
@@ -237,7 +237,7 @@ async def eval_streaming_chat(
             risk=risk_result,
             debug=DebugInfo(
                 retrieval_query="",
-                route_confidence=result.get("route_confidence", 1.0),
+                route_confidence=result.get("route_confidence") or 1.0,
                 prompt_version="v0",
                 run_id=generate_id(),
                 model=runtime.chat_model or "default",

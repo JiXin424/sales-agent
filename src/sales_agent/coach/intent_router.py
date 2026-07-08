@@ -1,6 +1,7 @@
 """CoachIntentRouter —— 教练报告意图识别。
 
-在 ChatPipeline 中、Agent 解析之后、正常任务路由之前运行。
+在 Chat Graph 中、Agent 解析之后、正常任务路由之前运行。
+（注：Coach 报告拦截尚未接入 graph 路径，仅保留模块。）
 匹配到报告意图时直接渲染报告返回，不走 RAG / 生成 / 风控 / 实时引导。
 
 关键约束：**不得"偷走"既有的 conversation_scoring 任务**。

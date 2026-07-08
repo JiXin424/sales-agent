@@ -1,4 +1,7 @@
 {
+  "worktree": {
+    "baseRef": "head"
+  },
   "permissions": {
     "allow": [
       "Read(//root/.claude/**)",
@@ -96,7 +99,8 @@
       "Bash(curl -s -H 'Authorization: token __TRACKED_VAR__' __TRACKED_VAR__/branches?limit=50)",
       "Bash(python3 -c \"import json,sys;d=json.load\\(sys.stdin\\);[print\\(b['name'],'protected=',b.get\\('protected'\\)\\) for b in d]\")",
       "Bash(curl -s -X PATCH -H 'Authorization: token __TRACKED_VAR__' -H 'Content-Type: application/json' -d '{\"enable_force_push\": true}' __TRACKED_VAR__/branch_protections/main)",
-      "Bash(python3 -c \"import json,sys;d=json.load\\(sys.stdin\\);print\\('enable_force_push =',d.get\\('enable_force_push'\\)\\)\")"
+      "Bash(python3 -c \"import json,sys;d=json.load\\(sys.stdin\\);print\\('enable_force_push =',d.get\\('enable_force_push'\\)\\)\")",
+      "Skill(claude-api)"
     ]
   }
 }

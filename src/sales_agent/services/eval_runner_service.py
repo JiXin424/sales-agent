@@ -110,7 +110,7 @@ class EvalRunnerService:
         """运行评估套件。
 
         创建 EvalRun，逐个执行用例，记录结果。
-        注意：实际调用 ChatPipeline 需要在集成层完成，此处仅记录结构和占位逻辑。
+        注意：实际调用 Agent 需要在集成层完成，此处仅记录结构和占位逻辑。
         """
         # 获取套件和用例
         suite_stmt = select(EvalSuite).where(
@@ -246,7 +246,7 @@ class EvalRunnerService:
     ) -> EvalRunResult:
         """执行单个评估用例（占位实现）。
 
-        实际实现需要调用 ChatPipeline 或 agent chat 接口。
+        实际实现需要调用 invoke_online_turn 或 agent chat 接口。
         此处仅创建一条 passed=true 的占位结果，供集成层替换。
         """
         result = EvalRunResult(

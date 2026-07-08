@@ -396,7 +396,7 @@ function renderTable() {{
         if (isExpanded) {{
             row += `<tr class="detail-row open"><td colspan="${{8 + METRIC_NAMES.length}}" class="detail-content">
                 <div class="detail-grid">
-                    <div class="detail-item"><div class="k">完整回答</div><div class="v">${{(r.answer||'(无)').replace(/</g,'&lt;').replace(/>/g,'&gt;').substring(0, 2000)}}</div></div>
+                    <div class="detail-item"><div class="k">完整回答</div><div class="v">${{(r.rendered||r.answer||'(无)').replace(/</g,'&lt;').replace(/>/g,'&gt;').substring(0, 2000)}}</div></div>
                     ${{r.reference ? `<div class="detail-item"><div class="k">参考答案</div><div class="v">${{r.reference.replace(/</g,'&lt;').replace(/>/g,'&gt;')}}</div></div>` : ''}}
                     <div class="detail-item"><div class="k">性能指标</div><div class="v">延迟: ${{r.latency_ms||0}}ms | TTFT: ${{r.ttft_ms||0}}ms | Token: 入${{r.prompt_tokens||0}}/出${{r.completion_tokens||0}}/总${{r.total_tokens||0}}</div></div>
                     <div class="detail-item"><div class="k">指标详情</div><div class="v">

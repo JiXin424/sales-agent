@@ -118,6 +118,8 @@ class TestLifespanRoleGating:
             patch("sales_agent.core.database.init_db", new_callable=AsyncMock),
             patch("sales_agent.core.tenant_runtime.get_tenant_runtime", return_value=mock_runtime),
             patch("sales_agent.integrations.dingtalk.stream_client.start_dingtalk_stream_worker", new_callable=AsyncMock) as mock_start,
+            patch("sales_agent.services.online_conversation.initialize_online_runtime", new_callable=AsyncMock),
+            patch("sales_agent.services.online_conversation.close_online_runtime", new_callable=AsyncMock),
         ):
             from sales_agent.main import lifespan
             app = MagicMock()
@@ -136,6 +138,8 @@ class TestLifespanRoleGating:
             patch("sales_agent.core.tenant_runtime.get_tenant_runtime", return_value=mock_runtime),
             patch("sales_agent.integrations.dingtalk.stream_client.start_dingtalk_stream_worker", new_callable=AsyncMock) as mock_stream,
             patch("sales_agent.integrations.dingtalk.worker.start_dingtalk_worker", new_callable=AsyncMock) as mock_http,
+            patch("sales_agent.services.online_conversation.initialize_online_runtime", new_callable=AsyncMock),
+            patch("sales_agent.services.online_conversation.close_online_runtime", new_callable=AsyncMock),
         ):
             from sales_agent.main import lifespan
             app = MagicMock()
@@ -156,6 +160,8 @@ class TestLifespanRoleGating:
             patch("sales_agent.core.tenant_runtime.get_tenant_runtime", return_value=mock_runtime),
             patch("sales_agent.integrations.dingtalk.stream_client.start_dingtalk_stream_worker", new_callable=AsyncMock) as mock_stream,
             patch("sales_agent.integrations.dingtalk.worker.start_dingtalk_worker", new_callable=AsyncMock) as mock_http,
+            patch("sales_agent.services.online_conversation.initialize_online_runtime", new_callable=AsyncMock),
+            patch("sales_agent.services.online_conversation.close_online_runtime", new_callable=AsyncMock),
         ):
             from sales_agent.main import lifespan
             app = MagicMock()
@@ -176,6 +182,8 @@ class TestLifespanRoleGating:
             patch("sales_agent.core.tenant_runtime.get_tenant_runtime", return_value=mock_runtime),
             patch("sales_agent.integrations.dingtalk.stream_client.start_dingtalk_stream_worker", new_callable=AsyncMock) as mock_stream,
             patch("sales_agent.integrations.dingtalk.worker.start_dingtalk_worker", new_callable=AsyncMock) as mock_http,
+            patch("sales_agent.services.online_conversation.initialize_online_runtime", new_callable=AsyncMock),
+            patch("sales_agent.services.online_conversation.close_online_runtime", new_callable=AsyncMock),
         ):
             from sales_agent.main import lifespan
             app = MagicMock()
@@ -196,6 +204,8 @@ class TestLifespanRoleGating:
             patch("sales_agent.core.tenant_runtime.get_tenant_runtime", return_value=mock_runtime),
             patch("sales_agent.integrations.dingtalk.stream_client.start_dingtalk_stream_worker", new_callable=AsyncMock) as mock_stream,
             patch("sales_agent.integrations.dingtalk.worker.start_dingtalk_worker", new_callable=AsyncMock) as mock_http,
+            patch("sales_agent.services.online_conversation.initialize_online_runtime", new_callable=AsyncMock),
+            patch("sales_agent.services.online_conversation.close_online_runtime", new_callable=AsyncMock),
         ):
             from sales_agent.main import lifespan
             app = MagicMock()

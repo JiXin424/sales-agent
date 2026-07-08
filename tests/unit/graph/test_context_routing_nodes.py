@@ -118,6 +118,9 @@ def mock_topic_manager(mock_topic):
     mgr.cancel_pending = AsyncMock(side_effect=lambda db, t: t)
     mgr.resolve_pending = AsyncMock(side_effect=lambda db, t, d, now=None: t)
     mgr.apply_context_decision = AsyncMock(side_effect=lambda db, t, d, now=None: t)
+    mgr.restore_topic = AsyncMock(side_effect=lambda db, t, now=None: t)
+    mgr.load_recent_topic_messages = AsyncMock(return_value=[])
+    mgr.create_restore_anchor = AsyncMock(return_value=mock_topic)
     return mgr
 
 
@@ -446,6 +449,124 @@ async def test_evidence_routing_skipped_for_clarify():
 
 
 # ===================================================================
+# duplicate_node unit tests
+# ===================================================================
+
+
+def test_duplicate_node_is_mutation_free():
+    """duplicate_node returns response_kind "duplicate" with no state mutation.
+
+    It must NOT advance ``last_event_id`` (the persisted checkpoint's
+    last_event_id stays at the prior turn's value). A duplicate delivery
+    is a no-op: no chat, no flow advance, no conversation log, no outbound
+    reply.
+    """
+    from sales_agent.graph.online.nodes import duplicate_node
+
+    event_id = "ev-dup-001"
+    result = duplicate_node(
+        {
+            "tenant_id": "t1",
+            "agent_id": "a1",
+            "user_id": "u1",
+            "session_user_id": "u1",
+            "channel": "dingtalk",
+            "conversation_id": "c1",
+            "message": "duplicate message",
+            "event_id": event_id,
+        }
+    )
+    assert result == {"response_kind": "duplicate"}
+    # No last_event_id advancement, no chat, no log side-effects.
+    assert "last_event_id" not in result
+    assert "answer_dict" not in result
+
+
+@pytest.mark.asyncio
+async def test_context_resolution_control_status(mock_topic, mock_topic_manager):
+    """Restoring a unique candidate (no suffix) yields context_status='control'."""
+    mock_topic_manager.get_active_topic = AsyncMock(return_value=None)
+    candidate = MagicMock(spec=ConversationTopic)
+    candidate.id = "cand-1"
+    candidate.tenant_id = "t1"
+    candidate.agent_id = "a1"
+    candidate.user_id = "u1"
+    candidate.channel = "dingtalk"
+    candidate.conversation_id = "c1"
+    candidate.summary = "旧话题摘要"
+    candidate.status = "closed"
+    candidate.pending_clarification_json = None
+    candidate.clarification_attempts = 0
+    mock_topic_manager.find_restorable_topics = AsyncMock(return_value=[candidate])
+    mock_topic_manager.restore_topic = AsyncMock(return_value=candidate)
+    cfg = _build_config({
+        "db": None,
+        "chat_model": None,
+        "now": datetime(2026, 7, 6, 10, 0, 0, tzinfo=timezone.utc),
+        "topic_manager": mock_topic_manager,
+        "context_resolver_override": AsyncMock(),
+    })
+    result = await context_resolution_node(
+        {
+            "tenant_id": "t1", "agent_id": "a1", "user_id": "u1",
+            "channel": "dingtalk", "conversation_id": "c1",
+            "message": "继续",
+            "event_id": "ev-1",
+        },
+        cfg,
+    )
+    assert result["context_status"] == "control"
+    assert result["response_kind"] == "topic_restored"
+
+
+def test_route_context_resolution_control():
+    """route_context_resolution returns 'control' for topic-restored turns."""
+    from sales_agent.graph.online.edges import route_context_resolution
+    assert route_context_resolution({"context_status": "control"}) == "control"
+
+
+@pytest.mark.asyncio
+async def test_graph_control_path_reaches_end(online_graph, config, mock_topic_manager):
+    """A control response routes control -> log_control_response -> END (no chat)."""
+    mock_topic_manager.get_active_topic = AsyncMock(return_value=None)
+    candidate = MagicMock(spec=ConversationTopic)
+    candidate.id = "cand-1"
+    candidate.tenant_id = "t1"
+    candidate.agent_id = "a1"
+    candidate.user_id = "u1"
+    candidate.channel = "dingtalk"
+    candidate.conversation_id = "c1"
+    candidate.summary = "旧话题摘要"
+    candidate.status = "closed"
+    candidate.pending_clarification_json = None
+    candidate.clarification_attempts = 0
+    mock_topic_manager.find_restorable_topics = AsyncMock(return_value=[candidate])
+    mock_topic_manager.restore_topic = AsyncMock(return_value=candidate)
+    ctx = {
+        "db": None,
+        "chat_model": None,
+        "chat_runner": StubChatRunner(),
+        "topic_manager": mock_topic_manager,
+        "context_resolver_override": AsyncMock(),
+    }
+    result = await online_graph.ainvoke(
+        {
+            "tenant_id": "t1", "agent_id": "a1", "user_id": "u1",
+            "session_user_id": "u1", "channel": "dingtalk",
+            "conversation_id": "c1", "message": "继续",
+            "event_id": str(uuid.uuid4()),
+            "guided_flows_enabled": False,
+            "topic_routing_enabled": True,
+        },
+        config=config,
+        context=ctx,
+    )
+    # Control path produces a topic_restored response, never a chat reply.
+    assert result.get("response_kind") == "topic_restored"
+    assert result.get("context_status") == "control"
+
+
+# ===================================================================
 # Graph-level integration tests
 # ===================================================================
 
@@ -587,3 +708,74 @@ async def test_pending_continue_through_graph(online_graph, config, mock_topic, 
     assert result.get("response_kind") == "chat"
     assert result.get("context_status") == "resolved"
     mock_topic_manager.resolve_pending.assert_awaited_once()
+
+
+# ===================================================================
+# Completed Guided Flow followed by a normal message routes to chat
+# ===================================================================
+
+
+@pytest.mark.asyncio
+async def test_completed_flow_then_normal_message_routes_to_chat(online_graph, config):
+    """After a Guided Flow completes (completed_flow set, active_flow cleared),
+    the next ordinary message must route to chat — NOT advance the completed
+    flow. This must still hold after the Task 6 reset additions."""
+    await online_graph.ainvoke(
+        {
+            "tenant_id": "t1", "agent_id": "a1", "user_id": "u1",
+            "session_user_id": "u1", "channel": "dingtalk",
+            "conversation_id": "c1", "message": "访前准备",
+            "event_id": "e-start",
+            "guided_flows_enabled": True,
+        },
+        config=config,
+        context={"db": None, "chat_model": None, "chat_runner": StubChatRunner()},
+    )
+    for i, msg in enumerate(
+        ["客户是CTO", "他们在评估方案", "希望下周签约"], start=2,
+    ):
+        await online_graph.ainvoke(
+            {
+                "tenant_id": "t1", "agent_id": "a1", "user_id": "u1",
+                "session_user_id": "u1", "channel": "dingtalk",
+                "conversation_id": "c1", "message": msg,
+                "event_id": f"e-adv-{i}",
+                "guided_flows_enabled": True,
+            },
+            config=config,
+            context={"db": None, "chat_model": None, "chat_runner": StubChatRunner()},
+        )
+
+    state_after = await online_graph.aget_state(config)
+    assert state_after.values.get("active_flow") is None
+
+    result = await online_graph.ainvoke(
+        {
+            "tenant_id": "t1", "agent_id": "a1", "user_id": "u1",
+            "session_user_id": "u1", "channel": "dingtalk",
+            "conversation_id": "c1", "message": "帮我总结一下",
+            "event_id": "e-after",
+            "guided_flows_enabled": True,
+            "topic_routing_enabled": True,
+        },
+        config=config,
+        context={
+            "db": None,
+            "chat_model": None,
+            "chat_runner": StubChatRunner(),
+            "context_resolver_override": AsyncMock(
+                return_value=_make_context_decision(
+                    turn_relation="continue",
+                    standalone_query="帮我总结一下",
+                ),
+            ),
+            "evidence_router_override": AsyncMock(
+                return_value=_make_evidence_decision(
+                    intent="general_sales_coaching",
+                    knowledge_policy="none",
+                ),
+            ),
+        },
+    )
+    assert result.get("response_kind") == "chat"
+    assert result.get("active_flow") is None

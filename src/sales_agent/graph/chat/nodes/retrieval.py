@@ -165,11 +165,14 @@ async def _retrieve_via_ontology(
     ontology_context_text = "\n".join(onto_lines)
 
     # Build sources from source_documents
+    # text 字段携带完整检索上下文（实体+事实），供 eval retrieval_context 使用；
+    # 钉钉 renderer 仍取 title/display_title 做文末引用。
     sources = [
         {
             "document_id": "",
             "title": title,
             "display_title": title,
+            "text": ontology_context_text,
             "score": compacted.get("confidence", 0.8),
             "source_type": "ontology",
         }

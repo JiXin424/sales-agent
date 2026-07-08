@@ -1,7 +1,11 @@
 # Todo — eval 迁移到 graph（独立后续工作）
 
-> 由 `07-07-prompt-cleanup-register` 任务分出。本任务**不在当前迭代执行**，
-> 仅记录后续工作清单，作为 `services/chat_pipeline.py` 删除的前置条件。
+> **已完成** — 见 `.trellis/tasks/07-08-eval-dingtalk-graph-migrate/`。
+> eval 已迁移到 `invoke_online_turn`，`chat_pipeline.py` 及辅助模块已删除。
+> 本文件保留作为历史记录。
+>
+> 由 `07-07-prompt-cleanup-register` 任务分出。原计划作为
+> `services/chat_pipeline.py` 删除的前置条件。
 
 ## 背景
 

@@ -44,8 +44,14 @@ from sales_agent.services.evidence_router import route_intent_evidence
 from sales_agent.services.structured_router_output import (
     ClarificationDecision,
     ContextDecision,
+    TopicRestoreDecision,
+    TopicScope,
 )
 from sales_agent.services.topic_manager import TopicManager, resolve_clarification
+from sales_agent.services.topic_restore import (
+    MAX_RESTORE_ATTEMPTS,
+    resolve_topic_restore,
+)
 
 from sales_agent.core.config import get_settings
 from sales_agent.scenarios import get_scenario_registry, match_scenario
@@ -69,8 +75,14 @@ from sales_agent.services.evidence_router import route_intent_evidence
 from sales_agent.services.structured_router_output import (
     ClarificationDecision,
     ContextDecision,
+    TopicRestoreDecision,
+    TopicScope,
 )
 from sales_agent.services.topic_manager import TopicManager, resolve_clarification
+from sales_agent.services.topic_restore import (
+    MAX_RESTORE_ATTEMPTS,
+    resolve_topic_restore,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,18 +92,14 @@ _DEFAULT_CLARIFICATION_QUESTION = (
     "请问您想继续之前的话题，还是开始一个新话题？"
 )
 
-# ====================================================================
-# Module-level subgraph caches
-# ====================================================================
-
+# =============================================================# Module-level subgraph caches
+# =============================================================
 _guided_flow_graph: CompiledStateGraph | None = None
 _chat_graph: CompiledStateGraph | None = None
 
 
-# ====================================================================
-# Helpers
-# ====================================================================
-
+# =============================================================# Helpers
+# =============================================================
 
 def _unpack_context(config: RunnableConfig) -> dict[str, Any] | None:
     """Extract the runtime context dict from the LangGraph config."""
@@ -101,10 +109,8 @@ def _unpack_context(config: RunnableConfig) -> dict[str, Any] | None:
     return ctx
 
 
-# ====================================================================
-# Subgraph factories (cached, no checkpointer — parent owns it)
-# ====================================================================
-
+# =============================================================# Subgraph factories (cached, no checkpointer — parent owns it)
+# =============================================================
 
 def _get_guided_flow_graph() -> CompiledStateGraph:
     """Return a cached compiled Guided Flow subgraph (no checkpointer).
@@ -127,10 +133,8 @@ def _get_chat_graph() -> CompiledStateGraph:
     return _chat_graph
 
 
-# ====================================================================
-# normalize_turn
-# ====================================================================
-
+# =============================================================# normalize_turn
+# =============================================================
 
 def normalize_turn_node(state: OnlineConversationState) -> dict[str, Any]:
     """Set ``requested_flow`` on every turn and choose ``flow_action``.
@@ -138,10 +142,14 @@ def normalize_turn_node(state: OnlineConversationState) -> dict[str, Any]:
     Routing priority (first match wins):
 
     1. **Duplicate** — ``event_id`` matches ``last_event_id``.
-    2. **Start** — guided flows enabled & a requested-flow trigger.
-    3. **Cancel** — guided flows enabled & active flow & cancel command.
-    4. **Advance** — guided flows enabled & active flow.
-    5. **Chat** — default.
+    2. **Reset** — ``reset_requested`` is ``True`` (Task 6).
+    3. **Start** — guided flows enabled & a requested-flow trigger.
+    4. **Cancel** — guided flows enabled & active flow & cancel command.
+    5. **Advance** — guided flows enabled & active flow.
+    6. **Chat** — default.
+
+    Reset must not fire on a duplicate — a redelivered reset event is a
+    no-op, not a second state clear.
     """
     guided_enabled = state.get("guided_flows_enabled", False)
     message = state.get("message", "")
@@ -158,6 +166,8 @@ def normalize_turn_node(state: OnlineConversationState) -> dict[str, Any]:
 
     if event_id and event_id == last_event_id:
         flow_action = "duplicate"
+    elif state.get("reset_requested"):
+        flow_action = "reset"
     elif guided_enabled and requested_flow:
         flow_action = "start"
     elif guided_enabled and state.get("active_flow") and is_cancel_command(message):
@@ -181,10 +191,8 @@ def normalize_turn_node(state: OnlineConversationState) -> dict[str, Any]:
     }
 
 
-# ====================================================================
-# chat_node
-# ====================================================================
-
+# =============================================================# chat_node
+# =============================================================
 
 async def chat_node(
     state: OnlineConversationState,
@@ -241,20 +249,16 @@ async def chat_node(
     }
 
 
-# ====================================================================
-# duplicate_node
-# ====================================================================
-
+# =============================================================# duplicate_node
+# =============================================================
 
 def duplicate_node(state: OnlineConversationState) -> dict[str, Any]:
     """Handle duplicate events — does **not** update ``last_event_id``."""
     return {"response_kind": "duplicate"}
 
 
-# ====================================================================
-# clarification_response_node
-# ====================================================================
-
+# =============================================================# clarification_response_node
+# =============================================================
 
 async def clarification_response_node(
     state: OnlineConversationState,
@@ -270,10 +274,8 @@ async def clarification_response_node(
     }
 
 
-# ====================================================================
-# log_control_response_node
-# ====================================================================
-
+# =============================================================# log_control_response_node
+# =============================================================
 
 async def log_control_response_node(
     state: OnlineConversationState,
@@ -304,15 +306,14 @@ async def log_control_response_node(
                 path="clarify",
             )
         except Exception:
-            logger.warning("Failed to log control response", exc_info=True)
+            logger.exception("Failed to persist completed online turn")
+            raise
 
     return {"last_event_id": state.get("event_id")}
 
 
-# ====================================================================
-# log_flow_output_node
-# ====================================================================
-
+# =============================================================# log_flow_output_node
+# =============================================================
 
 async def log_flow_output_node(
     state: OnlineConversationState,
@@ -347,15 +348,14 @@ async def log_flow_output_node(
                 path="guided_flow",
             )
         except Exception:
-            logger.warning("Failed to log guided flow turn", exc_info=True)
+            logger.exception("Failed to persist completed online turn")
+            raise
 
     return {"last_event_id": state.get("event_id")}
 
 
-# ====================================================================
-# scenario_coach
-# ====================================================================
-
+# =============================================================# scenario_coach
+# =============================================================
 
 async def scenario_coach_node(
     state: OnlineConversationState,
@@ -461,12 +461,89 @@ async def log_scenario_response_node(
             logger.warning("Failed to log scenario response", exc_info=True)
 
     return {"last_event_id": state.get("event_id")}
+# reset_context_node (Task 6)
+# =============================================================
+
+# Reset confirmation emitted when a reset command carries no remaining
+# message suffix. The user is told a new topic is open and prompted to
+# state what they want to work on next.
+_RESET_CONFIRMATION = "已开启新话题。你可以直接说当前要处理的销售问题。"
 
 
-# ====================================================================
-# context_resolution_node  (was nodes/context_resolution.py)
-# ====================================================================
+async def reset_context_node(
+    state: OnlineConversationState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """Close the active Topic + clear pending clarification + clear guided
+    flow state, then either emit the reset confirmation (empty message) or
+    hand the remaining message to ``context_resolution`` for a clean topic
+    (force_new_topic).
 
+    Routing (wired in ``graph.py``)::
+
+        reset_context --empty message--> log_control_response --> END
+        reset_context --remaining message--> context_resolution --> ...
+
+    This node does NOT set ``last_event_id``: the empty-message path is
+    logged by ``log_control_response_node`` (which sets it after a
+    successful log), and the remaining-message path is logged by the Chat
+    Graph's ``log_node``. A failed terminal node therefore cannot write
+    ``last_event_id``.
+    """
+    ctx = _unpack_context(config)
+    db = ctx.get("db") if ctx else None
+    now = ctx.get("now") or datetime.now(timezone.utc)
+
+    # Close the active Topic in the caller transaction. Uses the same
+    # scope/db pattern as context_resolution_node.
+    scope = {
+        "tenant_id": state.get("tenant_id", ""),
+        "agent_id": state.get("agent_id", ""),
+        "user_id": state.get("user_id", ""),
+        "channel": state.get("channel", ""),
+    }
+
+    if db is not None:
+        manager: TopicManager = (
+            ctx.get("topic_manager") if ctx and "topic_manager" in ctx
+            else TopicManager()
+        )
+        topic = await manager.get_active_topic(db, **scope)
+        if topic is not None:
+            topic.status = "closed"
+            topic.closed_at = now
+            topic.pending_clarification_json = None
+            await db.flush()
+
+    # Common state: clear flow + force a clean topic for whatever follows.
+    base: dict[str, Any] = {
+        "active_flow": None,
+        "flow_stage": None,
+        "flow_payload": {},
+        "force_new_topic": True,
+        "turn_relation": "new",
+        "pending_clarification_id": None,
+        "clarification_state": None,
+    }
+
+    message = (state.get("message") or "").strip()
+    if not message:
+        # Empty suffix → emit the reset confirmation and route to
+        # log_control_response (which sets last_event_id after logging).
+        return {
+            **base,
+            "answer_dict": {"summary": _RESET_CONFIRMATION, "sections": []},
+            "response_kind": "reset",
+        }
+
+    # Remaining suffix → context_resolution creates a clean topic and
+    # routes through evidence_routing → chat. The message is already the
+    # suffix (the processor strips the reset command before invoking).
+    return base
+
+
+# =============================================================# context_resolution_node  (was nodes/context_resolution.py)
+# =============================================================
 
 # ── helper: resolve a pending clarification on a topic ──────────────
 
@@ -579,6 +656,318 @@ async def _resolve_pending_turn(
     return None
 
 
+# ── helpers: bounded topic restore ──────────────────────────────────
+
+
+def _build_restore_clarify_result(
+    *,
+    anchor: ConversationTopic,
+    candidates: list[ConversationTopic],
+    message: str,
+    event_id: str,
+    supplemental: str | None,
+) -> dict[str, Any]:
+    """Build a ``clarify`` state update that lists ≤3 numbered candidates."""
+    lines = []
+    for idx, cand in enumerate(candidates[:3], start=1):
+        summary = cand.summary or "(无摘要)"
+        lines.append(f"{idx}. {summary}")
+    question = "请问您想继续之前哪个话题？\n" + "\n".join(lines)
+    return {
+        "context_status": "clarify",
+        "turn_relation": "ambiguous",
+        "original_message": message,
+        "standalone_query": supplemental or "",
+        "topic_id": anchor.id,
+        "pending_clarification_id": event_id,
+        "clarification_state": "pending",
+        "answer_dict": {"summary": question},
+        "response_kind": "clarify",
+    }
+
+
+async def _execute_restore_decision(
+    *,
+    manager: TopicManager,
+    db: Any,
+    decision: TopicRestoreDecision,
+    candidates: list[ConversationTopic],
+    anchor: ConversationTopic | None,
+    message: str,
+    chat_model: Any,
+    context_resolver_fn: Any,
+    scope: TopicScope,
+    conversation_id: str,
+    event_id: str,
+    now: datetime,
+    tenant_id: str | None,
+    agent_id: str | None,
+) -> dict[str, Any]:
+    """Execute a :class:`TopicRestoreDecision`.
+
+    ``anchor`` is the existing active anchor when resolving a pending
+    restore, or ``None`` on the initial turn. Closing the anchor is always
+    flushed before restoring/creating a topic so the partial unique
+    active-Topic index cannot be violated.
+    """
+    # ── restore a specific candidate ───────────────────────────────
+    if decision.resolution == "restore":
+        selected = next(
+            (c for c in candidates if c.id == decision.selected_topic_id), None,
+        )
+        if selected is None:
+            # Validated upstream — guard anyway by treating as ambiguous.
+            logger.warning(
+                "restore selected_topic_id %s not in candidates; ambiguous",
+                decision.selected_topic_id,
+            )
+            decision = TopicRestoreDecision(
+                resolution="ambiguous", reason_code="missing_candidate",
+            )
+        else:
+            # Close + flush the anchor first so the unique active index is free.
+            if anchor is not None and anchor.id != selected.id:
+                anchor.status = "closed"
+                anchor.closed_at = now
+                anchor.pending_clarification_json = None
+                await db.flush()
+            restored = await manager.restore_topic(db, selected, now=now)
+            supplemental = decision.supplemental_message
+            if supplemental:
+                # Run the suffix as a task on the restored topic.
+                recent = await manager.load_recent_topic_messages(
+                    db, scope=scope, conversation_id=conversation_id,
+                    topic_id=restored.id,
+                )
+                ctx_dec = await context_resolver_fn(
+                    message=supplemental, topic=restored,
+                    recent_messages=recent, chat_model=chat_model,
+                    db=db, tenant_id=tenant_id, agent_id=agent_id,
+                )
+                restored = await manager.apply_context_decision(
+                    db, restored, ctx_dec, now=now,
+                )
+                return {
+                    "context_status": "resolved",
+                    "topic_id": restored.id,
+                    "turn_relation": ctx_dec.turn_relation,
+                    "standalone_query": ctx_dec.standalone_query or supplemental,
+                    "retained_entities": ctx_dec.retained_entities,
+                    "retracted_goals": ctx_dec.retracted_goals,
+                    "original_message": message,
+                    "pending_clarification_id": None,
+                    "clarification_state": None,
+                }
+            # No supplemental task → control response (no chat reply).
+            return {
+                "context_status": "control",
+                "response_kind": "topic_restored",
+                "turn_relation": "continue",
+                "topic_id": restored.id,
+                "standalone_query": "",
+                "original_message": message,
+                "answer_dict": {
+                    "summary": (
+                        f"已继续之前的话题：{restored.summary}。"
+                        "请告诉我接下来要处理什么。"
+                    ),
+                },
+                "pending_clarification_id": None,
+                "clarification_state": None,
+            }
+
+    # ── new: drop candidates, create a clean topic ─────────────────
+    if decision.resolution == "new":
+        if anchor is not None:
+            anchor.status = "closed"
+            anchor.closed_at = now
+            anchor.pending_clarification_json = None
+            await db.flush()
+        task = decision.supplemental_message or message
+        new_topic = await manager.create_topic(
+            db,
+            tenant_id=scope.tenant_id,
+            agent_id=scope.agent_id,
+            user_id=scope.user_id,
+            channel=scope.channel,
+            conversation_id=conversation_id,
+            summary=task,
+            current_goal=task,
+            now=now,
+        )
+        if db is not None:
+            await db.flush()  # populate new_topic.id
+        return {
+            "context_status": "resolved",
+            "topic_id": new_topic.id,
+            "turn_relation": "new",
+            "standalone_query": task,
+            "retained_entities": [],
+            "retracted_goals": [],
+            "original_message": message,
+            "pending_clarification_id": None,
+            "clarification_state": None,
+        }
+
+    # ── ambiguous ──────────────────────────────────────────────────
+    if anchor is not None:
+        # Resolving an existing anchor: increment attempts, maybe fall back.
+        anchor.clarification_attempts += 1
+        if anchor.clarification_attempts >= MAX_RESTORE_ATTEMPTS:
+            anchor.status = "closed"
+            anchor.closed_at = now
+            anchor.pending_clarification_json = None
+            await db.flush()
+            task = decision.supplemental_message or message
+            new_topic = await manager.create_topic(
+                db,
+                tenant_id=scope.tenant_id,
+                agent_id=scope.agent_id,
+                user_id=scope.user_id,
+                channel=scope.channel,
+                conversation_id=conversation_id,
+                summary=task,
+                current_goal=task,
+                now=now,
+            )
+            if db is not None:
+                await db.flush()  # populate new_topic.id
+            return {
+                "context_status": "resolved",
+                "topic_id": new_topic.id,
+                "turn_relation": "new",
+                "standalone_query": task,
+                "retained_entities": [],
+                "retracted_goals": [],
+                "original_message": message,
+                "pending_clarification_id": None,
+                "clarification_state": None,
+            }
+        # Still ambiguous — re-ask using the same anchor.
+        return _build_restore_clarify_result(
+            anchor=anchor, candidates=candidates, message=message,
+            event_id=event_id, supplemental=decision.supplemental_message,
+        )
+
+    # Initial ambiguous (no anchor yet): create a restore anchor.
+    anchor = await manager.create_restore_anchor(
+        db,
+        scope=scope,
+        conversation_id=conversation_id,
+        event_id=event_id,
+        original_message=message,
+        candidates=candidates,
+        now=now,
+    )
+    anchor.clarification_attempts = 1
+    return _build_restore_clarify_result(
+        anchor=anchor, candidates=candidates, message=message,
+        event_id=event_id, supplemental=decision.supplemental_message,
+    )
+
+
+async def _resolve_restore_anchor(
+    *,
+    manager: TopicManager,
+    db: Any,
+    anchor: ConversationTopic,
+    message: str,
+    chat_model: Any,
+    context_resolver_fn: Any,
+    scope: TopicScope,
+    conversation_id: str,
+    event_id: str,
+    now: datetime,
+    tenant_id: str | None,
+    agent_id: str | None,
+) -> dict[str, Any]:
+    """Resolve a pending ``topic_restore`` anchor on an active topic.
+
+    Re-fetches the still-restorable candidates, asks the restore resolver,
+    and executes the decision. Always returns a state-update dict.
+    """
+    try:
+        pending = json.loads(anchor.pending_clarification_json or "{}")
+    except (json.JSONDecodeError, TypeError):
+        pending = {}
+
+    # Duplicate event guard (same event that created the anchor).
+    if pending.get("event_id") == event_id:
+        return {"response_kind": "duplicate", "context_status": "clarify"}
+
+    candidate_ids: list[str] = list(pending.get("candidate_topic_ids") or [])
+    # Re-fetch still-restorable candidates (closed, within 24h) and keep only
+    # those recorded in the anchor, preserving the stored order.
+    restorable = await manager.find_restorable_topics(
+        db,
+        tenant_id=scope.tenant_id,
+        agent_id=scope.agent_id,
+        user_id=scope.user_id,
+        channel=scope.channel,
+        now=now,
+    )
+    by_id = {c.id: c for c in restorable}
+    candidates = [by_id[cid] for cid in candidate_ids if cid in by_id]
+
+    if not candidates:
+        # All candidates fell out of the window — close anchor, start new.
+        anchor.status = "closed"
+        anchor.closed_at = now
+        anchor.pending_clarification_json = None
+        await db.flush()
+        new_topic = await manager.create_topic(
+            db,
+            tenant_id=scope.tenant_id,
+            agent_id=scope.agent_id,
+            user_id=scope.user_id,
+            channel=scope.channel,
+            conversation_id=conversation_id,
+            summary=message,
+            current_goal=message,
+            now=now,
+        )
+        if db is not None:
+            await db.flush()  # populate new_topic.id
+        return {
+            "context_status": "resolved",
+            "topic_id": new_topic.id,
+            "turn_relation": "new",
+            "standalone_query": message,
+            "retained_entities": [],
+            "retracted_goals": [],
+            "original_message": message,
+            "pending_clarification_id": None,
+            "clarification_state": None,
+        }
+
+    decision = await resolve_topic_restore(
+        message=message,
+        candidates=candidates,
+        attempt_count=anchor.clarification_attempts,
+        chat_model=chat_model,
+        db=db,
+        tenant_id=tenant_id,
+        agent_id=agent_id,
+    )
+
+    return await _execute_restore_decision(
+        manager=manager,
+        db=db,
+        decision=decision,
+        candidates=candidates,
+        anchor=anchor,
+        message=message,
+        chat_model=chat_model,
+        context_resolver_fn=context_resolver_fn,
+        scope=scope,
+        conversation_id=conversation_id,
+        event_id=event_id,
+        now=now,
+        tenant_id=tenant_id,
+        agent_id=agent_id,
+    )
+
+
 async def context_resolution_node(
     state: dict[str, Any],
     config: RunnableConfig,
@@ -624,6 +1013,48 @@ async def context_resolution_node(
     conversation_id = state.get("conversation_id", "")
     event_id = state.get("event_id") or ""
 
+    # ── force_new_topic: reset cleared the slate; create a clean topic ──
+    # reset_context_node already closed the active topic; we must NOT
+    # restore the just-closed topic (or any other) — skip active/restorable
+    # selection entirely and create a brand-new topic for the remaining
+    # message. The flag is cleared in the output so it doesn't persist.
+    if state.get("force_new_topic"):
+        if db is None and "topic_manager" not in (ctx or {}):
+            return {
+                "context_status": "resolved",
+                "standalone_query": message,
+                "original_message": original_message,
+                "turn_relation": "new",
+                "force_new_topic": False,
+                "pending_clarification_id": None,
+                "clarification_state": None,
+            }
+        topic = await manager.create_topic(
+            db,
+            tenant_id=scope["tenant_id"],
+            agent_id=scope["agent_id"],
+            user_id=scope["user_id"],
+            channel=scope["channel"],
+            conversation_id=conversation_id,
+            summary=message,
+            current_goal=message,
+            now=now,
+        )
+        if db is not None:
+            await db.flush()
+        return {
+            "context_status": "resolved",
+            "topic_id": topic.id,
+            "turn_relation": "new",
+            "standalone_query": message,
+            "retained_entities": [],
+            "retracted_goals": [],
+            "original_message": original_message,
+            "force_new_topic": False,
+            "pending_clarification_id": None,
+            "clarification_state": None,
+        }
+
     # ── Passthrough mode ──────────────────────────────────────────
     # When there is no DB and no injected topic_manager, skip topic
     # management entirely and just pass through as resolved.  This
@@ -641,8 +1072,37 @@ async def context_resolution_node(
         db, **scope,
     )
 
-    # ── Step 2: Resolve pending clarification if present ──────────
+    topic_scope = TopicScope(
+        tenant_id=scope["tenant_id"],
+        agent_id=scope["agent_id"],
+        user_id=scope["user_id"],
+        channel=scope["channel"],
+    )
+
+    # ── Step 2: Resolve pending state on the active topic ─────────
+    # A topic_restore anchor is resolved before a generic clarification.
     if topic and topic.pending_clarification_json:
+        try:
+            pending_kind = json.loads(topic.pending_clarification_json).get("kind")
+        except (json.JSONDecodeError, TypeError):
+            pending_kind = None
+
+        if pending_kind == "topic_restore":
+            return await _resolve_restore_anchor(
+                manager=manager,
+                db=db,
+                anchor=topic,
+                message=message,
+                chat_model=chat_model,
+                context_resolver_fn=context_resolver_fn,
+                scope=topic_scope,
+                conversation_id=conversation_id,
+                event_id=event_id,
+                now=now,
+                tenant_id=scope["tenant_id"] or None,
+                agent_id=scope["agent_id"] or None,
+            )
+
         result = await _resolve_pending_turn(
             manager=manager,
             db=db,
@@ -668,30 +1128,51 @@ async def context_resolution_node(
             previous_topic_id = topic.id
             topic = None
 
-    # ── Step 4: Check restorable topics (no active topic) ─────────
-    restorable_context: str | None = None
+    # ── Step 4: Restore path — no active topic, candidates exist ──
+    # Resolve restore/new/ambiguous BEFORE generic context resolution.
     if topic is None:
         restorable = await manager.find_restorable_topics(
             db, **scope, now=now,
         )
         if restorable:
-            restorable_context = (
-                f"There are {len(restorable)} restorable previous topic(s). "
-                "Summaries: " + "; ".join(
-                    t.summary for t in restorable[:3] if t.summary
-                )
+            restore_decision = await resolve_topic_restore(
+                message=message,
+                candidates=restorable,
+                attempt_count=0,
+                chat_model=chat_model,
+                db=db,
+                tenant_id=scope["tenant_id"] or None,
+                agent_id=scope["agent_id"] or None,
+            )
+            return await _execute_restore_decision(
+                manager=manager,
+                db=db,
+                decision=restore_decision,
+                candidates=restorable,
+                anchor=None,
+                message=message,
+                chat_model=chat_model,
+                context_resolver_fn=context_resolver_fn,
+                scope=topic_scope,
+                conversation_id=conversation_id,
+                event_id=event_id,
+                now=now,
+                tenant_id=scope["tenant_id"] or None,
+                agent_id=scope["agent_id"] or None,
             )
 
-    # ── Step 5: Call Context Resolver ─────────────────────────────
-    # The online graph does NOT maintain a message history; pass
-    # restorable topic info when available so the resolver can make
-    # informed restore-vs-new decisions.
+    # ── Step 5: Generic context resolution on active/restored/new topic
+    # Load the latest 6 user/assistant messages scoped to this topic so
+    # the resolver has context. Messages from any other (closed) topic
+    # are never loaded.
     recent_messages: list[dict[str, str]] = []
-    if restorable_context:
-        recent_messages.append({
-            "role": "system",
-            "content": restorable_context,
-        })
+    if topic:
+        recent_messages = await manager.load_recent_topic_messages(
+            db,
+            scope=topic_scope,
+            conversation_id=conversation_id,
+            topic_id=topic.id,
+        )
     decision: ContextDecision = await context_resolver_fn(
         message=message,
         topic=topic,
@@ -741,6 +1222,28 @@ async def context_resolution_node(
             current_goal=decision.standalone_query or message,
             now=now,
         )
+        if db is not None:
+            await db.flush()  # populate topic.id
+    elif decision.turn_relation == "new":
+        # Active topic + resolver 'new': close the old topic (flush so the
+        # unique active-Topic index is freed) and create a fresh active one.
+        previous_topic_id = topic.id
+        topic.status = "closed"
+        topic.closed_at = now
+        await db.flush()
+        topic = await manager.create_topic(
+            db,
+            tenant_id=scope["tenant_id"],
+            agent_id=scope["agent_id"],
+            user_id=scope["user_id"],
+            channel=scope["channel"],
+            conversation_id=conversation_id,
+            summary=decision.standalone_query or message,
+            current_goal=decision.standalone_query or message,
+            now=now,
+        )
+        if db is not None:
+            await db.flush()  # populate topic.id
     else:
         # Propagate previous_topic_id for switch/revise transitions
         # so downstream consumers can detect topic changes.
@@ -764,10 +1267,8 @@ async def context_resolution_node(
     }
 
 
-# ====================================================================
-# evidence_routing_node  (was nodes/evidence_routing.py)
-# ====================================================================
-
+# =============================================================# evidence_routing_node  (was nodes/evidence_routing.py)
+# =============================================================
 
 async def evidence_routing_node(
     state: dict[str, Any],

@@ -24,6 +24,10 @@ async def run() -> None:
     from sales_agent.core.config import get_settings
     from sales_agent.core.database import init_db, close_db
     from sales_agent.core.tenant_runtime import get_tenant_runtime
+    from sales_agent.services.online_conversation import (
+        initialize_online_runtime,
+        close_online_runtime,
+    )
 
     settings = get_settings()
     config = settings.dingtalk
@@ -31,6 +35,10 @@ async def run() -> None:
     # 初始化数据库
     await init_db()
     logger.info("Database initialized (stream runner)")
+
+    # 初始化 Online Graph runtime
+    await initialize_online_runtime()
+    logger.info("Online runtime initialized (stream runner)")
 
     # 加载 TenantRuntime
     runtime = get_tenant_runtime()
@@ -52,6 +60,7 @@ async def run() -> None:
     # 检查 DingTalk 配置
     if not config.enabled:
         logger.error("DingTalk not enabled — stream runner has nothing to do. Exiting.")
+        await close_online_runtime()
         await close_db()
         return
 
@@ -60,6 +69,7 @@ async def run() -> None:
             "DingTalk message_mode=%s (expected 'stream'). Exiting.",
             config.message_mode,
         )
+        await close_online_runtime()
         await close_db()
         return
 
@@ -80,6 +90,7 @@ async def run() -> None:
     finally:
         logger.info("Stream runner shutting down...")
         await stop_dingtalk_stream_worker()
+        await close_online_runtime()
         await close_db()
         logger.info("Stream runner stopped cleanly")
 

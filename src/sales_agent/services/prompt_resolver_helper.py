@@ -1,6 +1,6 @@
 """Prompt 解析公共 helper。
 
-为 agent 执行链路（chat_pipeline / 钉钉流式 / CLI）统一解析 task + system prompt，
+为 agent 执行链路（Chat Graph / 钉钉流式 / CLI）统一解析 task + system prompt，
 避免每个调用方各自构造 ``PromptRegistry``。所有调用点经此 helper 解析后，即接入
 DB 版本管理（钉钉流式、CLI 之前直接用代码常量，运营在后台改 prompt 不生效）。
 """
@@ -37,7 +37,7 @@ async def resolve_risk_prompt(
     tenant_id: str,
     agent_id: str | None = None,
 ) -> str:
-    """解析风险检查 prompt（供 chat_pipeline / cli 的风险检查段调用）。"""
+    """解析风险检查 prompt（供 Chat Graph / cli 的风险检查段调用）。"""
     return await PromptRegistry(db).resolve_prompt(
         "risk", "risk_check", tenant_id, agent_id
     )

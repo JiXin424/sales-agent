@@ -35,7 +35,7 @@ class AgentRun(TimestampMixin, Base):
 class AgentRunStep(TimestampMixin, Base):
     """Agent 运行步骤记录。
 
-    步骤名称对应 ChatPipeline 的各阶段：
+    步骤名称对应 Chat Graph 的各阶段：
     validation / tenant_resolve / context_load / routing /
     retrieval / generation / risk_check / logging。
     """

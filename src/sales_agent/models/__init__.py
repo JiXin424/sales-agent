@@ -78,6 +78,7 @@ from .optimization_auth import (
 )
 from .atomic_memory import AtomicMemory, MemoryOutboxJob, MemoryAuditEvent
 from .user_memory_profile import UserMemoryProfile, UserProfileRebuildJob
+from .memory_eval import MemoryEvalTraceRecord, PromotedRegression
 from .quick_session import QuickSession
 
 
@@ -167,4 +168,6 @@ __all__ = [
     "MemoryAuditEvent",
     "UserMemoryProfile",
     "UserProfileRebuildJob",
+    "MemoryEvalTraceRecord",
+    "PromotedRegression",
 ]

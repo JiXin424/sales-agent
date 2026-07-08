@@ -158,6 +158,27 @@ class UserMemoryProfileRepository:
             for row in rows
         ]
 
+    async def _pending_null_source_job_exists(self, scope: MemoryScope, *, reason: str) -> bool:
+        """Check if a pending job exists for this scope+reason with NULL source_memory_id.
+
+        PostgreSQL treats NULL as distinct in UNIQUE constraints, so
+        ON CONFLICT DO NOTHING cannot deduplicate rows where source_memory_id IS NULL.
+        This application-level check fills that gap.
+        """
+        row = (
+            await self.db.execute(
+                select(UserProfileRebuildJob).where(
+                    UserProfileRebuildJob.tenant_id == scope.tenant_id,
+                    UserProfileRebuildJob.agent_id == scope.agent_id,
+                    UserProfileRebuildJob.user_id == scope.user_id,
+                    UserProfileRebuildJob.reason == reason,
+                    UserProfileRebuildJob.source_memory_id.is_(None),
+                    UserProfileRebuildJob.status == "pending",
+                )
+            )
+        ).first()
+        return row is not None
+
     async def enqueue_stale_profile_rebuilds(self, *, limit: int) -> int:
         scopes = await self.list_profile_scopes(limit=limit)
         count = 0
@@ -169,6 +190,10 @@ class UserMemoryProfileRepository:
             records = await memory_repo.list_active_memories(scope)
             projected = project_user_profile(records)
             if projected.source_memory_version != current_profile.source_memory_version:
+                if await self._pending_null_source_job_exists(
+                    scope, reason="profile_reconciliation"
+                ):
+                    continue
                 await self.enqueue_profile_rebuild(
                     scope,
                     reason="profile_reconciliation",

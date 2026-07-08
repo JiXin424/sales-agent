@@ -46,8 +46,6 @@ class ScenarioRunner:
         last_result: dict[str, Any] = {}
 
         for i, turn in enumerate(scenario.turns):
-            if turn.restart_before and self._restart is not None:
-                await self._restart()
             accumulated_offset += turn.time_offset_seconds
 
             event_id = prev_event_id if turn.duplicate_previous_event else (
@@ -63,6 +61,8 @@ class ScenarioRunner:
                 chat_model.set_turn(scenario.id, i)
 
             try:
+                if turn.restart_before and self._restart is not None:
+                    await self._restart()
                 if turn.concurrent_group:
                     result = await self._invoke_concurrent(scenario, i, turn, event_id, now)
                 else:
@@ -70,6 +70,8 @@ class ScenarioRunner:
                         self.ctx, message=turn.input, event_id=event_id, now=now,
                         chat_model=chat_model,
                     )
+                last_result = result
+                observed.append(await self._capture(self.ctx, i, result))
             except Exception as exc:  # noqa: BLE001 — invalidate the run, not a product score (§10)
                 logger.exception("scenario %s turn %d failed", scenario.id, i)
                 observed.append(ObservedTurn(
@@ -79,9 +81,6 @@ class ScenarioRunner:
                 ))
                 return ScenarioRun(scenario_id=scenario.id, observed=observed,
                                    final_state=last_result, error=str(exc))
-
-            last_result = result
-            observed.append(await self._capture(self.ctx, i, result))
             if not turn.duplicate_previous_event:
                 prev_event_id = event_id
 

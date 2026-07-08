@@ -114,3 +114,34 @@ async def test_chat_model_set_turn_advanced_per_turn():
     )
     await runner.run(two_turn)
     assert set_turn_calls == [("s1", 0), ("s1", 1)]
+
+
+@pytest.mark.asyncio
+async def test_capture_failure_invalidates_run():
+    """A capture (or restart) failure must invalidate the scenario run per
+    Spec 4 §10 — set ScenarioRun.error and stop, never raise."""
+
+    async def fake_invoke(ctx, *, message, event_id, now, chat_model):
+        return {"turn_relation": "new"}
+
+    async def fake_capture(ctx, turn_index, result):
+        raise RuntimeError("db down")
+
+    two_turn = MultiturnScenario(id="s1", turns=[
+        ScenarioTurn(input="a", expected=ExpectedTurn()),
+        ScenarioTurn(input="b", expected=ExpectedTurn()),
+    ])
+
+    runner = ScenarioRunner(
+        ctx={},
+        invoke_turn=fake_invoke,
+        capture_state=fake_capture,
+        now_provider=lambda: None,
+    )
+    run = await runner.run(two_turn)
+    assert run.error is not None
+    assert "db down" in run.error
+    # Only turn 0 was attempted; capture failed so turn 1 never ran
+    assert len(run.observed) == 1
+    assert run.observed[0].error is not None
+    assert "db down" in run.observed[0].error

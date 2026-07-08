@@ -21,6 +21,7 @@ from sales_agent.core.config import get_settings
 from sales_agent.graph.checkpoints import get_checkpointer
 from sales_agent.integrations.dingtalk.citation import format_citation_block
 from sales_agent.services.online_conversation import get_online_graph
+from sales_agent.services.response_formatter import format_text_output
 
 logger = logging.getLogger(__name__)
 
@@ -183,13 +184,12 @@ async def handle_dingtalk_stream_via_graph(
 
     display_text = accumulated_text
     if not display_text and final_answer:
-        display_text = final_answer.get("summary", "")
-    if not display_text and final_answer:
-        sections = final_answer.get("sections", [])
-        if sections:
-            display_text = "\n\n".join(
-                s.get("content", "") for s in sections if s.get("content")
-            )
+        # Non-streamed structured answer (e.g. scenario_coach preset hit, which
+        # sets answer_dict without any LLM token stream): render the full
+        # summary + sections the same way the HTTP path does, instead of the
+        # old summary-then-sections fallback that dropped sections whenever a
+        # summary was present.
+        display_text = format_text_output(final_answer)
 
     # 方案 A：正文确定后，把来源列表拼到末尾（不走 streaming，避免卡片闪烁）
     if display_text and final_answer:

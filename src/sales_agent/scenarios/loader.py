@@ -159,8 +159,16 @@ def parse_scenario_md(md_text: str) -> ScenarioRegistry:
                 tag = body[0].lstrip()[1:].strip()
                 body = body[1:]
             current_question.tag = tag
-            current_question.answer_sections = _split_sections(body)
-            current_question.answer_summary = current_question.text
+            sections = _split_sections(body)
+            # The preamble (概述) section becomes the reply's lead summary — a
+            # natural intro, NOT an echo of the question and with no "概述："
+            # label. Drop it from the rendered sections so it isn't shown twice.
+            if sections and sections[0].title == "概述":
+                current_question.answer_summary = sections[0].content
+                sections = sections[1:]
+            else:
+                current_question.answer_summary = ""
+            current_question.answer_sections = sections
             assert current_scenario is not None
             current_scenario.questions.append(current_question)
         current_question = None

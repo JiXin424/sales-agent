@@ -37,10 +37,14 @@ def test_question_fields_populated():
     assert q01.text  # non-empty representative question
     assert q01.tag  # "需判断 · 先判断再应对"
     assert len(q01.answer_sections) >= 1
-    assert q01.answer_summary == q01.text  # summary is the representative question, not the tag label
-    assert "需判断" not in q01.answer_summary  # not the generic tag label
-    # 需判断-type Q01 has #### subsections like "价值还没立住"
+    # summary is the preamble intro (NOT an echo of the question, NOT the tag label)
+    assert q01.answer_summary
+    assert q01.answer_summary != q01.text
+    assert "需判断" not in q01.answer_summary
+    # the 概述 preamble is folded into summary, so it must NOT appear as a section
     titles = [s.title for s in q01.answer_sections]
+    assert "概述" not in titles
+    # 需判断-type Q01 has #### subsections like "价值还没立住"
     assert any("价值还没立住" in t for t in titles)
     # every section has title + content
     for s in q01.answer_sections:

@@ -558,6 +558,7 @@ async def run_dingtalk_staging(args) -> int:
                 # Fresh session per scenario (same pattern as graph-multiturn).
                 async with get_session_factory()() as db:
                     runtime = SimpleNamespace(tenant_id=args.tenant_id)
+                    prev_worker_id: str | None = None
                     for i, turn in enumerate(s.turns):
                         # Advance the scripted double to THIS turn's script.
                         double.set_turn(s.id, i)
@@ -568,12 +569,15 @@ async def run_dingtalk_staging(args) -> int:
                         if turn.restart_before:
                             await restart_runtime()
 
-                        # Worker-switch (§3.4): the worker_id label is noted
-                        # but does not rebind agent resolution — in production
-                        # the DingTalk channel resolves to one agent per tenant
-                        # regardless of which worker processes the event.
-                        # Agent resolution runs naturally against the seeded
-                        # tenant-default agent (no monkeypatch).
+                        # Worker-switch (§3.4): a changed worker_id means the
+                        # event arrived on a different worker process, so the
+                        # runtime must cold-start from the checkpointer — the
+                        # same recovery path as restart_before. Agent resolution
+                        # runs naturally against the seeded tenant-default agent
+                        # (no monkeypatch).
+                        if turn.worker_id and turn.worker_id != prev_worker_id:
+                            await restart_runtime()
+                        prev_worker_id = turn.worker_id
 
                         cap = PublicReplyCapture()
                         result = await handle_dingtalk_event(

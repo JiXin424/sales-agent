@@ -33,11 +33,15 @@ class OnlineConversationState(TypedDict, total=False):
     guided_flows_enabled: bool
     topic_routing_enabled: bool
     requested_flow: str | None
-    flow_action: str  # "duplicate" | "start" | "cancel" | "advance" | "chat" | "direct_chat"
+    flow_action: str  # "duplicate" | "start" | "cancel" | "advance" | "chat" | "direct_chat" | "reset"
     active_flow: str | None
     flow_stage: str | None
     flow_payload: dict[str, Any]
     completed_flow: str | None
+
+    # ── Reset / topic-control ─────────────────────────────────────
+    reset_requested: bool
+    force_new_topic: bool
 
     # ── Output ────────────────────────────────────────────────────
     answer_dict: dict[str, Any]

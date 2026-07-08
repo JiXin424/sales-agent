@@ -196,6 +196,18 @@ class GuidedFlowsConfig(BaseModel):
     timezone: str = "Asia/Shanghai"
 
 
+class LongTermMemoryConfig(BaseModel):
+    """Governed long-term atomic memory."""
+
+    enabled: bool = False
+    candidate_extraction_enabled: bool = True
+    outbox_worker_enabled: bool = True
+    outbox_poll_interval_seconds: float = 2.0
+    outbox_batch_size: int = 20
+    outbox_max_attempts: int = 5
+    explicit_confirmation_required_for_broad_forget: bool = True
+
+
 class ScenarioCoachConfig(BaseModel):
     """场景教练：识别预设销售场景问题，命中即返回预设答案。默认关闭。"""
 
@@ -222,6 +234,7 @@ class Settings(BaseModel):
     topic_routing: TopicRoutingConfig = TopicRoutingConfig()
     guided_flows: GuidedFlowsConfig = GuidedFlowsConfig()
     scenario_coach: ScenarioCoachConfig = ScenarioCoachConfig()
+    long_term_memory: LongTermMemoryConfig = LongTermMemoryConfig()
 
     # 延迟导入避免循环依赖
     @property

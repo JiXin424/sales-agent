@@ -19,8 +19,8 @@ import os
 import re
 import subprocess
 import sys
+import uuid
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Optional
 
 from eval.memory_eval.dataset import DatasetValidationError, load_scenarios, validate_dataset
@@ -29,7 +29,11 @@ from eval.memory_eval.metrics.memory_lifecycle import evaluate_memory_lifecycle
 from eval.memory_eval.metrics.recall_profile import evaluate_recall_profile
 from eval.memory_eval.metrics.turn_topic import evaluate_turn_topic
 from eval.memory_eval.metrics.types import MetricResult
-from eval.memory_eval.model_double import ScriptedModelDouble, TurnScript
+from eval.memory_eval.model_double import (
+    DeterministicEmbeddingDouble,
+    ScriptedModelDouble,
+    TurnScript,
+)
 from eval.memory_eval.report import EvaluationReport, write_report
 from eval.memory_eval.schema import MultiturnScenario, ScenarioRun
 from eval.memory_eval.scenario_runner import ScenarioRunner
@@ -163,21 +167,105 @@ def _parse_pytest_summary(text: str) -> tuple[int, int]:
     return passed, failed
 
 
-def _make_restart_runtime(checkpoint_runtime, fake_settings):
-    """Build a restart callback that closes and re-initializes the online graph."""
+def _make_restart_runtime():
+    """Build a restart callback that closes and re-initializes the online graph.
+
+    Both the checkpointer and the app session factory resolve the DB URL from
+    the shared ``get_settings()`` singleton, which ``run_graph_multiturn`` has
+    already re-pointed at the test DB, so no per-module patching is needed.
+    """
 
     async def _do() -> None:
-        from unittest.mock import patch
         from sales_agent.services.online_conversation import (
             close_online_runtime,
             initialize_online_runtime,
         )
 
         await close_online_runtime()
-        with patch.object(checkpoint_runtime, "get_settings", return_value=fake_settings):
-            await initialize_online_runtime()
+        await initialize_online_runtime()
 
     return _do
+
+
+async def _bind_test_database(test_db: str) -> None:
+    """Rebind the app session factory AND the online checkpointer to ``test_db``.
+
+    The checkpointer (``initialize_production_checkpointer``), the app session
+    factory (``get_session_factory``), and the graph nodes all read the DB URL
+    from the shared ``get_settings()`` singleton. Mutating that singleton once
+    and resetting any cached engine/factory (built from the previous dev URL)
+    makes every consumer hit the test DB consistently — fixing the hollow-pass
+    bug where only the checkpointer was patched while ``get_session_factory``
+    still bound to the unreachable ``localhost:5432`` dev DB.
+
+    The §11 "refuse a non-test DB" contract is enforced by the caller's guard.
+    """
+    import sales_agent.core.database as database
+    from sales_agent.core.config import get_settings
+
+    settings = get_settings()
+    settings.database.url = test_db
+    # The memory_command routing gate reads this flag from the turn input,
+    # which prepare_online_turn seeds from settings.long_term_memory.enabled.
+    settings.long_term_memory.enabled = True
+
+    # Drop any engine/factory cached against the dev URL so they are rebuilt
+    # against the test DB on next access.
+    if database._engine is not None:
+        await database._engine.dispose()
+    database._engine = None
+    database._session_factory = None
+
+    # Ensure every ORM model is registered on Base.metadata, then create the
+    # application tables on the test DB (it ships with checkpoint tables only;
+    # checkpoint tables are created separately by AsyncPostgresSaver.setup()).
+    import sales_agent.models  # noqa: F401
+    sales_agent.models._import_dingtalk_models()
+    from sales_agent.core.database import Base, get_engine
+
+    engine = get_engine()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+
+async def _seed_eval_fixtures(factory, tenant_id: str, agent_id: str) -> None:
+    """Idempotently seed a tenant + active default agent for graph-multiturn.
+
+    Chat + embedding models are injected as deterministic doubles, so
+    ``resolve_online_models`` short-circuits and no tenant model config is
+    required. ``resolve_tenant_agent_id`` only needs an Agent row owned by the
+    tenant; the Tenant row keeps the schema coherent for any node that joins it.
+    """
+    from sqlalchemy import select
+    from sales_agent.models.agent import Agent
+    from sales_agent.models.tenant import Tenant
+
+    async with factory()() as db:
+        if (
+            await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+        ).scalar_one_or_none() is None:
+            db.add(
+                Tenant(
+                    id=tenant_id,
+                    name="Memory Eval Tenant",
+                    status="active",
+                    config_json="{}",
+                )
+            )
+        if (
+            await db.execute(select(Agent).where(Agent.id == agent_id))
+        ).scalar_one_or_none() is None:
+            db.add(
+                Agent(
+                    id=agent_id,
+                    tenant_id=tenant_id,
+                    name="Memory Eval Agent",
+                    status="active",
+                    feature_flags_json="{}",
+                    is_tenant_default=True,
+                )
+            )
+        await db.commit()
 
 
 async def run_graph_multiturn(args) -> int:
@@ -190,45 +278,55 @@ async def run_graph_multiturn(args) -> int:
     scenarios = _load_or_fail(args.dataset)
     scripts = build_scripts_from_scenarios(scenarios)
     double = ScriptedModelDouble(scripts)
+    embedding_double = DeterministicEmbeddingDouble()
 
-    # Heavy app-stack imports are deferred so importing this module (e.g. in the
-    # unit-test suite) does not require the full application configuration.
-    from unittest.mock import patch
-
-    import sales_agent.graph.checkpoint_runtime as checkpoint_runtime
+    # Rebind the whole app stack (session factory + checkpointer) to the test DB,
+    # create app tables, and seed the tenant/agent the graph resolves against.
+    await _bind_test_database(test_db)
     from sales_agent.core.database import get_session_factory
     from sales_agent.services.online_conversation import (
         close_online_runtime,
         initialize_online_runtime,
     )
 
-    fake_settings = SimpleNamespace(database=SimpleNamespace(url=test_db))
-    restart_runtime = _make_restart_runtime(checkpoint_runtime, fake_settings)
+    await _seed_eval_fixtures(get_session_factory, args.tenant_id, args.agent_id)
+    restart_runtime = _make_restart_runtime()
 
     pairs: list[tuple[MultiturnScenario, ScenarioRun]] = []
     await close_online_runtime()
     try:
-        with patch.object(checkpoint_runtime, "get_settings", return_value=fake_settings):
-            await initialize_online_runtime()
-            for s in scenarios:
-                # Fresh session per scenario (pattern from tests/conftest.py db_session).
-                async with get_session_factory()() as db:
-                    ctx = {
-                        "db": db,
-                        "tenant_id": args.tenant_id,
-                        "agent_id": args.agent_id,
-                        "user_id": f"{s.id}-user",
-                        "session_user_id": f"{s.id}-session",
-                        "channel": "eval",
-                        "conversation_id": f"{s.id}-conv",
-                        "chat_model": double,
-                        "embedding_model": None,
-                    }
-                    # ScenarioRunner advances the scripted double per turn itself
-                    # (set_turn(scenario.id, i)), so no pre-loop seeding is needed.
-                    runner = ScenarioRunner(ctx=ctx, restart_runtime=restart_runtime)
-                    run = await runner.run(s)
-                    pairs.append((s, run))
+        await initialize_online_runtime()
+        # A per-invocation token keeps the Online Graph's duplicate-event
+        # detection honest: the checkpointer persists ``last_event_id`` keyed by
+        # thread_id, and thread_id is derived from session_user_id. Without a
+        # fresh token, a re-run against the persistent test DB would reuse the
+        # same thread_id and the graph would classify every event as a
+        # duplicate of the prior run — masking real execution (hollow pass).
+        # The token is shared across all turns/scenarios of THIS run so
+        # multi-turn state still accumulates within a scenario.
+        run_token = uuid.uuid4().hex[:8]
+        for s in scenarios:
+            # Fresh session per scenario (pattern from tests/conftest.py db_session).
+            async with get_session_factory()() as db:
+                ctx = {
+                    "db": db,
+                    "tenant_id": args.tenant_id,
+                    "agent_id": args.agent_id,
+                    "user_id": f"{s.id}-user-{run_token}",
+                    "session_user_id": f"{s.id}-session-{run_token}",
+                    "channel": "eval",
+                    "conversation_id": f"{s.id}-conv-{run_token}",
+                    # Both models are injected so resolve_online_models returns
+                    # early and never falls back to TenantResolver (which would
+                    # need tenant model config / a live model provider).
+                    "chat_model": double,
+                    "embedding_model": embedding_double,
+                }
+                # ScenarioRunner advances the scripted double per turn itself
+                # (set_turn(scenario.id, i)), so no pre-loop seeding is needed.
+                runner = ScenarioRunner(ctx=ctx, restart_runtime=restart_runtime)
+                run = await runner.run(s)
+                pairs.append((s, run))
     finally:
         await close_online_runtime()
 

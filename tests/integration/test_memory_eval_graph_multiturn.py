@@ -62,3 +62,22 @@ async def test_graph_multiturn_writes_report(tmp_path):
     assert (tmp_path / "out" / "report.json").exists()
     # Exit code 0 or 1 (quality), never 2 (invalid execution) on a valid setup.
     assert rc in (0, 1)
+
+    # Non-hollow execution: the report must show the graph genuinely ran and
+    # the explicit-remember command fired. A hollow pass (graph never executes,
+    # all metrics zero) must fail here.
+    report = json.loads((tmp_path / "out" / "report.json").read_text(encoding="utf-8"))
+    persistence = {
+        m["name"]: m for m in report.get("groups", {}).get("persistence_isolation", [])
+    }
+    # The memory_command node observed memory_operation == "remember".
+    acc = persistence.get("explicit_operation_accuracy")
+    assert acc and acc["numerator"] >= 1, (
+        f"graph did not execute the memory command (explicit_operation_accuracy={acc})"
+    )
+    # "sales_region" landed as an active memory key after the turn.
+    prov = persistence.get("evidence_provenance_completeness")
+    assert prov and prov["numerator"] >= 1, (
+        f"sales_region not observed as an active memory key "
+        f"(evidence_provenance_completeness={prov})"
+    )

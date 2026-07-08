@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -163,56 +166,65 @@ class AtomicMemoryRepository:
         message_id: str,
         now: datetime | None = None,
     ) -> MemoryOperationResult:
-        current = now or _now()
-        existing = await self.list_active_memories(
-            scope, normalized_key=candidate.normalized_key, now=current
-        )
-        supersedes_id = None
-        if existing:
-            supersedes_id = existing[0].id
-            await self.db.execute(
-                update(AtomicMemory)
-                .where(AtomicMemory.id == existing[0].id)
-                .values(status="superseded", updated_at=current.isoformat())
+        try:
+            current = now or _now()
+            existing = await self.list_active_memories(
+                scope, normalized_key=candidate.normalized_key, now=current
             )
+            supersedes_id = None
+            if existing:
+                supersedes_id = existing[0].id
+                await self.db.execute(
+                    update(AtomicMemory)
+                    .where(AtomicMemory.id == existing[0].id)
+                    .values(status="superseded", updated_at=current.isoformat())
+                )
 
-        row = AtomicMemory(
-            tenant_id=scope.tenant_id,
-            agent_id=scope.agent_id,
-            subject_type=scope.subject_type,
-            subject_id=scope.subject_id,
-            memory_type=candidate.memory_type,
-            normalized_key=candidate.normalized_key,
-            content_json=json.dumps(candidate.content, ensure_ascii=False),
-            search_text=build_search_text(candidate.content),
-            status="active",
-            source_kind=candidate.source_kind,
-            source_conversation_id=conversation_id,
-            source_message_ids_json=json.dumps([message_id], ensure_ascii=False),
-            evidence_count=1,
-            confidence_band="confirmed",
-            sensitivity=candidate.sensitivity,
-            supersedes_id=supersedes_id,
-            observed_at=current,
-            last_confirmed_at=current,
-            expires_at=default_expires_at(candidate.memory_type, current),
-        )
-        self.db.add(row)
-        await self.db.flush()
-        await self._audit(
-            scope,
-            operation="remember",
-            status="success",
-            reason_code="explicit_confirmed",
-            memory_id=row.id,
-        )
-        return MemoryOperationResult(
-            operation="remember",
-            status="success",
-            response_text=f"已记住：{candidate.content.get('value', candidate.evidence_text)}",
-            memory_ids=[row.id],
-            reason_code="explicit_confirmed",
-        )
+            row = AtomicMemory(
+                tenant_id=scope.tenant_id,
+                agent_id=scope.agent_id,
+                subject_type=scope.subject_type,
+                subject_id=scope.subject_id,
+                memory_type=candidate.memory_type,
+                normalized_key=candidate.normalized_key,
+                content_json=json.dumps(candidate.content, ensure_ascii=False),
+                search_text=build_search_text(candidate.content),
+                status="active",
+                source_kind=candidate.source_kind,
+                source_conversation_id=conversation_id,
+                source_message_ids_json=json.dumps([message_id], ensure_ascii=False),
+                evidence_count=1,
+                confidence_band="confirmed",
+                sensitivity=candidate.sensitivity,
+                supersedes_id=supersedes_id,
+                observed_at=current,
+                last_confirmed_at=current,
+                expires_at=default_expires_at(candidate.memory_type, current),
+            )
+            self.db.add(row)
+            await self.db.flush()
+            await self._audit(
+                scope,
+                operation="remember",
+                status="success",
+                reason_code="explicit_confirmed",
+                memory_id=row.id,
+            )
+            return MemoryOperationResult(
+                operation="remember",
+                status="success",
+                response_text=f"已记住：{candidate.content.get('value', candidate.evidence_text)}",
+                memory_ids=[row.id],
+                reason_code="explicit_confirmed",
+            )
+        except Exception:
+            logger.exception("activate_explicit failed")
+            return MemoryOperationResult(
+                operation="remember",
+                status="failed",
+                response_text="这条记忆没有保存成功，请稍后重试。",
+                reason_code="write_failed",
+            )
 
     # ------------------------------------------------------------------
     # Correction
@@ -228,21 +240,37 @@ class AtomicMemoryRepository:
         message_id: str,
         now: datetime | None = None,
     ) -> MemoryOperationResult:
-        active = await self.list_active_memories(
-            scope, normalized_key=normalized_key, now=now
-        )
-        result = await self.activate_explicit(
-            scope,
-            new_candidate,
-            conversation_id=conversation_id,
-            message_id=message_id,
-            now=now,
-        )
-        if active:
-            result.operation = "correct"
-            result.reason_code = "superseded_existing"
-            result.response_text = f"已更新记忆：{new_candidate.content.get('value', new_candidate.evidence_text)}"
-        return result
+        try:
+            active = await self.list_active_memories(
+                scope, normalized_key=normalized_key, now=now
+            )
+            result = await self.activate_explicit(
+                scope,
+                new_candidate,
+                conversation_id=conversation_id,
+                message_id=message_id,
+                now=now,
+            )
+            if active:
+                await self._audit(
+                    scope,
+                    operation="correct",
+                    status="success",
+                    reason_code="superseded_existing",
+                    memory_id=active[0].id,
+                )
+                result.operation = "correct"
+                result.reason_code = "superseded_existing"
+                result.response_text = f"已更新记忆：{new_candidate.content.get('value', new_candidate.evidence_text)}"
+            return result
+        except Exception:
+            logger.exception("correct_memory failed")
+            return MemoryOperationResult(
+                operation="correct",
+                status="failed",
+                response_text="这条记忆没有保存成功，请稍后重试。",
+                reason_code="write_failed",
+            )
 
     # ------------------------------------------------------------------
     # Forget
@@ -255,45 +283,54 @@ class AtomicMemoryRepository:
         normalized_key: str | None,
         confirm_broad: bool,
     ) -> MemoryOperationResult:
-        active = await self.list_active_memories(
-            scope, normalized_key=normalized_key
-        )
-        if not active:
-            return MemoryOperationResult(
-                operation="forget",
-                status="noop",
-                response_text="没有找到需要忘记的记忆。",
-                reason_code="no_matching_memory",
+        try:
+            active = await self.list_active_memories(
+                scope, normalized_key=normalized_key
             )
-        if normalized_key is None and not confirm_broad:
-            return MemoryOperationResult(
-                operation="forget",
-                status="clarify",
-                response_text="你是想忘记所有关于你的长期记忆吗？请回复“确认忘记全部”。",
-                reason_code="broad_forget_requires_confirmation",
-            )
+            if not active:
+                return MemoryOperationResult(
+                    operation="forget",
+                    status="noop",
+                    response_text="没有找到需要忘记的记忆。",
+                    reason_code="no_matching_memory",
+                )
+            if normalized_key is None and not confirm_broad:
+                return MemoryOperationResult(
+                    operation="forget",
+                    status="clarify",
+                    response_text="你是想忘记所有关于你的长期记忆吗？请回复“确认忘记全部”。",
+                    reason_code="broad_forget_requires_confirmation",
+                )
 
-        ids = [row.id for row in active]
-        await self.db.execute(
-            update(AtomicMemory)
-            .where(AtomicMemory.id.in_(ids))
-            .values(status="deleted", updated_at=_now().isoformat())
-        )
-        for memory_id in ids:
-            await self._audit(
-                scope,
+            ids = [row.id for row in active]
+            await self.db.execute(
+                update(AtomicMemory)
+                .where(AtomicMemory.id.in_(ids))
+                .values(status="deleted", updated_at=_now().isoformat())
+            )
+            for memory_id in ids:
+                await self._audit(
+                    scope,
+                    operation="forget",
+                    status="success",
+                    reason_code="user_requested",
+                    memory_id=memory_id,
+                )
+            return MemoryOperationResult(
                 operation="forget",
                 status="success",
+                response_text=f"已忘记 {len(ids)} 条相关记忆。",
+                memory_ids=ids,
                 reason_code="user_requested",
-                memory_id=memory_id,
             )
-        return MemoryOperationResult(
-            operation="forget",
-            status="success",
-            response_text=f"已忘记 {len(ids)} 条相关记忆。",
-            memory_ids=ids,
-            reason_code="user_requested",
-        )
+        except Exception:
+            logger.exception("forget_memory failed")
+            return MemoryOperationResult(
+                operation="forget",
+                status="failed",
+                response_text="没有成功忘记，请稍后重试。",
+                reason_code="write_failed",
+            )
 
     # ------------------------------------------------------------------
     # Candidate storage & corroboration

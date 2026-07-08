@@ -34,7 +34,7 @@ class OnlineConversationState(TypedDict, total=False):
     topic_routing_enabled: bool
     scenario_coach_enabled: bool
     requested_flow: str | None
-    flow_action: str  # "duplicate" | "start" | "cancel" | "advance" | "chat" | "direct_chat" | "reset"
+    flow_action: str  # "duplicate" | "start" | "cancel" | "advance" | "chat" | "direct_chat" | "reset" | "memory_command"
     active_flow: str | None
     flow_stage: str | None
     flow_payload: dict[str, Any]
@@ -76,6 +76,14 @@ class OnlineConversationState(TypedDict, total=False):
     retrieval_query: str | None
     needs_retrieval: bool | None
     route_trace: str | None
+
+    # ── Long-term Memory ──────────────────────────────────────────
+    long_term_memory_enabled: bool
+    memory_operation: str | None
+    memory_status: str | None
+    memory_reason_code: str | None
+    memory_ids: list[str]
+    memory_candidate_count: int
 
 
 __all__ = [

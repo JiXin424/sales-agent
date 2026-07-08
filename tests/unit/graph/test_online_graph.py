@@ -787,3 +787,43 @@ async def test_graph_guided_flow_log_failure_reraises(online_graph, config):
 
     state_after = await online_graph.aget_state(config)
     assert state_after.values.get("last_event_id") == prior_last_event_id
+
+
+# ====================================================================
+# Memory command routing (Task 6)
+# ====================================================================
+
+
+def test_normalize_routes_explicit_memory_command_before_chat():
+    """A message matching a memory command keyword with
+    ``long_term_memory_enabled=True`` must route to ``memory_command``
+    instead of ``chat``."""
+    from sales_agent.graph.online.nodes import normalize_turn_node
+
+    update = normalize_turn_node({
+        "message": "记住我负责华东区",
+        "event_id": "evt1",
+        "last_event_id": None,
+        "guided_flows_enabled": True,
+        "long_term_memory_enabled": True,
+        "topic_routing_enabled": True,
+    })
+
+    assert update["flow_action"] == "memory_command"
+
+
+def test_duplicate_still_wins_before_memory_command():
+    """Deduplication is a higher priority than memory commands — a duplicate
+    event must return ``duplicate`` even when ``long_term_memory_enabled``
+    is set and the message matches a memory command."""
+    from sales_agent.graph.online.nodes import normalize_turn_node
+
+    update = normalize_turn_node({
+        "message": "记住我负责华东区",
+        "event_id": "evt1",
+        "last_event_id": "evt1",
+        "guided_flows_enabled": True,
+        "long_term_memory_enabled": True,
+    })
+
+    assert update["flow_action"] == "duplicate"

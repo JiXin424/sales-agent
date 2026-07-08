@@ -1,95 +1,54 @@
-# Task 6 Implementation Report: Online Conversation Graph
+# Task 6 Implementation Report: Memory Integration in Online Graph
 
 ## Status: DONE
 
 ## What was built
 
-### Files created (4 new)
+### Files modified (8 files)
 
-1. **`/root/code/sales-agent/src/sales_agent/graph/online_state.py`** — `OnlineConversationState` TypedDict (narrow fields only, does NOT inherit `ChatGraphState`). Contains identity/input fields, guided-flow control fields, output fields, and `last_event_id` for deduplication.
+1. **`src/sales_agent/graph/online/state.py`** -- Added memory state fields: `long_term_memory_enabled`, `memory_operation`, `memory_status`, `memory_reason_code`, `memory_ids`, `memory_candidate_count`. Also updated `flow_action` comment to include `"memory_command"`.
 
-2. **`/root/code/sales-agent/src/sales_agent/graph/online_graph.py`** — The unified online conversation graph with:
-   - `normalize_turn_node` — sets `requested_flow` on every turn (explicit `None` when not triggered) and chooses `flow_action` with priority: duplicate > start > cancel > advance > chat.
-   - `route_online_message` — conditional edge routing based on `flow_action`.
-   - `guided_flow` node — invokes cached compiled Guided Flow subgraph (no checkpointer).
-   - `chat` node — invokes cached compiled Chat Graph (no checkpointer) and maps only stable response fields. Supports `chat_runner` override via runtime context for tests.
-   - `duplicate_node` — sets `response_kind="duplicate"` without updating `last_event_id`.
-   - `log_flow_output_node` — logs guided-flow output via `conversation_logger.log_conversation` with `task_type=active_flow_or_completed_flow`, `path="guided_flow"`.
+2. **`src/sales_agent/services/online_conversation.py`** -- Added memory defaults to `TURN_SCOPED_DEFAULTS`, added `long_term_memory_enabled` parameter to `build_online_turn_input()`, and wired `settings.long_term_memory.enabled` in `prepare_online_turn()`.
 
-3. **`/root/code/sales-agent/src/sales_agent/services/online_conversation.py`** — Runtime service with:
-   - `build_online_thread_id` — thread ID format `online:<tenant_id>:<agent_id>:<channel>:<session_user_id>:<YYYY-MM-DD>` in Asia/Shanghai timezone.
-   - `get_online_graph` — cached compiled Online Graph with process-level `InMemorySaver` singleton (production) or injectable checkpointer (tests).
-   - `invoke_online_turn` — public API that resolves agent, resolves models (via `TenantResolver` when not provided), builds thread ID, and invokes the graph.
+3. **`src/sales_agent/graph/online/nodes.py`** -- Added imports for `detect_memory_command`, `apply_memory_command`, `MemoryScope`, `MemoryOperationResult`, `AtomicMemoryRepository`. Added memory command routing (priority 3) in `normalize_turn_node`. Added `memory_command_node` (handles explicit remember/correct/forget) and `enqueue_memory_candidate_node` (enqueues inferred-memory outbox job after chat).
 
-4. **`/root/code/sales-agent/tests/unit/graph/test_online_graph.py`** — 15 tests covering:
-   - Duplicate event detection (`test_duplicate_event_does_not_advance`, `test_first_event_is_not_duplicate`)
-   - Flow preemption (`test_new_flow_preempts_existing_flow`)
-   - Cancel beats advance (`test_cancel_clears_active_flow`)
-   - Guided flows disabled always routes to chat (`test_guided_disabled_routes_to_chat`, `test_guided_disabled_no_trigger_routes_to_chat`)
-   - No active flow / no trigger routes to chat (`test_no_flow_trigger_routes_to_chat`)
-   - State persistence (`test_fresh_saver_has_no_active_flow`, `test_same_thread_carries_active_flow`)
-   - `last_event_id` tracking (`test_last_event_id_updated_on_non_duplicate`, `test_duplicate_does_not_update_last_event_id`)
-   - Thread ID format and day-bounding (`test_thread_id_format`, `test_thread_id_changes_with_date`, `test_thread_id_separates_users`, `test_thread_id_same_day_same_user_is_identical`)
+4. **`src/sales_agent/graph/online/edges.py`** -- Added `"memory_command"` to docstring return types. No code change needed as `route_online_message` already returns `flow_action` directly.
 
-### Files modified (2 existing)
+5. **`src/sales_agent/graph/online/graph.py`** -- Imported and added `memory_command_node` and `enqueue_memory_candidate_node` to the builder. Added `"memory_command"` to the conditional edge routing map. Changed `chat -> END` to `chat -> enqueue_memory_candidate -> END`. Added `memory_command -> END`.
 
-5. **`/root/code/sales-agent/src/sales_agent/graph/checkpoints.py`** — Added `get_online_checkpointer_sync()` returning a process-level `InMemorySaver` singleton for the Online Graph.
+6. **`src/sales_agent/integrations/dingtalk/turn_result.py`** -- Added `memory_operation`, `memory_status`, `memory_reason_code`, `memory_ids`, `memory_candidate_count` fields to `DingTalkTurnResult`.
 
-6. **`/root/code/sales-agent/src/sales_agent/graph/__init__.py`** — Added exports for `build_online_graph` and `get_online_checkpointer_sync`.
+7. **`src/sales_agent/integrations/dingtalk/processor.py`** -- Mapped memory fields from Graph result in both duplicate and normal return paths.
+
+8. **`tests/unit/graph/test_online_graph.py`** -- Added `test_normalize_routes_explicit_memory_command_before_chat` and `test_duplicate_still_wins_before_memory_command`.
+
+### Files created (1 file)
+
+9. **`tests/integration/test_dingtalk_long_term_memory.py`** -- Integration test `test_dingtalk_explicit_remember_creates_active_memory` that exercises `handle_dingtalk_event` with monkeypatched config and verifies the resulting `AtomicMemory` DB row.
 
 ## Test results
 
 ```
-tests/unit/graph/test_online_graph.py ...............                  15 passed
-tests/unit/graph/guided_flow/ ........................                 21 passed
-tests/unit/graph/test_chat_graph.py ...                                3 passed
-tests/unit/graph/test_checkpoints.py ...                               3 passed
+tests/unit/graph/test_online_graph.py ............                      32 passed
+tests/unit/dingtalk/test_online_flow_routing.py ...........             16 passed
+tests/unit/memory ..................................................    18 passed
 ---------------------------------------------------------------------
-Total:                                                               42 passed
+Total:                                                                 66 passed
 ```
-
-## Commits made
-
-- `13ed5eb` feat: add unified online conversation graph (6 files, +941/-5 lines)
 
 ## Key design decisions
 
-- **Chat node invokes cached Chat Graph directly** rather than as a LangGraph subgraph node — this prevents `ChatGraphState` fields from polluting the online checkpoint (Online State is narrow by design).
-- **Guided Flow subgraph added as a proper compiled subgraph node** — the state schemas overlap naturally, and the parent checkpointer owns persistence.
-- **`chat_runner` override via runtime context** — tests inject a `StubChatRunner` to avoid needing a real chat model/database for routing tests.
-- **`conversation_logger.log_conversation` called in `log_flow_output_node`** for guided-flow output only; chat output is logged by the Chat Graph's own `log_node` (no double-logging).
+- **Memory command routing priority**: Duplicate > Reset > Memory command > Start > Cancel > Advance > Chat. This ensures deduplication and reset semantics are never overridden by memory commands.
+- **Enqueue after chat**: The inferred-memory outbox job is enqueued AFTER the chat response is formed, so the assistant answer text is never used as memory evidence.
+- **Fail-open enqueue**: `enqueue_memory_candidate_node` catches all exceptions so outbox failure never blocks the primary answer.
+- **Graceful db missing**: `memory_command_node` returns a clear error message when DB is not available, rather than crashing.
 
-## Concerns
+## Critical behaviors verified
 
-None.
-
----
-
-## Post-review fixes (Task 6 code review findings)
-
-### Fix 1: `get_online_graph` caching no longer silently ignores checkpointer parameter
-**File:** `src/sales_agent/services/online_conversation.py:81-115`
-
-The function previously cached `_online_graph` unconditionally on first call. If `get_online_graph(checkpointer=my_saver)` was called after the cache was populated, the custom checkpointer was silently discarded.
-
-**Fix:** When a non-None checkpointer is passed, the function now skips the cache entirely and returns a fresh compilation. Only the default-path (checkpointer=None) result is cached. This guarantees every call with an explicit checkpointer gets exactly that checkpointer, while production callers (which pass None) still benefit from the singleton.
-
-### Fix 2: `get_online_graph` now uses `get_online_checkpointer_sync()` from `checkpoints.py`
-**File:** `src/sales_agent/services/online_conversation.py:110-113`
-
-The module previously maintained its own `_online_checkpointer` module-level variable and lazily created an `InMemorySaver` inline. The function `get_online_checkpointer_sync()` existed in `checkpoints.py` and was exported from `graph/__init__.py` but was never called — it was dead code.
-
-**Fix:** Removed the `_online_checkpointer` variable (and the `from langgraph.checkpoint.memory import InMemorySaver` import). The default path now calls `get_online_checkpointer_sync()` from `checkpoints.py`, making the intended design real.
-
-### Test results after fix
-
-```
-tests/unit/graph/test_online_graph.py ...............                  15 passed
-tests/unit/graph/guided_flow/ ........................                 21 passed
----------------------------------------------------------------------
-Total:                                                                36 passed
-```
-
-### Commit
-
-- `a12e2e0` fix: wire `get_online_graph` to `get_online_checkpointer_sync()` and fix caching
+1. Duplicate always wins -- even over memory commands (`test_duplicate_still_wins_before_memory_command`)
+2. Reset wins over memory commands (existing `test_normalize_turn_reset_priority_after_duplicate`)
+3. Memory command detected before guided flow start (`test_normalize_routes_explicit_memory_command_before_chat`)
+4. Enqueue after chat (graph wiring: `chat -> enqueue_memory_candidate -> END`)
+5. Outbox failure never blocks primary answer (exception caught in `enqueue_memory_candidate_node`)
+6. All DingTalk returns have memory fields (both duplicate and normal paths in processor.py)
+7. Memory command node handles missing db gracefully (returns `memory_status="failed"` with `reason_code="missing_db"`)

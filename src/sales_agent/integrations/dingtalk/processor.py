@@ -210,6 +210,11 @@ async def handle_dingtalk_event(
                 completed_flow=result.get("completed_flow"),
                 flow_action=result.get("flow_action"),
                 last_event_id=result.get("last_event_id"),
+                memory_operation=result.get("memory_operation"),
+                memory_status=result.get("memory_status"),
+                memory_reason_code=result.get("memory_reason_code"),
+                memory_ids=result.get("memory_ids"),
+                memory_candidate_count=result.get("memory_candidate_count", 0),
                 latency_ms=latency_ms,
             )
 
@@ -248,6 +253,11 @@ async def handle_dingtalk_event(
             completed_flow=result.get("completed_flow"),
             flow_action=result.get("flow_action"),
             last_event_id=result.get("last_event_id"),
+            memory_operation=result.get("memory_operation"),
+            memory_status=result.get("memory_status"),
+            memory_reason_code=result.get("memory_reason_code"),
+            memory_ids=result.get("memory_ids"),
+            memory_candidate_count=result.get("memory_candidate_count", 0),
             latency_ms=latency_ms,
         )
 

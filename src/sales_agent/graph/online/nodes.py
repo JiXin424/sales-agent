@@ -55,6 +55,13 @@ from sales_agent.services.topic_restore import (
 
 from sales_agent.core.config import get_settings
 from sales_agent.scenarios import get_scenario_registry, match_scenario
+from sales_agent.services.memory.commands import (
+    MemoryCommand,
+    apply_memory_command,
+    detect_memory_command,
+)
+from sales_agent.services.memory.contracts import MemoryOperationResult, MemoryScope
+from sales_agent.services.memory.repository import AtomicMemoryRepository
 
 import json
 import logging
@@ -143,10 +150,12 @@ def normalize_turn_node(state: OnlineConversationState) -> dict[str, Any]:
 
     1. **Duplicate** — ``event_id`` matches ``last_event_id``.
     2. **Reset** — ``reset_requested`` is ``True`` (Task 6).
-    3. **Start** — guided flows enabled & a requested-flow trigger.
-    4. **Cancel** — guided flows enabled & active flow & cancel command.
-    5. **Advance** — guided flows enabled & active flow.
-    6. **Chat** — default.
+    3. **Memory command** — ``long_term_memory_enabled`` & explicit memory command
+       like "记住我负责华东区".  Explicit commands do NOT enter guided flow.
+    4. **Start** — guided flows enabled & a requested-flow trigger.
+    5. **Cancel** — guided flows enabled & active flow & cancel command.
+    6. **Advance** — guided flows enabled & active flow.
+    7. **Chat** — default.
 
     Reset must not fire on a duplicate — a redelivered reset event is a
     no-op, not a second state clear.
@@ -168,6 +177,8 @@ def normalize_turn_node(state: OnlineConversationState) -> dict[str, Any]:
         flow_action = "duplicate"
     elif state.get("reset_requested"):
         flow_action = "reset"
+    elif state.get("long_term_memory_enabled") and detect_memory_command(message):
+        flow_action = "memory_command"
     elif guided_enabled and requested_flow:
         flow_action = "start"
     elif guided_enabled and state.get("active_flow") and is_cancel_command(message):
@@ -474,6 +485,150 @@ async def log_scenario_response_node(
             logger.warning("Failed to log scenario response", exc_info=True)
 
     return {"last_event_id": state.get("event_id")}
+
+
+# =============================================================
+# memory_command_node (Task 6)
+# =============================================================
+
+async def memory_command_node(
+    state: OnlineConversationState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """Handle an explicit memory command (remember / correct / forget).
+
+    Detects the memory command from the user message, creates a
+    ``MemoryScope`` from state identity fields, calls
+    ``apply_memory_command()`` on the repository, and returns the
+    response as ``answer_dict`` with ``response_kind="memory"``.
+
+    On any database/application failure returns a clear error message
+    and ``memory_status="failed"`` — the agent never crashes on a
+    memory command.
+    """
+    ctx = _unpack_context(config) or {}
+    db = ctx.get("db")
+    if db is None:
+        return {
+            "answer_dict": {
+                "summary": "长期记忆暂时不可用，请稍后再试。",
+                "sections": [],
+            },
+            "response_kind": "memory_error",
+            "memory_operation": "noop",
+            "memory_status": "failed",
+            "memory_reason_code": "missing_db",
+            "last_event_id": state.get("event_id"),
+        }
+
+    command = detect_memory_command(state.get("message", ""))
+    if command is None:
+        return {"flow_action": "chat"}
+
+    scope = MemoryScope(
+        tenant_id=state.get("tenant_id", ""),
+        agent_id=state.get("agent_id", ""),
+        user_id=state.get("user_id", ""),
+    )
+    repo = AtomicMemoryRepository(db)
+    try:
+        result = await apply_memory_command(
+            repo=repo,
+            scope=scope,
+            command=command,
+            conversation_id=state.get("conversation_id", ""),
+            message_id=state.get("event_id") or "",
+            now=ctx.get("now"),
+        )
+    except Exception:
+        logger.exception("explicit memory command failed")
+        result = MemoryOperationResult(
+            operation=command.operation,
+            status="failed",
+            response_text="这条记忆没有保存成功，请稍后重试。",
+            reason_code="write_failed",
+        )
+
+    return {
+        "answer_dict": {
+            "summary": result.response_text,
+            "sections": [{"title": "长期记忆", "content": result.response_text}],
+        },
+        "response_kind": "memory",
+        "memory_operation": result.operation,
+        "memory_status": result.status,
+        "memory_reason_code": result.reason_code,
+        "memory_ids": result.memory_ids,
+        "memory_candidate_count": result.candidate_count,
+        "last_event_id": state.get("event_id"),
+    }
+
+
+# =============================================================
+# enqueue_memory_candidate_node (Task 6)
+# =============================================================
+
+async def enqueue_memory_candidate_node(
+    state: OnlineConversationState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """Enqueue an inferred-memory outbox job after a successful chat turn.
+
+    Runs **after** the assistant has answered so the answer text is never
+    used as memory evidence.  Skips when:
+
+    - ``long_term_memory_enabled`` is ``False``.
+    - ``response_kind`` is one of ``duplicate``, ``memory``, ``clarification``,
+      or ``flow`` (control paths that should not produce candidates).
+    - ``event_id`` is missing.
+
+    Fails open: any exception is caught, logged, and returns a
+    ``memory_reason_code`` for observability without blocking the primary
+    answer.
+    """
+    if not state.get("long_term_memory_enabled"):
+        return {}
+    if state.get("response_kind") in {"duplicate", "memory", "clarification", "flow"}:
+        return {}
+    event_id = state.get("event_id")
+    if not event_id:
+        return {}
+
+    ctx = _unpack_context(config) or {}
+    db = ctx.get("db")
+    if db is None:
+        return {}
+
+    try:
+        scope = MemoryScope(
+            tenant_id=state.get("tenant_id", ""),
+            agent_id=state.get("agent_id", ""),
+            user_id=state.get("user_id", ""),
+        )
+        repo = AtomicMemoryRepository(db)
+        await repo.enqueue_inferred_job(
+            scope,
+            conversation_id=state.get("conversation_id", ""),
+            event_id=event_id,
+            payload={
+                "tenant_id": scope.tenant_id,
+                "agent_id": scope.agent_id,
+                "user_id": scope.user_id,
+                "conversation_id": state.get("conversation_id", ""),
+                "message_id": event_id,
+                "user_message": state.get("message", ""),
+                "topic_summary": "",
+                "verified_tool_facts": [],
+            },
+            now=ctx.get("now"),
+        )
+        return {"memory_reason_code": "inferred_outbox_enqueued"}
+    except Exception:
+        logger.warning("memory outbox enqueue failed", exc_info=True)
+        return {"memory_reason_code": "inferred_outbox_enqueue_failed"}
+
+
+# =============================================================
 # reset_context_node (Task 6)
 # =============================================================
 

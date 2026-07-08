@@ -382,11 +382,114 @@ async def run_graph_multiturn(args) -> int:
     return 0 if report.thresholds_met else 1
 
 
+# --- model-multiturn (Spec 4 §3.3) ---
+
+# Ambiguous/boundary scenarios are repeated this many times and their
+# cross-repetition consistency is reported (§3.3).
+REPETITIONS_FOR_AMBIGUOUS = 3
+
+
+def classify_repetitions(observed_seqs: list[list[str]]) -> str:
+    """Label a 3x repetition set as consistent/flaky (Spec 4 §3.3).
+
+    ``observed_seqs`` is the list of per-run observed turn-relation sequences
+    (one list of labels per repetition). Returns ``"na"`` for an empty input,
+    ``"consistent"`` when every repetition agrees with the first, and
+    ``"flaky"`` otherwise.
+    """
+    if not observed_seqs:
+        return "na"
+    first = observed_seqs[0]
+    if all(seq == first for seq in observed_seqs[1:]):
+        return "consistent"
+    return "flaky"
+
+
+def _is_ambiguous_boundary(scenario: MultiturnScenario) -> bool:
+    """Whether a scenario needs 3x repetitions per §3.3.
+
+    True when any turn declares an ``ambiguous`` turn relation or the scenario
+    carries a ``boundary`` tag — the two cases the spec calls out as needing
+    repeated runs to characterize consistency.
+    """
+    return any(t.expected.turn_relation == "ambiguous" for t in scenario.turns) or \
+        "boundary" in scenario.tags
+
+
+async def run_model_multiturn(args) -> int:
+    """§3.3: run the real production model against the versioned dataset.
+
+    Uses the configured tenant model provider (no doubles). Every scenario
+    produces deterministic metrics; ambiguous/boundary scenarios are repeated
+    :data:`REPETITIONS_FOR_AMBIGUOUS` times and their cross-repetition
+    consistency is reported. This mode awaits production resolvers with their
+    actual runtime inputs (acceptance criterion §12.2), so it is never
+    exercised by the unit suite — only its credentials gate and the pure
+    ``classify_repetitions`` helper are unit-tested.
+    """
+    if args.no_credentials or not os.environ.get("MODEL_API_KEY"):
+        print(
+            "model-multiturn requires real model credentials (MODEL_API_KEY)",
+            file=sys.stderr,
+        )
+        return 2  # invalid execution (§11), not a quality failure
+
+    scenarios = _load_or_fail(args.dataset)
+    from sales_agent.core.database import get_session_factory
+    from sales_agent.services.online_conversation import resolve_online_models
+
+    pairs: list[tuple[MultiturnScenario, ScenarioRun]] = []
+    consistency: dict[str, str] = {}
+    for s in scenarios:
+        repetitions = REPETITIONS_FOR_AMBIGUOUS if _is_ambiguous_boundary(s) else 1
+        seqs: list[list[str]] = []
+        run: ScenarioRun | None = None
+        for _ in range(repetitions):
+            async with get_session_factory()() as db:
+                # Real resolver — no injected doubles — so the tenant's
+                # configured provider supplies the actual chat/embedding model.
+                chat_model, embedding_model = await resolve_online_models(
+                    db=db, tenant_id=args.tenant_id,
+                )
+                ctx = {
+                    "db": db,
+                    "tenant_id": args.tenant_id,
+                    "agent_id": args.agent_id,
+                    "user_id": f"{s.id}-user",
+                    "session_user_id": f"{s.id}-session",
+                    "channel": "eval",
+                    "conversation_id": f"{s.id}-conv",
+                    "chat_model": chat_model,
+                    "embedding_model": embedding_model,
+                }
+                runner = ScenarioRunner(ctx=ctx)
+                run = await runner.run(s)
+                seqs.append([o.result.get("turn_relation", "na") for o in run.observed])
+        if run is not None:
+            pairs.append((s, run))
+        if repetitions > 1:
+            consistency[s.id] = classify_repetitions(seqs)
+
+    report = assemble_report(
+        pairs, collect_version_bundle(dataset_version=Path(args.dataset).stem)
+    )
+    report.consistency = consistency
+    out = write_report(report, args.output)
+    print(
+        f"model-multiturn: {'PASS' if report.thresholds_met else 'FAIL'}  "
+        f"scenarios={len(pairs)} report={out}"
+    )
+    return 0 if report.thresholds_met else 1
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     """CLI dispatcher for the seven documented modes (Spec 4 §11).
 
-    Modes ``model-multiturn``, ``dingtalk-staging``, ``compare``,
-    ``online-sample`` and ``promote-trace`` are registered by later tasks.
+    Async modes (``graph-multiturn``, ``model-multiturn`` and the later
+    ``dingtalk-staging`` / ``online-sample`` / ``promote-trace``) all route
+    through one ``asyncio.run(_async_dispatch(args))`` so later tasks only add
+    a branch to ``_async_dispatch``. ``unit-memory`` and ``compare`` stay
+    synchronous.
     """
     parser = argparse.ArgumentParser(
         prog="memory-eval", description="Spec 4 memory evaluation"
@@ -403,17 +506,50 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--tenant-id", default="eval-tenant")
     p.add_argument("--agent-id", default="eval-agent")
 
+    p = sub.add_parser(
+        "model-multiturn",
+        help="drive the real production model against the versioned dataset (§3.3)",
+    )
+    p.add_argument("--dataset", default=DEFAULT_DATASET)
+    p.add_argument("--output", default=f"{DEFAULT_OUTPUT}/model-multiturn")
+    p.add_argument("--tenant-id", default="eval-tenant")
+    p.add_argument("--agent-id", default="eval-agent")
+    p.add_argument("--no-credentials", action="store_true",
+                   help="assert credentials are absent (forces rc=2, invalid execution)")
+
     args = parser.parse_args(argv)
-    if args.mode == "unit-memory":
-        return run_unit_memory(args)
-    if args.mode == "graph-multiturn":
+
+    # All async modes share one event loop / dispatch entry point.
+    ASYNC_MODES = ("graph-multiturn", "model-multiturn",
+                   "dingtalk-staging", "online-sample", "promote-trace")
+    if args.mode in ASYNC_MODES:
         import asyncio
 
-        return asyncio.run(run_graph_multiturn(args))
+        return asyncio.run(_async_dispatch(args))
+    if args.mode == "unit-memory":
+        return run_unit_memory(args)
     # argparse already rejects unknown subcommands with SystemExit(2); this is a
     # defensive fallback for completeness.
     parser.error(f"unknown mode: {args.mode}")
     return 2
+
+
+async def _async_dispatch(args) -> int:
+    """Route async modes to their handlers (Spec 4 §11).
+
+    Later tasks register ``dingtalk-staging`` / ``online-sample`` /
+    ``promote-trace`` here. Keeping a single dispatch entry point means
+    ``main`` only needs one ``asyncio.run`` call regardless of how many async
+    modes exist.
+    """
+    if args.mode == "graph-multiturn":
+        return await run_graph_multiturn(args)
+    if args.mode == "model-multiturn":
+        return await run_model_multiturn(args)
+    # Later async modes (dingtalk-staging / online-sample / promote-trace) are
+    # registered by Tasks 14/19/21. Reaching here means the subparser accepted
+    # a mode that has no handler yet — treat as invalid execution.
+    raise SystemExit(f"unhandled async mode: {args.mode}")
 
 
 if __name__ == "__main__":

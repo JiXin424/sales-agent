@@ -28,6 +28,10 @@ class EvaluationReport:
     groups: dict[str, list[MetricResult]] = field(default_factory=dict)
     confusion_matrices: dict[str, ConfusionMatrix] = field(default_factory=dict)
     failures: list[str] = field(default_factory=list)
+    # Per-scenario consistency labels for 3x repetitions of ambiguous/boundary
+    # scenarios in model-multiturn (Spec 4 §3.3). Maps scenario_id -> one of
+    # "consistent"/"flaky"/"na". Empty for modes that don't repeat.
+    consistency: dict[str, str] = field(default_factory=dict)
 
     def add_metric(self, group: str, result: MetricResult) -> None:
         self.groups.setdefault(group, []).append(result)
@@ -73,6 +77,7 @@ def write_report(report: EvaluationReport, out_dir: str) -> Path:
         "confusion_matrices": {
             name: cm.to_dict() for name, cm in report.confusion_matrices.items()
         },
+        "consistency": dict(report.consistency),
         "failures": report.failures,
     }
     (out / "report.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -100,6 +105,10 @@ def write_report(report: EvaluationReport, out_dir: str) -> Path:
     if report.failures:
         md += ["", "## Failures", ""]
         md += [f"- {f}" for f in report.failures]
+    if report.consistency:
+        md += ["", "## Repetition consistency (ambiguous/boundary, §3.3)", ""]
+        for sid, label in report.consistency.items():
+            md.append(f"- {sid}: {label}")
     (out / "report.md").write_text("\n".join(md) + "\n", encoding="utf-8")
     return out
 

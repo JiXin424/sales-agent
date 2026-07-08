@@ -857,6 +857,65 @@ async def run_online_sample(args) -> int:
     return 0
 
 
+# --- promote-trace (Spec 4 §9) ---
+
+
+async def run_promote_trace(args) -> int:
+    """§9: promote a sampled trace into an anonymized regression scenario.
+
+    Reads a ``MemoryEvalTraceRecord`` by id, anonymizes it (§9.2), classifies its
+    root cause (§9.3), builds a minimal regression scenario with the explicit
+    expected state/outcome (§9.4), and persists a ``PromotedRegression`` with
+    status ``draft`` and ``anonymized=True``. The persisted scenario is exactly
+    what :func:`build_regression_scenario` produces, so it has already passed
+    :func:`validate_dataset` at promotion time.
+
+    Returns ``2`` (invalid execution, §11) when the trace id is unknown; ``0``
+    once the draft regression is committed.
+    """
+    import json
+
+    from sqlalchemy import select
+    from eval.memory_eval.promote import (
+        anonymize_trace,
+        build_regression_scenario,
+        classify_root_cause,
+    )
+    from sales_agent.core.database import get_session_factory
+    from sales_agent.models.memory_eval import MemoryEvalTraceRecord, PromotedRegression
+
+    async with get_session_factory()() as db:
+        rec = (
+            await db.execute(
+                select(MemoryEvalTraceRecord).where(
+                    MemoryEvalTraceRecord.id == args.trace_id
+                )
+            )
+        ).scalar_one_or_none()
+        if rec is None:
+            print(f"trace not found: {args.trace_id}", file=sys.stderr)
+            return 2  # invalid execution (§11)
+        trace = rec.trace_json
+        anon = anonymize_trace(trace)
+        scenario = build_regression_scenario(
+            anon,
+            scenario_id=args.scenario_id,
+            expected=json.loads(args.expected) if args.expected else {},
+        )
+        pr = PromotedRegression(
+            tenant_id=rec.tenant_id,
+            source_trace_id=args.trace_id,
+            scenario_json=scenario.model_dump(),
+            status="draft",
+            anonymized=True,
+            review_notes=classify_root_cause(trace),
+        )
+        db.add(pr)
+        await db.commit()
+        print(f"promote-trace: created {pr.id} (root cause: {pr.review_notes})")
+    return 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     """CLI dispatcher for the seven documented modes (Spec 4 §11).
 
@@ -910,6 +969,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--max-threads", type=int, default=100,
                    help="bound on candidate threads sampled per run")
 
+    p = sub.add_parser(
+        "promote-trace",
+        help="promote a sampled trace into an anonymized regression scenario (§9)",
+    )
+    p.add_argument("--trace-id", required=True)
+    p.add_argument("--scenario-id", required=True)
+    p.add_argument("--expected", default="{}",
+                   help="JSON expected-state for the resolving turn")
+    p.add_argument("--output", default=f"{DEFAULT_OUTPUT}/promote-trace")
+
     p = sub.add_parser("compare", help="compare two report JSON files (§7)")
     p.add_argument("--baseline", required=True)
     p.add_argument("--candidate", required=True)
@@ -949,9 +1018,10 @@ async def _async_dispatch(args) -> int:
         return await run_dingtalk_staging(args)
     if args.mode == "online-sample":
         return await run_online_sample(args)
-    # Later async modes (promote-trace) are registered by Task 21. Reaching
-    # here means the subparser accepted a mode that has no handler yet — treat
-    # as invalid execution.
+    if args.mode == "promote-trace":
+        return await run_promote_trace(args)
+    # Reaching here means the subparser accepted a mode that has no handler —
+    # treat as invalid execution.
     raise SystemExit(f"unhandled async mode: {args.mode}")
 
 

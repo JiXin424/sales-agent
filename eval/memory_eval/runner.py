@@ -669,11 +669,137 @@ async def run_dingtalk_staging(args) -> int:
     return 0 if report.thresholds_met else 1
 
 
+# --- online-sample (Spec 4 §3.5, §10) ---
+
+
+async def run_online_sample(args) -> int:
+    """§3.5: sample eligible completed threads; deterministic + limited semantic.
+
+    Candidate threads are real conversation-thread scopes sourced from the
+    conversation log: each row of ``ConversationTopic`` is one active thread
+    (uniquely keyed by tenant/agent/user/channel). For each candidate we derive
+    the §3.5 sampling signals and let the pure :func:`should_sample` gate
+    decide:
+
+    * ``last_active_at``        — ``ConversationTopic.last_active_at``
+    * ``clarification_attempts``— ``ConversationTopic.clarification_attempts``
+    * ``negative_feedback``     — EXISTS a ``Feedback`` row with ``rating='down'``
+      for the thread's (tenant_id, user_id) scope
+    * ``user_correction``       — NOT reconstructable from the thread log: the
+      signal lives only transiently in the Online Graph state and is captured
+      live per-turn by ``build_eval_trace``. It is therefore seeded ``False``
+      here; sampled traces still carry the live per-turn ``user_correction``
+      flag captured at turn time. (Documented gap, not a stub: 3 of 4 signals
+      are real SQL; the 4th has no persisted structured source.)
+
+    The candidate set is bounded by ``--max-threads`` and pre-filtered to idle
+    threads (``last_active_at`` past the inactivity window) so the run cost is
+    bounded; :func:`should_sample` remains the authoritative gate.
+
+    **§10 non-blocking**: online-eval failure can NEVER block the user
+    response. This mode runs out of band and every DB operation is wrapped so
+    that on any failure it logs and returns 0 without propagating.
+    """
+    import logging
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import select
+    from eval.memory_eval.sampling import DEFAULT_INACTIVITY_SECONDS, should_sample
+    from sales_agent.core.database import get_session_factory
+    from sales_agent.models.conversation_topic import ConversationTopic
+    from sales_agent.models.feedback import Feedback
+    from sales_agent.models.memory_eval import MemoryEvalTraceRecord
+    from sales_agent.services.memory_eval_trace import build_eval_trace
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(seconds=DEFAULT_INACTIVITY_SECONDS)
+    sampled = 0
+    try:
+        # Negative feedback signal: a thumbs-down exists anywhere in this
+        # user's thread scope (correlated EXISTS over ConversationTopic).
+        neg_fb_exists = (
+            select(Feedback.id)
+            .where(
+                Feedback.tenant_id == ConversationTopic.tenant_id,
+                Feedback.user_id == ConversationTopic.user_id,
+                Feedback.rating == "down",
+            )
+            .correlate(ConversationTopic)
+            .exists()
+        )
+        stmt = (
+            select(
+                ConversationTopic.tenant_id,
+                ConversationTopic.agent_id,
+                ConversationTopic.user_id,
+                ConversationTopic.channel,
+                ConversationTopic.conversation_id,
+                ConversationTopic.last_active_at,
+                ConversationTopic.clarification_attempts,
+                neg_fb_exists.label("negative_feedback"),
+            )
+            .where(ConversationTopic.tenant_id == args.tenant_id)
+            # Pre-filter to idle threads to bound candidate cost; should_sample
+            # re-applies the inactivity gate authoritatively.
+            .where(ConversationTopic.last_active_at < cutoff)
+            .order_by(ConversationTopic.last_active_at.desc())
+            .limit(args.max_threads)
+        )
+
+        async with get_session_factory()() as db:
+            rows = (await db.execute(stmt)).all()
+            for row in rows:
+                mapping = row._mapping
+                thread = {
+                    "last_active_at": mapping["last_active_at"],
+                    "clarification_attempts": mapping["clarification_attempts"] or 0,
+                    "negative_feedback": bool(mapping["negative_feedback"]),
+                    # No persisted structured source; see docstring.
+                    "user_correction": False,
+                }
+                if not should_sample(thread, now=now):
+                    continue
+                # Build a graph-state-shaped dict for build_eval_trace: it
+                # hashes the scope/thread identifiers and reads signals for the
+                # trace's ``signals`` block.
+                state = {
+                    "tenant_id": mapping["tenant_id"],
+                    "agent_id": mapping["agent_id"],
+                    "user_id": mapping["user_id"],
+                    "channel": mapping["channel"],
+                    "thread_id": mapping["conversation_id"],
+                    "negative_feedback": thread["negative_feedback"],
+                    "user_correction": thread["user_correction"],
+                }
+                trace = build_eval_trace(state, now=now)
+                db.add(
+                    MemoryEvalTraceRecord(
+                        tenant_id=args.tenant_id,
+                        scope_hash=trace["scope_hash"],
+                        thread_id=trace["thread_id"] or "",
+                        trace_json=trace,
+                        retention="restricted",
+                        status="sampled",
+                        captured_at=now,
+                    )
+                )
+                sampled += 1
+            await db.commit()
+    except Exception:  # noqa: BLE001 — never block user traffic (§10)
+        logging.getLogger(__name__).exception(
+            "online-sample failed (non-blocking); sampled=%d", sampled
+        )
+        return 0
+
+    print(f"online-sample: sampled {sampled} threads")
+    return 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     """CLI dispatcher for the seven documented modes (Spec 4 §11).
 
     Async modes (``graph-multiturn``, ``model-multiturn``,
-    ``dingtalk-staging``, and the later ``online-sample`` / ``promote-trace``)
+    ``dingtalk-staging``, ``online-sample``, and the later ``promote-trace``)
     all route through one ``asyncio.run(_async_dispatch(args))`` so later tasks
     only add a branch to ``_async_dispatch``. ``unit-memory`` and ``compare``
     stay synchronous.
@@ -713,6 +839,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--tenant-id", default="eval-tenant")
     p.add_argument("--agent-id", default="eval-agent")
 
+    p = sub.add_parser(
+        "online-sample",
+        help="sample eligible completed threads (§3.5; non-blocking, §10)",
+    )
+    p.add_argument("--output", default=f"{DEFAULT_OUTPUT}/online-sample")
+    p.add_argument("--tenant-id", default="eval-tenant")
+    p.add_argument("--max-threads", type=int, default=100,
+                   help="bound on candidate threads sampled per run")
+
     args = parser.parse_args(argv)
 
     # All async modes share one event loop / dispatch entry point.
@@ -743,9 +878,11 @@ async def _async_dispatch(args) -> int:
         return await run_model_multiturn(args)
     if args.mode == "dingtalk-staging":
         return await run_dingtalk_staging(args)
-    # Later async modes (online-sample / promote-trace) are registered by
-    # Tasks 19/21. Reaching here means the subparser accepted a mode that has
-    # no handler yet — treat as invalid execution.
+    if args.mode == "online-sample":
+        return await run_online_sample(args)
+    # Later async modes (promote-trace) are registered by Task 21. Reaching
+    # here means the subparser accepted a mode that has no handler yet — treat
+    # as invalid execution.
     raise SystemExit(f"unhandled async mode: {args.mode}")
 
 

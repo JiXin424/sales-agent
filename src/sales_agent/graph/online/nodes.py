@@ -61,6 +61,7 @@ from sales_agent.services.memory.commands import (
     detect_memory_command,
 )
 from sales_agent.services.memory.contracts import MemoryOperationResult, MemoryScope
+from sales_agent.services.memory.profile_recall import retrieve_user_memory_context
 from sales_agent.services.memory.repository import AtomicMemoryRepository
 
 import json
@@ -202,6 +203,60 @@ def normalize_turn_node(state: OnlineConversationState) -> dict[str, Any]:
     }
 
 
+# =============================================================
+# profile_recall_node (Task 5)
+# =============================================================
+
+async def profile_recall_node(
+    state: OnlineConversationState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """Recall user profile memory for the current conversation turn.
+
+    Runs between ``evidence_routing`` and ``chat``.  Checks the
+    ``user_profile_memory_enabled`` flag and ``context_status == "resolved"``
+    before doing any work — otherwise returns ``{}``.
+
+    On success returns the formatted memory context text plus trace metadata.
+    On degradation (missing DB, exception) returns degraded-trace fields.
+    """
+    if not state.get("user_profile_memory_enabled"):
+        return {}
+    if state.get("context_status") != "resolved":
+        return {}
+    ctx = _unpack_context(config) or {}
+    db = ctx.get("db")
+    if db is None:
+        return {
+            "memory_degraded": True,
+            "memory_degradation_reason": "missing_db",
+            "memory_trace": {"degraded": True, "degradation_reason": "missing_db"},
+        }
+    settings = get_settings()
+    result = await retrieve_user_memory_context(
+        db=db,
+        scope=MemoryScope(
+            tenant_id=state.get("tenant_id", ""),
+            agent_id=state.get("agent_id", ""),
+            user_id=state.get("user_id", ""),
+        ),
+        standalone_query=state.get("standalone_query") or state.get("message", ""),
+        task_type=state.get("task_type"),
+        knowledge_policy=state.get("knowledge_policy"),
+        max_items=settings.user_profile_memory.max_recall_items,
+        max_chars=settings.user_profile_memory.max_recall_chars,
+    )
+    trace = result.trace.model_dump()
+    return {
+        "user_memory_context": result.context_text or None,
+        "selected_memory_ids": trace.get("selected_memory_ids", []),
+        "memory_trace": trace,
+        "memory_degraded": bool(trace.get("degraded")),
+        "memory_degradation_reason": trace.get("degradation_reason"),
+        "profile_version": trace.get("profile_version"),
+    }
+
+
 # =============================================================# chat_node
 # =============================================================
 
@@ -241,6 +296,10 @@ async def chat_node(
         "precomputed_route": True if state.get("knowledge_policy") else None,
         # Pass retained entities for topic key_entities_json update in log_node
         "retained_entities": state.get("retained_entities", []),
+        # User profile memory (Task 5)
+        "user_memory_context": state.get("user_memory_context"),
+        "selected_memory_ids": state.get("selected_memory_ids", []),
+        "memory_trace": state.get("memory_trace", {}),
     }
 
     # Allow tests to inject a stub chat runner via runtime context

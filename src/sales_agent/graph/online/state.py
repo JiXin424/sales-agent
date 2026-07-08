@@ -85,6 +85,15 @@ class OnlineConversationState(TypedDict, total=False):
     memory_ids: list[str]
     memory_candidate_count: int
 
+    # ── User Profile Memory (Task 5) ──────────────────────────────
+    user_profile_memory_enabled: bool
+    user_memory_context: str | None
+    selected_memory_ids: list[str]
+    memory_trace: dict[str, Any]
+    memory_degraded: bool
+    memory_degradation_reason: str | None
+    profile_version: int | None
+
 
 __all__ = [
     "OnlineConversationState",

@@ -215,6 +215,12 @@ async def handle_dingtalk_event(
                 memory_reason_code=result.get("memory_reason_code"),
                 memory_ids=result.get("memory_ids"),
                 memory_candidate_count=result.get("memory_candidate_count", 0),
+                # User profile memory recall (Task 5)
+                selected_memory_ids=result.get("selected_memory_ids"),
+                profile_version=result.get("profile_version"),
+                memory_trace=result.get("memory_trace"),
+                memory_degraded=bool(result.get("memory_degraded")),
+                memory_degradation_reason=result.get("memory_degradation_reason"),
                 latency_ms=latency_ms,
             )
 
@@ -258,6 +264,12 @@ async def handle_dingtalk_event(
             memory_reason_code=result.get("memory_reason_code"),
             memory_ids=result.get("memory_ids"),
             memory_candidate_count=result.get("memory_candidate_count", 0),
+            # User profile memory recall (Task 5)
+            selected_memory_ids=result.get("selected_memory_ids"),
+            profile_version=result.get("profile_version"),
+            memory_trace=result.get("memory_trace"),
+            memory_degraded=bool(result.get("memory_degraded")),
+            memory_degradation_reason=result.get("memory_degradation_reason"),
             latency_ms=latency_ms,
         )
 

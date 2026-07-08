@@ -827,3 +827,31 @@ def test_duplicate_still_wins_before_memory_command():
     })
 
     assert update["flow_action"] == "duplicate"
+
+
+# ====================================================================
+# User Profile Memory Recall (Task 5)
+# ====================================================================
+
+
+from sales_agent.services.agent_executor import _build_messages
+
+
+def test_user_memory_context_is_separate_from_retrieval_content():
+    """The user_memory_context block must appear as a separate ``长期用户记忆``
+    section in the generated user prompt, NOT rendered as a normal context
+    parameter inside ``## 用户提供的上下文``."""
+    messages = _build_messages(
+        task_type="general_sales_coaching",
+        message="帮我写一段跟进话术",
+        context={"user_memory_context": "USER_MEMORY_CONTEXT\n- memory_id: m1\n  fact_or_preference: 回答短一点\nEND_USER_MEMORY_CONTEXT"},
+        retrieval_result=None,
+        history_messages=[],
+        tenant_style={},
+    )
+
+    user_content = messages[-1]["content"]
+    # Must appear as the dedicated memory block, not as a raw context param
+    assert "## 长期用户记忆" in user_content
+    assert "- user_memory_context：" not in user_content
+    assert "企业知识库内容" not in user_content

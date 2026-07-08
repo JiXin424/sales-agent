@@ -53,6 +53,7 @@ from sales_agent.graph.online.nodes import (
     log_scenario_response_node,
     memory_command_node,
     normalize_turn_node,
+    profile_recall_node,
     scenario_coach_node,
     reset_context_node,
 )
@@ -104,6 +105,7 @@ def build_online_graph() -> StateGraph:
     builder.add_node("log_scenario_response", log_scenario_response_node)
     builder.add_node("memory_command", memory_command_node)
     builder.add_node("enqueue_memory_candidate", enqueue_memory_candidate_node)
+    builder.add_node("profile_recall", profile_recall_node)
 
     # ── Edges ──────────────────────────────────────────────────────
     builder.add_edge(START, "normalize_turn")
@@ -163,10 +165,13 @@ def build_online_graph() -> StateGraph:
     builder.add_edge("clarification_response", "log_control_response")
     builder.add_edge("log_control_response", END)
 
-    # Resolved path
-    builder.add_edge("evidence_routing", "chat")
+    # Resolved path: evidence_routing → profile_recall → chat
+    builder.add_edge("evidence_routing", "profile_recall")
+    builder.add_edge("profile_recall", "chat")
     # Direct-chat path (topic_routing off): still classify intent so knowledge
     # questions retrieve; bypasses context_resolution/clarify only.
+    # NOTE: direct-chat path explicitly does NOT include profile_recall
+    # because context_status is not "resolved" and topic management is skipped.
     builder.add_edge("direct_evidence_routing", "chat")
     builder.add_edge("chat", "enqueue_memory_candidate")
     builder.add_edge("enqueue_memory_candidate", END)

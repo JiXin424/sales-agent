@@ -108,6 +108,9 @@ ONLINE_NODE_META: dict[str, NodeMeta] = {
     "log_scenario_response": NodeMeta(
         desc="场景教练回答落库",
     ),
+    "profile_recall": NodeMeta(
+        desc="召回用户画像记忆注入到 LLM 上下文",
+    ),
 }
 
 # ── Chat 子图节点元数据 ───────────────────────────────────────────

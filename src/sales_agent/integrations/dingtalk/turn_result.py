@@ -45,6 +45,12 @@ class DingTalkTurnResult:
     memory_reason_code: str | None = None
     memory_ids: list[str] | None = None
     memory_candidate_count: int = 0
+    # User profile memory recall (Task 5)
+    selected_memory_ids: list[str] | None = None
+    profile_version: int | None = None
+    memory_trace: dict | None = None
+    memory_degraded: bool = False
+    memory_degradation_reason: str | None = None
 
 
 __all__ = ["DingTalkTurnResult"]

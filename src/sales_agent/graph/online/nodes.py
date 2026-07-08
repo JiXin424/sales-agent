@@ -224,37 +224,45 @@ async def profile_recall_node(
         return {}
     if state.get("context_status") != "resolved":
         return {}
-    ctx = _unpack_context(config) or {}
-    db = ctx.get("db")
-    if db is None:
+    try:
+        ctx = _unpack_context(config) or {}
+        db = ctx.get("db")
+        if db is None:
+            return {
+                "memory_degraded": True,
+                "memory_degradation_reason": "missing_db",
+                "memory_trace": {"degraded": True, "degradation_reason": "missing_db"},
+            }
+        settings = get_settings()
+        result = await retrieve_user_memory_context(
+            db=db,
+            scope=MemoryScope(
+                tenant_id=state.get("tenant_id", ""),
+                agent_id=state.get("agent_id", ""),
+                user_id=state.get("user_id", ""),
+            ),
+            standalone_query=state.get("standalone_query") or state.get("message", ""),
+            task_type=state.get("task_type"),
+            knowledge_policy=state.get("knowledge_policy"),
+            max_items=settings.user_profile_memory.max_recall_items,
+            max_chars=settings.user_profile_memory.max_recall_chars,
+        )
+        trace = result.trace.model_dump()
+        return {
+            "user_memory_context": result.context_text or None,
+            "selected_memory_ids": trace.get("selected_memory_ids", []),
+            "memory_trace": trace,
+            "memory_degraded": bool(trace.get("degraded")),
+            "memory_degradation_reason": trace.get("degradation_reason"),
+            "profile_version": trace.get("profile_version"),
+        }
+    except Exception:
+        logger.exception("profile_recall_node failed")
         return {
             "memory_degraded": True,
-            "memory_degradation_reason": "missing_db",
-            "memory_trace": {"degraded": True, "degradation_reason": "missing_db"},
+            "memory_degradation_reason": "exception",
+            "memory_trace": {"degraded": True, "degradation_reason": "exception"},
         }
-    settings = get_settings()
-    result = await retrieve_user_memory_context(
-        db=db,
-        scope=MemoryScope(
-            tenant_id=state.get("tenant_id", ""),
-            agent_id=state.get("agent_id", ""),
-            user_id=state.get("user_id", ""),
-        ),
-        standalone_query=state.get("standalone_query") or state.get("message", ""),
-        task_type=state.get("task_type"),
-        knowledge_policy=state.get("knowledge_policy"),
-        max_items=settings.user_profile_memory.max_recall_items,
-        max_chars=settings.user_profile_memory.max_recall_chars,
-    )
-    trace = result.trace.model_dump()
-    return {
-        "user_memory_context": result.context_text or None,
-        "selected_memory_ids": trace.get("selected_memory_ids", []),
-        "memory_trace": trace,
-        "memory_degraded": bool(trace.get("degraded")),
-        "memory_degradation_reason": trace.get("degradation_reason"),
-        "profile_version": trace.get("profile_version"),
-    }
 
 
 # =============================================================# chat_node

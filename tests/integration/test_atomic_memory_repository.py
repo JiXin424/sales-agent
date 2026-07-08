@@ -1,6 +1,8 @@
 import pytest
 from sqlalchemy import text
 
+from sales_agent.models.atomic_memory import AtomicMemory, MemoryOutboxJob, MemoryAuditEvent
+
 
 @pytest.mark.asyncio
 async def test_atomic_memory_schema_has_scope_and_unique_indexes(db_session):

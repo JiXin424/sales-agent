@@ -446,6 +446,40 @@ async def test_evidence_routing_skipped_for_clarify():
 
 
 # ===================================================================
+# duplicate_node unit tests
+# ===================================================================
+
+
+def test_duplicate_node_is_mutation_free():
+    """duplicate_node returns response_kind "duplicate" with no state mutation.
+
+    It must NOT advance ``last_event_id`` (the persisted checkpoint's
+    last_event_id stays at the prior turn's value). A duplicate delivery
+    is a no-op: no chat, no flow advance, no conversation log, no outbound
+    reply.
+    """
+    from sales_agent.graph.online.nodes import duplicate_node
+
+    event_id = "ev-dup-001"
+    result = duplicate_node(
+        {
+            "tenant_id": "t1",
+            "agent_id": "a1",
+            "user_id": "u1",
+            "session_user_id": "u1",
+            "channel": "dingtalk",
+            "conversation_id": "c1",
+            "message": "duplicate message",
+            "event_id": event_id,
+        }
+    )
+    assert result == {"response_kind": "duplicate"}
+    # No last_event_id advancement, no chat, no log side-effects.
+    assert "last_event_id" not in result
+    assert "answer_dict" not in result
+
+
+# ===================================================================
 # Graph-level integration tests
 # ===================================================================
 

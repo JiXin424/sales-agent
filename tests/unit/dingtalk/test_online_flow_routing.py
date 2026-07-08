@@ -267,6 +267,95 @@ class TestProcessorRouting:
 
 
 # ====================================================================
+# Duplicate delivery is a no-op
+# ====================================================================
+
+
+class TestDuplicateDeliveryNoOp:
+    """When ``invoke_online_turn`` returns ``response_kind == "duplicate"``,
+    the processor must NOT render or reply — duplicate delivery is silent
+    and side-effect free."""
+
+    @pytest.mark.asyncio
+    async def test_duplicate_does_not_reply(self):
+        reply_fn = AsyncMock()
+
+        mock_db = AsyncMock()
+        mock_settings = MagicMock()
+        mock_settings.conversation.reset_commands = ["reset", "/reset", "新话题"]
+        mock_runtime = MagicMock()
+        mock_runtime.tenant_id = "test_tenant"
+        mock_config = MagicMock()
+
+        with patch(
+            "sales_agent.integrations.dingtalk.processor.resolve_dingtalk_agent_id",
+            new_callable=AsyncMock,
+            return_value="agent_123",
+        ):
+            with patch(
+                "sales_agent.integrations.dingtalk.processor.invoke_online_turn",
+                new_callable=AsyncMock,
+                return_value={
+                    "response_kind": "duplicate",
+                    "thread_id": "online:test_tenant:agent_123:dingtalk:ding_user_001",
+                },
+            ):
+                with patch(
+                    "sales_agent.integrations.dingtalk.processor.DingTalkMessageRenderer",
+                ) as mock_renderer_cls:
+                    renderer_instance = MagicMock()
+                    renderer_instance.render.return_value = "Rendered text"
+                    mock_renderer_cls.return_value = renderer_instance
+
+                    with patch(
+                        "sales_agent.integrations.dingtalk.command_parser.DingTalkCommandParser",
+                    ) as mock_parser_cls:
+                        parser_instance = MagicMock()
+                        parser_instance.parse.return_value.is_reset = False
+                        mock_parser_cls.return_value = parser_instance
+
+                        with patch(
+                            "sales_agent.integrations.dingtalk.user_mapper.DingTalkUserMapper",
+                        ) as mock_user_mapper_cls:
+                            user_mapper_instance = AsyncMock()
+                            user_mapper_instance.get_or_create_user.return_value = (
+                                "internal_user_001"
+                            )
+                            mock_user_mapper_cls.return_value = user_mapper_instance
+
+                            with patch(
+                                "sales_agent.integrations.dingtalk.conversation_mapper.DingTalkConversationMapper",
+                            ) as mock_conv_mapper_cls:
+                                conv_instance = MagicMock()
+                                conv_instance.generate_conversation_id.return_value = "conv_001"
+                                mock_conv_mapper_cls.return_value = conv_instance
+
+                                from sales_agent.integrations.dingtalk.processor import (
+                                    handle_dingtalk_event,
+                                )
+
+                                result = await handle_dingtalk_event(
+                                    db=mock_db,
+                                    config=mock_config,
+                                    settings=mock_settings,
+                                    runtime=mock_runtime,
+                                    event_id="dup_event_001",
+                                    corp_id="corp_001",
+                                    sender_id="ding_user_001",
+                                    sender_name="Test User",
+                                    message_type="text",
+                                    text="hello",
+                                    dingtalk_conversation_id="conv_001",
+                                    reply_fn=reply_fn,
+                                )
+
+        # No reply, no render — duplicate delivery must be a no-op.
+        assert result is None
+        reply_fn.assert_not_awaited()
+        renderer_instance.render.assert_not_called()
+
+
+# ====================================================================
 # Streaming path routing
 # ====================================================================
 

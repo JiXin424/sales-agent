@@ -145,6 +145,13 @@ async def handle_dingtalk_event(
         }
         response_kind = result.get("response_kind", "chat")
 
+        # 重复投递是 no-op：不渲染、不回复、不写会话日志、不推进流程。
+        # Graph 的 duplicate_node 已返回 response_kind=="duplicate" 且无状态变更，
+        # 这里直接提前返回，避免对用户造成二次打扰。
+        if result.get("response_kind") == "duplicate":
+            logger.info("Skipping duplicate DingTalk event: %s", event_id)
+            return None
+
         # 正常响应：渲染 + 回复
         sources = answer_dict.get("sources", [])
         risk_result = answer_dict.get("risk_result", {})

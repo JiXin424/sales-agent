@@ -29,6 +29,7 @@ from sales_agent.graph.checkpoint_runtime import (
 from sales_agent.graph.online.graph import build_online_graph
 from sales_agent.graph.online.state import OnlineConversationState
 from sales_agent.services.agent_service import resolve_tenant_agent_id
+from sales_agent.services.online_turn_lock import acquire_online_turn_lock
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +296,16 @@ async def invoke_online_turn(
         session_user_id,
     )
 
+    # 4b. Acquire the transaction-scoped advisory lock for this thread
+    # BEFORE invoking the Graph. This serializes same-thread turns across
+    # worker processes: a concurrent worker delivering a turn for the same
+    # thread blocks here until this caller's transaction commits/rolls
+    # back, guaranteeing the second worker sees the latest checkpoint.
+    # The caller owns the transaction and must commit/rollback after the
+    # Graph invocation and persistence complete; this acquires the lock
+    # but does not manage the transaction lifecycle.
+    await acquire_online_turn_lock(db, thread_id)
+
     # 5. Get graph
     graph = get_online_graph(checkpointer=checkpointer)
 
@@ -314,7 +325,7 @@ async def invoke_online_turn(
     )
 
     # 7. Invoke
-    return await graph.ainvoke(
+    result = await graph.ainvoke(
         input_state,
         config={"configurable": {"thread_id": thread_id}},
         context={
@@ -324,3 +335,7 @@ async def invoke_online_turn(
             "now": now,
         },
     )
+
+    # Thread the thread_id into the result so callers/tests can observe
+    # identity. Harmless for existing callers that use result.get(...).
+    return {**result, "thread_id": thread_id}

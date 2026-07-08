@@ -38,7 +38,7 @@ class TestNodeEdgeCounts:
     @pytest.mark.parametrize(
         "graph_id,expected_nodes,expected_edges",
         [
-            ("online", 12, 16),
+            ("online", 14, 21),
             ("guided-flow", 5, 6),
             ("chat", 12, 14),
         ],
@@ -49,10 +49,10 @@ class TestNodeEdgeCounts:
         assert len(g.edges) == expected_edges
 
     def test_online_node_count_not_stuck_at_two(self):
-        """Regression: every graph used to report node_count=2. online has 12."""
+        """Regression: every graph used to report node_count=2. online has 14."""
         g = _graph("online")
         assert len(g.nodes) != 2
-        assert len(g.nodes) == 12
+        assert len(g.nodes) == 14
 
 
 class TestIdentifySubgraphNodes:
@@ -157,12 +157,12 @@ class TestAnnotateNodeLabels:
         assert 'log("log<br/>' in out2  # 节点行已注解
 
     def test_online_annotates_seven_plain_nodes(self):
-        """online 图 7 个普通节点加注解,2 个子图节点跳过。"""
+        """online 图 9 个普通节点加注解,2 个子图节点跳过。"""
         g = _graph("online")
         mermaid = g.draw_mermaid()
         subgraph = set(_identify_subgraph_nodes(g))
         out = _annotate_node_labels(mermaid, subgraph, graph_id="online")
-        assert out.count("<font size='2'") == 7
+        assert out.count("<font size='2'") == 9
         # 子图节点未加注解
         assert "guided_flow<br/>" not in out
         assert "chat<br/>" not in out
@@ -261,7 +261,7 @@ class TestEdges:
     """edges 字段从 compiled graph 取, source/target 必须是合法节点 id。"""
 
     @pytest.mark.parametrize("graph_id,expected_edges", [
-        ("online", 16),
+        ("online", 21),
         ("chat", 14),
         ("guided-flow", 6),
     ])

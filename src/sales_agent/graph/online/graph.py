@@ -30,7 +30,11 @@ from __future__ import annotations
 
 from langgraph.graph import END, START, StateGraph
 
-from sales_agent.graph.online.edges import route_context_resolution, route_online_message
+from sales_agent.graph.online.edges import (
+    route_after_scenario,
+    route_context_resolution,
+    route_online_message,
+)
 from sales_agent.graph.online.nodes import (
     _get_guided_flow_graph,
     chat_node,
@@ -41,7 +45,9 @@ from sales_agent.graph.online.nodes import (
     evidence_routing_node,
     log_control_response_node,
     log_flow_output_node,
+    log_scenario_response_node,
     normalize_turn_node,
+    scenario_coach_node,
 )
 from sales_agent.graph.online.state import OnlineConversationState
 
@@ -86,6 +92,8 @@ def build_online_graph() -> StateGraph:
     builder.add_node("chat", chat_node)
     builder.add_node("duplicate", duplicate_node)
     builder.add_node("log_flow_output", log_flow_output_node)
+    builder.add_node("scenario_coach", scenario_coach_node)
+    builder.add_node("log_scenario_response", log_scenario_response_node)
 
     # ── Edges ──────────────────────────────────────────────────────
     builder.add_edge(START, "normalize_turn")
@@ -101,6 +109,7 @@ def build_online_graph() -> StateGraph:
             "advance": "guided_flow",
             "chat": "context_resolution",
             "direct_chat": "direct_evidence_routing",
+            "scenario_coach": "scenario_coach",
         },
     )
 
@@ -112,6 +121,17 @@ def build_online_graph() -> StateGraph:
             "clarify": "clarification_response",
             "resolved": "evidence_routing",
             "cancel": END,
+        },
+    )
+
+    # From scenario_coach: preset-answer hit -> log -> END, else resume normal path
+    builder.add_conditional_edges(
+        "scenario_coach",
+        route_after_scenario,
+        {
+            "scenario_hit": "log_scenario_response",
+            "chat": "context_resolution",
+            "direct_chat": "direct_evidence_routing",
         },
     )
 
@@ -130,6 +150,8 @@ def build_online_graph() -> StateGraph:
     builder.add_edge("guided_flow", "log_flow_output")
     builder.add_edge("log_flow_output", END)
     builder.add_edge("duplicate", END)
+
+    builder.add_edge("log_scenario_response", END)
 
     return builder
 

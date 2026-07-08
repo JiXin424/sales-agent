@@ -28,3 +28,17 @@ def route_context_resolution(state: OnlineConversationState) -> str:
     - ``"resolved"`` → evidence routing then chat
     """
     return state.get("context_status", "resolved")
+
+
+def route_after_scenario(state: OnlineConversationState) -> str:
+    """Return the next node after the scenario_coach node.
+
+    - ``"scenario_hit"`` → log_scenario_response → END
+    - otherwise resume the original path: ``"direct_chat"`` →
+      direct_evidence_routing, ``"chat"`` → context_resolution.
+    """
+    if state.get("response_kind") == "scenario":
+        return "scenario_hit"
+    if state.get("flow_action") == "direct_chat":
+        return "direct_chat"
+    return "chat"

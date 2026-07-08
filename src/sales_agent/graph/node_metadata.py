@@ -102,6 +102,12 @@ ONLINE_NODE_META: dict[str, NodeMeta] = {
     "log_flow_output": NodeMeta(
         desc="guided flow 本轮输出落库",
     ),
+    "scenario_coach": NodeMeta(
+        desc="场景教练节点：匹配预设问题，命中则返回预设回答",
+    ),
+    "log_scenario_response": NodeMeta(
+        desc="场景教练回答落库",
+    ),
 }
 
 # ── Chat 子图节点元数据 ───────────────────────────────────────────

@@ -17,14 +17,19 @@ import pytest
 
 from eval.router.run_router_eval import (
     EvalCase,
+    ClarificationEvalCase,
+    ClarificationEvalReport,
     ClassMetrics,
     EvalReport,
+    RouterEvalDependencies,
     TURN_RELATIONS,
     EVIDENCE_POLICIES,
     evaluate_turn_relation,
     evaluate_evidence_policy,
+    evaluate_clarification_resolution,
     _fixture_context_resolver,
     _fixture_evidence_router,
+    _fixture_clarification_resolver,
     load_cases,
     write_json_report,
     write_markdown_report,
@@ -83,7 +88,8 @@ def _make_ev_case(
 class TestConfusionMatrix:
     """Verify per-class counts match expected values."""
 
-    def test_all_fixture_resolver_returns_continue(self) -> None:
+    @pytest.mark.asyncio
+    async def test_all_fixture_resolver_returns_continue(self) -> None:
         """Fixture resolver always returns 'continue' — all cases map to continue."""
         cases = [
             _make_case("c1", "hello", "continue"),
@@ -92,7 +98,7 @@ class TestConfusionMatrix:
             _make_case("c4", "换一个", "switch"),
             _make_case("c5", "那个项目", "ambiguous"),
         ]
-        report = evaluate_turn_relation(cases, _fixture_context_resolver)
+        report = await evaluate_turn_relation(cases, _fixture_context_resolver, RouterEvalDependencies())
         # All predicted as continue
         assert report.total_cases == 5
         assert report.correct == 2  # only c1 and c2 are correct (expected continue)
@@ -108,7 +114,8 @@ class TestConfusionMatrix:
         assert report.per_class_metrics["ambiguous"].total == 1
         assert report.per_class_metrics["ambiguous"].correct == 0
 
-    def test_mixed_fixture_all_correct(self) -> None:
+    @pytest.mark.asyncio
+    async def test_mixed_fixture_all_correct(self) -> None:
         """Custom resolver that always returns the expected answer."""
         def perfect_resolver(**kwargs: Any) -> dict[str, Any]:
             msg = kwargs.get("message", "")
@@ -130,7 +137,7 @@ class TestConfusionMatrix:
             _make_case("c4", "那个项目", "ambiguous"),
             _make_case("c5", "算了重新说", "revise"),
         ]
-        report = evaluate_turn_relation(cases, perfect_resolver)
+        report = await evaluate_turn_relation(cases, perfect_resolver, RouterEvalDependencies())
         assert report.total_cases == 5
         assert report.correct == 5
         assert report.accuracy == 1.0
@@ -140,7 +147,8 @@ class TestConfusionMatrix:
                 assert cm.total == 1
                 assert cm.correct == 1
 
-    def test_confusion_off_by_one(self) -> None:
+    @pytest.mark.asyncio
+    async def test_confusion_off_by_one(self) -> None:
         """Half correct, half wrong — verify all counts."""
 
         def _half_resolver(**kwargs: Any) -> dict[str, Any]:
@@ -154,7 +162,7 @@ class TestConfusionMatrix:
             _make_case("c3", "换个话题", "switch"),   # wrong (predicted new)
             _make_case("c4", "那个项目", "ambiguous"), # wrong (predicted new)
         ]
-        report = evaluate_turn_relation(cases, _half_resolver)
+        report = await evaluate_turn_relation(cases, _half_resolver, RouterEvalDependencies())
         assert report.total_cases == 4
         assert report.correct == 1
         # new class: total=1 (c1), correct=1
@@ -173,7 +181,8 @@ class TestConfusionMatrix:
 class TestMacroAccuracy:
     """Verify macro accuracy calculation."""
 
-    def test_macro_accuracy_perfect(self) -> None:
+    @pytest.mark.asyncio
+    async def test_macro_accuracy_perfect(self) -> None:
         """All classes perfect → macro accuracy = 1.0."""
 
         def perfect(**kwargs: Any) -> dict[str, Any]:
@@ -186,16 +195,18 @@ class TestMacroAccuracy:
             _make_case("c1", "继续", "continue"),
             _make_case("c2", "新话题", "new"),
         ]
-        report = evaluate_turn_relation(cases, perfect)
+        report = await evaluate_turn_relation(cases, perfect, RouterEvalDependencies())
         # Only 2 classes have cases, but all 5 are included
         # macro = (1.0 + 1.0 + 0 + 0 + 0) / 5 = 0.4
         # Actually, the macro_accuracy sums over ALL 5 turn relations
         # even those with 0 cases (accuracy=0 for those)
         # Wait, accuracy for classes with 0 total is 0.0
         # So macro = (1.0 + 1.0 + 0 + 0 + 0) / 5 = 0.4
-        assert report.macro_accuracy == 0.4
+        # Only 2 populated classes (continue=1.0, new=1.0) → macro = 1.0
+        assert report.macro_accuracy == 1.0
 
-    def test_macro_accuracy_half(self) -> None:
+    @pytest.mark.asyncio
+    async def test_macro_accuracy_half(self) -> None:
         """Half classes correct."""
 
         def mixed(**kwargs: Any) -> dict[str, Any]:
@@ -208,7 +219,7 @@ class TestMacroAccuracy:
             _make_case("c4", "那个", "ambiguous"),    # wrong
             _make_case("c5", "算了", "revise"),       # wrong
         ]
-        report = evaluate_turn_relation(cases, mixed)
+        report = await evaluate_turn_relation(cases, mixed, RouterEvalDependencies())
         # continue: 1/1 = 1.0
         # new: 0/1 = 0.0
         # switch: 0/1 = 0.0
@@ -217,7 +228,8 @@ class TestMacroAccuracy:
         # macro = (1.0 + 0 + 0 + 0 + 0) / 5 = 0.2
         assert report.macro_accuracy == 0.2
 
-    def test_macro_accuracy_with_empty_classes(self) -> None:
+    @pytest.mark.asyncio
+    async def test_macro_accuracy_with_empty_classes(self) -> None:
         """Classes with no cases contribute 0 to macro average."""
 
         def all_continue(**kwargs: Any) -> dict[str, Any]:
@@ -226,9 +238,10 @@ class TestMacroAccuracy:
         cases = [
             _make_case("c1", "继续", "continue"),
         ]
-        report = evaluate_turn_relation(cases, all_continue)
-        # macro = (1.0 + 0 + 0 + 0 + 0) / 5 = 0.2
-        assert report.macro_accuracy == 0.2
+        report = await evaluate_turn_relation(cases, all_continue, RouterEvalDependencies())
+        # Only 1 populated class (continue=1.0) → macro = 1.0
+        assert report.macro_accuracy == 1.0
+        assert report.populated_classes == ["continue"]
 
 
 # ======================================================================
@@ -239,7 +252,8 @@ class TestMacroAccuracy:
 class TestRequiredFalseNegativeRate:
     """Verify required false-negative rate calculation."""
 
-    def test_no_false_negatives(self) -> None:
+    @pytest.mark.asyncio
+    async def test_no_false_negatives(self) -> None:
         """All required cases get required → rate = 0."""
 
         def required_resolver(**kwargs: Any) -> dict[str, Any]:
@@ -253,10 +267,11 @@ class TestRequiredFalseNegativeRate:
             _make_case("c1", "产品多少钱", "continue", knowledge_policy="required"),
             _make_case("c2", "功能有哪些", "continue", knowledge_policy="required"),
         ]
-        report = evaluate_turn_relation(cases, required_resolver)
+        report = await evaluate_turn_relation(cases, required_resolver, RouterEvalDependencies())
         assert report.required_fn_rate == 0.0
 
-    def test_all_false_negatives(self) -> None:
+    @pytest.mark.asyncio
+    async def test_all_false_negatives(self) -> None:
         """No required cases → rate = 1.0."""
 
         def none_resolver(**kwargs: Any) -> dict[str, Any]:
@@ -269,11 +284,12 @@ class TestRequiredFalseNegativeRate:
         cases = [
             _make_case("c1", "产品多少钱", "continue", knowledge_policy="required"),
         ]
-        report = evaluate_turn_relation(cases, none_resolver)
+        report = await evaluate_turn_relation(cases, none_resolver, RouterEvalDependencies())
         # Has fact signal "产品" → expected required
         assert report.required_fn_rate == 1.0
 
-    def test_evidence_required_fn_rate(self) -> None:
+    @pytest.mark.asyncio
+    async def test_evidence_required_fn_rate(self) -> None:
         """Evidence router required false-negative rate."""
 
         def perfect_ev(**kwargs: Any) -> dict[str, Any]:
@@ -287,10 +303,11 @@ class TestRequiredFalseNegativeRate:
             _make_ev_case("e1", "产品多少钱", "required"),
             _make_ev_case("e2", "公司介绍", "required"),
         ]
-        report = evaluate_evidence_policy(cases, perfect_ev)
+        report = await evaluate_evidence_policy(cases, perfect_ev, RouterEvalDependencies())
         assert report.required_fn_rate == 0.0
 
-    def test_evidence_half_fn(self) -> None:
+    @pytest.mark.asyncio
+    async def test_evidence_half_fn(self) -> None:
         """Half of required cases are missed."""
 
         def half_ev(**kwargs: Any) -> dict[str, Any]:
@@ -305,11 +322,12 @@ class TestRequiredFalseNegativeRate:
             _make_ev_case("e2", "公司介绍", "required"),
             _make_ev_case("e3", "hello", "none"),
         ]
-        report = evaluate_evidence_policy(cases, half_ev)
+        report = await evaluate_evidence_policy(cases, half_ev, RouterEvalDependencies())
         # 2 required cases, 0 correct → rate = 2/2 = 1.0
         assert report.required_fn_rate == 1.0
 
-    def test_required_fn_with_fact_signals(self) -> None:
+    @pytest.mark.asyncio
+    async def test_required_fn_with_fact_signals(self) -> None:
         """Fact signal detection for required false-negative counting."""
         assert _has_fact_signal("产品多少钱")
         assert _has_fact_signal("价格是多少")
@@ -333,7 +351,8 @@ class TestRequiredFalseNegativeRate:
 class TestTopicLeakageRate:
     """Verify topic leakage rate calculation."""
 
-    def test_no_leakage(self) -> None:
+    @pytest.mark.asyncio
+    async def test_no_leakage(self) -> None:
         """No new/switch cases incorrectly predicted as continue."""
 
         def perfect_reg(**kwargs: Any) -> dict[str, Any]:
@@ -349,10 +368,11 @@ class TestTopicLeakageRate:
             _make_case("c2", "换个", "switch"),
             _make_case("c3", "继续聊", "continue"),
         ]
-        report = evaluate_turn_relation(cases, perfect_reg)
+        report = await evaluate_turn_relation(cases, perfect_reg, RouterEvalDependencies())
         assert report.topic_leakage_rate == 0.0
 
-    def test_all_leakage(self) -> None:
+    @pytest.mark.asyncio
+    async def test_all_leakage(self) -> None:
         """All new/switch cases leak to continue."""
 
         def leaky(**kwargs: Any) -> dict[str, Any]:
@@ -362,11 +382,12 @@ class TestTopicLeakageRate:
             _make_case("c1", "新话题", "new"),
             _make_case("c2", "换个话题", "switch"),
         ]
-        report = evaluate_turn_relation(cases, leaky)
+        report = await evaluate_turn_relation(cases, leaky, RouterEvalDependencies())
         # 2 leaking out of 2 at-risk cases
         assert report.topic_leakage_rate == 1.0
 
-    def test_partial_leakage(self) -> None:
+    @pytest.mark.asyncio
+    async def test_partial_leakage(self) -> None:
         """Half of new/switch cases leak."""
 
         def half_leaky(**kwargs: Any) -> dict[str, Any]:
@@ -379,7 +400,7 @@ class TestTopicLeakageRate:
             _make_case("c1", "新话题", "new"),       # correct → no leakage
             _make_case("c2", "换个话题", "switch"),   # predicted continue → leakage
         ]
-        report = evaluate_turn_relation(cases, half_leaky)
+        report = await evaluate_turn_relation(cases, half_leaky, RouterEvalDependencies())
         # 1 leaking out of 2 at-risk
         assert report.topic_leakage_rate == 0.5
 
@@ -392,7 +413,8 @@ class TestTopicLeakageRate:
 class TestClarificationCompletionRate:
     """Verify clarification completion rate calculation."""
 
-    def test_no_ambiguous_cases(self) -> None:
+    @pytest.mark.asyncio
+    async def test_no_ambiguous_cases(self) -> None:
         """No ambiguous cases → completion rate = 1.0."""
 
         def perfect(**kwargs: Any) -> dict[str, Any]:
@@ -402,10 +424,11 @@ class TestClarificationCompletionRate:
             _make_case("c1", "继续", "continue"),
             _make_case("c2", "新话题", "new"),
         ]
-        report = evaluate_turn_relation(cases, perfect)
+        report = await evaluate_turn_relation(cases, perfect, RouterEvalDependencies())
         assert report.clarification_completion_rate == 1.0
 
-    def test_all_ambiguous_detected(self) -> None:
+    @pytest.mark.asyncio
+    async def test_all_ambiguous_detected(self) -> None:
         """All ambiguous cases correctly identified."""
         ambiguous_count = 0
 
@@ -418,11 +441,12 @@ class TestClarificationCompletionRate:
             _make_case("c1", "那个项目", "ambiguous"),
             _make_case("c2", "这个呢", "ambiguous"),
         ]
-        report = evaluate_turn_relation(cases, detect_ambig)
+        report = await evaluate_turn_relation(cases, detect_ambig, RouterEvalDependencies())
         assert ambiguous_count == 2  # Both cases hit the resolver
         assert report.clarification_completion_rate == 1.0
 
-    def test_no_ambiguous_detected(self) -> None:
+    @pytest.mark.asyncio
+    async def test_no_ambiguous_detected(self) -> None:
         """No ambiguous cases detected when they should be."""
 
         def always_continue(**kwargs: Any) -> dict[str, Any]:
@@ -432,10 +456,11 @@ class TestClarificationCompletionRate:
             _make_case("c1", "那个项目", "ambiguous"),
             _make_case("c2", "这个呢", "ambiguous"),
         ]
-        report = evaluate_turn_relation(cases, always_continue)
+        report = await evaluate_turn_relation(cases, always_continue, RouterEvalDependencies())
         assert report.clarification_completion_rate == 0.0
 
-    def test_partial_clarification(self) -> None:
+    @pytest.mark.asyncio
+    async def test_partial_clarification(self) -> None:
         """Half of ambiguous cases detected."""
 
         def half_detect(**kwargs: Any) -> dict[str, Any]:
@@ -448,7 +473,7 @@ class TestClarificationCompletionRate:
             _make_case("c1", "那个项目", "ambiguous"),  # detected correctly
             _make_case("c2", "这个呢", "ambiguous"),     # not detected
         ]
-        report = evaluate_turn_relation(cases, half_detect)
+        report = await evaluate_turn_relation(cases, half_detect, RouterEvalDependencies())
         assert report.clarification_completion_rate == 0.5
 
 
@@ -460,7 +485,8 @@ class TestClarificationCompletionRate:
 class TestEvidencePolicyEvaluation:
     """Verify evidence-policy evaluation accuracy."""
 
-    def test_all_correct(self) -> None:
+    @pytest.mark.asyncio
+    async def test_all_correct(self) -> None:
         """All evidence policy predictions match expected."""
 
         def perfect_ev(**kwargs: Any) -> dict[str, Any]:
@@ -482,11 +508,12 @@ class TestEvidencePolicyEvaluation:
             _make_ev_case("e2", "你好", "none"),
             _make_ev_case("e3", "客户跟进", "optional"),
         ]
-        report = evaluate_evidence_policy(cases, perfect_ev)
+        report = await evaluate_evidence_policy(cases, perfect_ev, RouterEvalDependencies())
         assert report.accuracy == 2 / 3  # e3 incorrect (perfect_ev returns required for "产品" in "客户跟进")
         assert report.total_cases == 3
 
-    def test_all_none(self) -> None:
+    @pytest.mark.asyncio
+    async def test_all_none(self) -> None:
         """All predictions are none — check accuracy per class."""
 
         def none_ev(**kwargs: Any) -> dict[str, Any]:
@@ -501,7 +528,7 @@ class TestEvidencePolicyEvaluation:
             _make_ev_case("e2", "你好", "none"),            # correct
             _make_ev_case("e3", "价格", "required"),        # wrong
         ]
-        report = evaluate_evidence_policy(cases, none_ev)
+        report = await evaluate_evidence_policy(cases, none_ev, RouterEvalDependencies())
         assert report.correct == 1
         assert report.per_class_metrics["none"].total == 1
         assert report.per_class_metrics["none"].correct == 1

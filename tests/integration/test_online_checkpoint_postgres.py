@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import os
 import uuid
-from unittest.mock import patch, AsyncMock
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 import asyncpg
 
+import sales_agent.graph.checkpoint_runtime as checkpoint_runtime
 from sales_agent.services.online_conversation import (
     initialize_online_runtime,
     close_online_runtime,
@@ -48,9 +50,17 @@ async def test_online_checkpoint_persistence_across_restarts():
     }
     context = {"db": None, "chat_model": None, "embedding_model": None}
 
+    # Point the checkpoint runtime at the isolated test DB deterministically.
+    # We patch get_settings inside checkpoint_runtime (not the global env / the
+    # cached _settings singleton, which earlier tests may already have populated
+    # with a different URL) so the saver always connects to TEST_DATABASE_URL.
+    fake_settings = SimpleNamespace(database=SimpleNamespace(url=TEST_DATABASE_URL))
+
+    # Ensure a clean runtime regardless of prior tests.
+    await close_online_runtime()
+
     try:
-        # Patch TEST_DATABASE_URL into the checkpoint runtime
-        with patch.dict(os.environ, {"DATABASE_URL": TEST_DATABASE_URL}):
+        with patch.object(checkpoint_runtime, "get_settings", return_value=fake_settings):
             # 1. Initialize runtime and execute first Guided Flow turn
             await initialize_online_runtime()
             graph_a = get_online_graph()

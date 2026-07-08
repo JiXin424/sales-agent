@@ -24,6 +24,37 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 # ====================================================================
+# Online Graph runtime for HTTP-path tests
+# ====================================================================
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _online_graph_runtime():
+    """Compile the Online Graph with an InMemorySaver for the HTTP path.
+
+    These tests drive ``/agent/chat`` via ASGITransport, which does NOT run
+    the FastAPI lifespan - so ``initialize_online_runtime()`` never executes
+    and the strict ``get_online_graph()`` would raise
+    ``CheckpointUnavailableError``. We inject an InMemorySaver-backed graph
+    directly into the module cache so the request path finds an initialized
+    graph. These are behavior tests, not durability tests, so an in-memory
+    checkpointer is appropriate (the production PostgreSQL path is covered
+    by ``test_online_checkpoint_postgres.py``).
+    """
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    import sales_agent.services.online_conversation as online_conversation
+
+    online_conversation._online_graph = online_conversation._compile_online_graph(
+        InMemorySaver()
+    )
+    try:
+        yield
+    finally:
+        online_conversation._online_graph = None
+
+
+# ====================================================================
 # Test fixtures
 # ====================================================================
 

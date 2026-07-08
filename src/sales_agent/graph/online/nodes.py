@@ -365,9 +365,11 @@ async def scenario_coach_node(
 
     On a high-confidence match: set ``answer_dict`` (preset answer + manual
     source citation) and ``response_kind="scenario"`` so the graph
-    short-circuits to the log node + END. On a miss: passthrough (return
-    only ``last_event_id``), leaving ``flow_action`` intact so
-    ``route_after_scenario`` resumes the normal downstream path.
+    short-circuits to the log node + END. On a miss: return ``last_event_id``
+    and explicitly reset ``response_kind``/``answer_dict`` to ``None`` so a
+    stale kind from a prior turn's hit cannot leak across turns (the graph
+    checkpoint persists these routing-gating fields), leaving ``flow_action``
+    intact so ``route_after_scenario`` resumes the normal downstream path.
 
     Fail-open: any matcher failure is treated as a miss (lesson #34).
     """
@@ -388,13 +390,21 @@ async def scenario_coach_node(
 
     if decision.matched_question_id is None:
         logger.debug("scenario_coach: no match (reason=%s)", decision.reason_code)
-        return {"last_event_id": state.get("event_id")}
+        return {
+            "last_event_id": state.get("event_id"),
+            "response_kind": None,  # reset stale kind from a prior turn's hit
+            "answer_dict": None,    # reset stale answer from a prior turn's hit
+        }
 
     registry = get_scenario_registry()
     question = registry.get_question(decision.matched_question_id)
     if question is None:
         logger.warning("scenario_coach: matched id %s not in registry", decision.matched_question_id)
-        return {"last_event_id": state.get("event_id")}
+        return {
+            "last_event_id": state.get("event_id"),
+            "response_kind": None,  # reset stale kind from a prior turn's hit
+            "answer_dict": None,    # reset stale answer from a prior turn's hit
+        }
 
     answer_dict = {
         "summary": question.answer_summary,

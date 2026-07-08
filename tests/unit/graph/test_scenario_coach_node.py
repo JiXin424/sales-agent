@@ -69,9 +69,13 @@ async def test_scenario_node_miss_passthrough():
     )
     cfg = _build_config({"chat_model": None, "db": None, "scenario_matcher_override": override})
     result = await scenario_coach_node(_base_state(), cfg)
-    assert "answer_dict" not in result
-    assert "response_kind" not in result
-    assert result == {"last_event_id": "ev-1"}
+    # Miss MUST reset response_kind/answer_dict to None (not omit them) so a
+    # stale "scenario" kind from a prior turn's hit cannot leak across turns
+    # and misroute route_after_scenario. See test_hit_then_miss_same_thread_no_leak.
+    assert result["response_kind"] is None
+    assert result["answer_dict"] is None
+    assert result["last_event_id"] == "ev-1"
+    assert result["response_kind"] != "scenario"
 
 
 @pytest.mark.asyncio

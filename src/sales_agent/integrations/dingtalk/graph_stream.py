@@ -103,6 +103,7 @@ async def handle_dingtalk_stream_via_graph(
         "topic_routing_enabled": settings.topic_routing.enabled,
         "scenario_coach_enabled": settings.scenario_coach.enabled,
         "answer_dict": None,       # clear previous turn's answer
+        "response_kind": None,     # clear previous turn's routing kind (scenario_coach)
     }
 
     # 1. Create initial card

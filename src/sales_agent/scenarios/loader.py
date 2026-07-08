@@ -6,7 +6,6 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from sales_agent.scenarios.models import AnswerSection, Scenario, ScenarioQuestion
 
@@ -161,7 +160,7 @@ def parse_scenario_md(md_text: str) -> ScenarioRegistry:
                 body = body[1:]
             current_question.tag = tag
             current_question.answer_sections = _split_sections(body)
-            current_question.answer_summary = tag or current_question.text
+            current_question.answer_summary = current_question.text
             assert current_scenario is not None
             current_scenario.questions.append(current_question)
         current_question = None

@@ -36,8 +36,9 @@ def test_question_fields_populated():
     assert q01 is not None
     assert q01.text  # non-empty representative question
     assert q01.tag  # "需判断 · 先判断再应对"
-    assert q01.answer_summary
     assert len(q01.answer_sections) >= 1
+    assert q01.answer_summary == q01.text  # summary is the representative question, not the tag label
+    assert "需判断" not in q01.answer_summary  # not the generic tag label
     # 需判断-type Q01 has #### subsections like "价值还没立住"
     titles = [s.title for s in q01.answer_sections]
     assert any("价值还没立住" in t for t in titles)

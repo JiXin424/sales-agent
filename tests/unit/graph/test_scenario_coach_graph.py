@@ -156,3 +156,59 @@ async def test_disabled_uses_original_path():
     assert runner.called is True
     # No scenario response.
     assert result.get("response_kind") != "scenario"
+
+
+@pytest.mark.asyncio
+async def test_hit_then_miss_same_thread_no_leak():
+    """Regression: response_kind must not leak across turns on the same thread.
+
+    Turn 1 hits a scenario (sets response_kind='scenario'); turn 2 is a clear
+    miss on the SAME thread_id and must reach the chat path normally (not be
+    misrouted by the stale response_kind).
+    """
+    graph = build_online_graph().compile(checkpointer=InMemorySaver())
+    tid = "c-scenario-leak"
+
+    def _turn_input(message, eid):
+        return {
+            "tenant_id": "t1", "agent_id": "a1", "user_id": "u1",
+            "session_user_id": "u1", "channel": "dingtalk",
+            "conversation_id": tid, "message": message, "entry_action": None,
+            "event_id": eid, "guided_flows_enabled": False,
+            "topic_routing_enabled": False, "scenario_coach_enabled": True,
+        }
+
+    # Turn 1: HIT
+    runner1 = _StubChatRunner()
+    ctx1 = _runtime_ctx(
+        scenario_coach_enabled=True,
+        matcher_decision=ScenarioMatchDecision(
+            matched_question_id="Q01", confidence=0.9, reason_code="price_objection"
+        ),
+        chat_runner=runner1,
+    )
+    r1 = await graph.ainvoke(
+        _turn_input("客户说别家更便宜怎么办", "ev-leak-1"),
+        config={"configurable": {"thread_id": tid}},
+        context=ctx1,
+    )
+    assert r1["response_kind"] == "scenario"
+    assert runner1.called is False
+
+    # Turn 2: MISS on the SAME thread, distinct event_id
+    runner2 = _StubChatRunner()
+    ctx2 = _runtime_ctx(
+        scenario_coach_enabled=True,
+        matcher_decision=ScenarioMatchDecision(
+            matched_question_id=None, confidence=0.1, reason_code="irrelevant"
+        ),
+        chat_runner=runner2,
+    )
+    r2 = await graph.ainvoke(
+        _turn_input("今天天气真好", "ev-leak-2"),
+        config={"configurable": {"thread_id": tid}},
+        context=ctx2,
+    )
+    # Miss on a fresh turn MUST reach chat, not be misrouted by stale response_kind.
+    assert runner2.called is True
+    assert r2.get("response_kind") != "scenario"

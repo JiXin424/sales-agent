@@ -220,6 +220,8 @@ async def invoke_online_turn(
         "guided_flows_enabled": settings.guided_flows.enabled,
         "topic_routing_enabled": settings.topic_routing.enabled,
         "scenario_coach_enabled": settings.scenario_coach.enabled,
+        "answer_dict": None,       # clear previous turn's answer
+        "response_kind": None,     # clear previous turn's routing kind (scenario_coach)
     }
 
     # 7. Invoke

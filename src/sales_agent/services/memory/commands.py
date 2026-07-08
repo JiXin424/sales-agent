@@ -6,7 +6,6 @@ from datetime import datetime
 from typing import Literal
 
 from sales_agent.services.memory.contracts import MemoryCandidate, MemoryOperationResult, MemoryScope
-from sales_agent.services.memory.normalization import normalize_key
 from sales_agent.services.memory.policy import classify_sensitivity, classify_stability
 from sales_agent.services.memory.repository import AtomicMemoryRepository
 

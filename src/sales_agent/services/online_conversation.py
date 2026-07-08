@@ -74,6 +74,14 @@ TURN_SCOPED_DEFAULTS: dict[str, Any] = {
     "memory_reason_code": None,
     "memory_ids": [],
     "memory_candidate_count": 0,
+    # User profile memory defaults (Task 5)
+    "user_profile_memory_enabled": False,
+    "user_memory_context": None,
+    "selected_memory_ids": [],
+    "memory_trace": {},
+    "memory_degraded": False,
+    "memory_degradation_reason": None,
+    "profile_version": None,
 }
 
 
@@ -85,6 +93,7 @@ def build_online_turn_input(
     scenario_coach_enabled: bool = False,
     reset_requested: bool = False,
     long_term_memory_enabled: bool = False,
+    user_profile_memory_enabled: bool = False,
 ) -> OnlineConversationState:
     return {
         **copy.deepcopy(TURN_SCOPED_DEFAULTS),
@@ -102,6 +111,7 @@ def build_online_turn_input(
         "scenario_coach_enabled": scenario_coach_enabled,
         "reset_requested": reset_requested,
         "long_term_memory_enabled": long_term_memory_enabled,
+        "user_profile_memory_enabled": user_profile_memory_enabled,
     }
 
 
@@ -303,6 +313,7 @@ async def prepare_online_turn(
         scenario_coach_enabled=settings.scenario_coach.enabled,
         reset_requested=reset_requested,
         long_term_memory_enabled=settings.long_term_memory.enabled,
+        user_profile_memory_enabled=settings.user_profile_memory.enabled,
     )
     return PreparedOnlineTurn(
         graph=get_online_graph(checkpointer=checkpointer),

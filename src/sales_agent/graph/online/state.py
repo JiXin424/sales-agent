@@ -34,7 +34,7 @@ class OnlineConversationState(TypedDict, total=False):
     topic_routing_enabled: bool
     scenario_coach_enabled: bool
     requested_flow: str | None
-    flow_action: str  # "duplicate" | "start" | "cancel" | "advance" | "chat" | "direct_chat" | "reset" | "memory_command"
+    flow_action: str  # "duplicate" | "start" | "cancel" | "advance" | "chat" | "direct_chat" | "reset" | "memory_command" | "profile_transparency"
     active_flow: str | None
     flow_stage: str | None
     flow_payload: dict[str, Any]
@@ -84,6 +84,15 @@ class OnlineConversationState(TypedDict, total=False):
     memory_reason_code: str | None
     memory_ids: list[str]
     memory_candidate_count: int
+
+    # ── User Profile Memory (Task 5) ──────────────────────────────
+    user_profile_memory_enabled: bool
+    user_memory_context: str | None
+    selected_memory_ids: list[str]
+    memory_trace: dict[str, Any]
+    memory_degraded: bool
+    memory_degradation_reason: str | None
+    profile_version: int | None
 
 
 __all__ = [

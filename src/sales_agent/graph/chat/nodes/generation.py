@@ -108,7 +108,7 @@ async def generate_node(state: ChatGraphState, runtime: Runtime) -> dict:
         chat_model=chat_model,
         task_type=task_type,
         message=message,
-        context={},
+        context={"user_memory_context": state.get("user_memory_context")},
         retrieval_result=state.get("retrieval_result"),
         history_messages=history_messages,
         tenant_style=state.get("tenant_info", {}).get("config", {}),

@@ -61,7 +61,10 @@ from sales_agent.services.memory.commands import (
     detect_memory_command,
 )
 from sales_agent.services.memory.contracts import MemoryOperationResult, MemoryScope
+from sales_agent.services.memory.profile_recall import retrieve_user_memory_context
+from sales_agent.services.memory.profile_repository import UserMemoryProfileRepository
 from sales_agent.services.memory.repository import AtomicMemoryRepository
+from sales_agent.services.memory.transparency import detect_transparency_command, render_memory_transparency
 
 import json
 import logging
@@ -177,6 +180,8 @@ def normalize_turn_node(state: OnlineConversationState) -> dict[str, Any]:
         flow_action = "duplicate"
     elif state.get("reset_requested"):
         flow_action = "reset"
+    elif state.get("user_profile_memory_enabled") and get_settings().user_profile_memory.transparency_enabled and detect_transparency_command(message):
+        flow_action = "profile_transparency"
     elif state.get("long_term_memory_enabled") and detect_memory_command(message):
         flow_action = "memory_command"
     elif guided_enabled and requested_flow:
@@ -200,6 +205,70 @@ def normalize_turn_node(state: OnlineConversationState) -> dict[str, Any]:
         "requested_flow": requested_flow,
         "flow_action": flow_action,
     }
+
+
+# =============================================================
+# profile_recall_node (Task 5)
+# =============================================================
+
+async def profile_recall_node(
+    state: OnlineConversationState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """Recall user profile memory for the current conversation turn.
+
+    Runs between ``evidence_routing`` and ``chat``.  Checks the
+    ``user_profile_memory_enabled`` flag and ``context_status == "resolved"``
+    before doing any work — otherwise returns ``{}``.
+
+    On success returns the formatted memory context text plus trace metadata.
+    On degradation (missing DB, exception) returns degraded-trace fields.
+    """
+    if not state.get("user_profile_memory_enabled"):
+        return {}
+    if state.get("context_status") != "resolved":
+        return {}
+    try:
+        ctx = _unpack_context(config) or {}
+        db = ctx.get("db")
+        if db is None:
+            return {
+                "memory_degraded": True,
+                "memory_degradation_reason": "missing_db",
+                "memory_trace": {"degraded": True, "degradation_reason": "missing_db"},
+            }
+        settings = get_settings()
+        if not settings.user_profile_memory.recall_enabled:
+            return {}
+        result = await retrieve_user_memory_context(
+            db=db,
+            scope=MemoryScope(
+                tenant_id=state.get("tenant_id", ""),
+                agent_id=state.get("agent_id", ""),
+                user_id=state.get("user_id", ""),
+            ),
+            standalone_query=state.get("standalone_query") or state.get("message", ""),
+            task_type=state.get("task_type"),
+            knowledge_policy=state.get("knowledge_policy"),
+            max_items=settings.user_profile_memory.max_recall_items,
+            max_chars=settings.user_profile_memory.max_recall_chars,
+        )
+        trace = result.trace.model_dump()
+        return {
+            "user_memory_context": result.context_text or None,
+            "selected_memory_ids": trace.get("selected_memory_ids", []),
+            "memory_trace": trace,
+            "memory_degraded": bool(trace.get("degraded")),
+            "memory_degradation_reason": trace.get("degradation_reason"),
+            "profile_version": trace.get("profile_version"),
+        }
+    except Exception:
+        logger.exception("profile_recall_node failed")
+        return {
+            "memory_degraded": True,
+            "memory_degradation_reason": "exception",
+            "memory_trace": {"degraded": True, "degradation_reason": "exception"},
+        }
 
 
 # =============================================================# chat_node
@@ -241,6 +310,10 @@ async def chat_node(
         "precomputed_route": True if state.get("knowledge_policy") else None,
         # Pass retained entities for topic key_entities_json update in log_node
         "retained_entities": state.get("retained_entities", []),
+        # User profile memory (Task 5)
+        "user_memory_context": state.get("user_memory_context"),
+        "selected_memory_ids": state.get("selected_memory_ids", []),
+        "memory_trace": state.get("memory_trace", {}),
     }
 
     # Allow tests to inject a stub chat runner via runtime context
@@ -488,6 +561,38 @@ async def log_scenario_response_node(
 
 
 # =============================================================
+# profile_transparency_node (Task 6)
+# =============================================================
+
+async def profile_transparency_node(
+    state: OnlineConversationState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    ctx = _unpack_context(config) or {}
+    db = ctx.get("db")
+    if db is None:
+        text = "我现在暂时查不到长期记忆，请稍后再试。"
+    else:
+        repo = UserMemoryProfileRepository(db)
+        profile = await repo.get_current_profile(
+            MemoryScope(
+                tenant_id=state.get("tenant_id", ""),
+                agent_id=state.get("agent_id", ""),
+                user_id=state.get("user_id", ""),
+            )
+        )
+        text = render_memory_transparency(profile)
+    return {
+        "answer_dict": {
+            "summary": text,
+            "sections": [{"title": "长期记忆", "content": text}],
+        },
+        "response_kind": "profile_transparency",
+        "last_event_id": state.get("event_id"),
+    }
+
+
+# =============================================================
 # memory_command_node (Task 6)
 # =============================================================
 
@@ -588,7 +693,7 @@ async def enqueue_memory_candidate_node(
     """
     if not state.get("long_term_memory_enabled"):
         return {}
-    if state.get("response_kind") in {"duplicate", "memory", "clarification", "flow"}:
+    if state.get("response_kind") in {"duplicate", "memory", "profile_transparency", "clarification", "flow"}:
         return {}
     event_id = state.get("event_id")
     if not event_id:

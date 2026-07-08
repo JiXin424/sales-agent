@@ -112,6 +112,11 @@ class ChatGraphState(TypedDict, total=False):
     # === Coach Guidance ===
     coach_guidance_text: str
 
+    # === User Profile Memory (Task 5) ===
+    user_memory_context: str | None
+    selected_memory_ids: list[str]
+    memory_trace: dict[str, Any]
+
     # === Generation ===
     answer_dict: dict[str, Any]
     raw_response: str

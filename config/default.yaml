@@ -150,6 +150,12 @@ topic_routing:
   restore_hours: 24          # 关闭话题恢复窗口（小时）
   max_clarification_attempts: 2  # 最大模糊回答澄清尝试次数
 
+# --- 场景教练（预设销售场景问答，默认关闭）---
+# 设为 true 开启：用户问题与预设场景高度重合时返回预设答案（含手册来源）。
+scenario_coach:
+  enabled: false
+  confidence_threshold: 0.8
+
 neo4j:
   uri: ""
   user: "neo4j"

@@ -196,6 +196,13 @@ class GuidedFlowsConfig(BaseModel):
     timezone: str = "Asia/Shanghai"
 
 
+class ScenarioCoachConfig(BaseModel):
+    """场景教练：识别预设销售场景问题，命中即返回预设答案。默认关闭。"""
+
+    enabled: bool = False
+    confidence_threshold: float = 0.8
+
+
 class Settings(BaseModel):
     """顶层设置，聚合所有子配置。"""
 
@@ -214,6 +221,7 @@ class Settings(BaseModel):
     web_search: WebSearchConfig = WebSearchConfig()
     topic_routing: TopicRoutingConfig = TopicRoutingConfig()
     guided_flows: GuidedFlowsConfig = GuidedFlowsConfig()
+    scenario_coach: ScenarioCoachConfig = ScenarioCoachConfig()
 
     # 延迟导入避免循环依赖
     @property
@@ -371,6 +379,21 @@ class Settings(BaseModel):
             raw.setdefault("topic_routing", {})["enabled"] = (
                 topic_routing_enabled.strip().lower() in {"1", "true", "yes", "on"}
             )
+
+        # 环境变量覆盖 scenario_coach 配置
+        scenario_coach_enabled = os.getenv("SCENARIO_COACH_ENABLED")
+        if scenario_coach_enabled is not None:
+            raw.setdefault("scenario_coach", {})["enabled"] = (
+                scenario_coach_enabled.strip().lower() in {"1", "true", "yes", "on"}
+            )
+        scenario_coach_threshold = os.getenv("SCENARIO_COACH_CONFIDENCE_THRESHOLD")
+        if scenario_coach_threshold is not None:
+            try:
+                raw.setdefault("scenario_coach", {})["confidence_threshold"] = float(
+                    scenario_coach_threshold
+                )
+            except ValueError:
+                pass
 
         # 环境变量覆盖 LLM 路由/风控开关（图节点 route_task / check_risk 灰度用）
         llm_router_enabled = os.getenv("PATH_ROUTER_ENABLE_LLM_ROUTER")

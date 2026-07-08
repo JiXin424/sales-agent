@@ -2,7 +2,8 @@
 
 Provides:
 
-- ``build_online_thread_id`` — thread ID with date in Shanghai timezone
+- ``build_online_thread_id`` — stable thread ID without date
+- ``build_online_turn_input`` — constructor for fresh turn input
 - ``get_online_graph`` — cached compiled Online Graph (process-level
   PostgreSQL checkpoint singleton)
 - ``invoke_online_turn`` — public API to process a single turn
@@ -12,10 +13,10 @@ Provides:
 
 from __future__ import annotations
 
+import copy
 import logging
 from datetime import datetime
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from langgraph.graph.state import CompiledStateGraph
 
@@ -26,6 +27,7 @@ from sales_agent.graph.checkpoint_runtime import (
     initialize_production_checkpointer,
 )
 from sales_agent.graph.online.graph import build_online_graph
+from sales_agent.graph.online.state import OnlineConversationState
 from sales_agent.services.agent_service import resolve_tenant_agent_id
 
 logger = logging.getLogger(__name__)
@@ -36,6 +38,59 @@ logger = logging.getLogger(__name__)
 # ====================================================================
 
 _online_graph: CompiledStateGraph | None = None
+
+
+# ====================================================================
+# Turn envelope
+# ====================================================================
+
+TURN_SCOPED_DEFAULTS: dict[str, Any] = {
+    "requested_flow": None,
+    "flow_action": "chat",
+    "completed_flow": None,
+    "answer_dict": {},
+    "response_kind": "pending",
+    "previous_topic_id": None,
+    "turn_relation": None,
+    "standalone_query": None,
+    "retained_entities": [],
+    "retracted_goals": [],
+    "pending_clarification_id": None,
+    "clarification_state": None,
+    "context_status": None,
+    "original_message": None,
+    "task_type": None,
+    "route_confidence": None,
+    "knowledge_policy": None,
+    "knowledge_scope": [],
+    "retrieval_query": None,
+    "needs_retrieval": None,
+    "route_trace": None,
+}
+
+
+def build_online_turn_input(
+    *, tenant_id: str, agent_id: str, user_id: str,
+    session_user_id: str, channel: str, conversation_id: str,
+    message: str, entry_action: str | None, event_id: str | None,
+    guided_flows_enabled: bool, topic_routing_enabled: bool,
+    reset_requested: bool = False,
+) -> OnlineConversationState:
+    return {
+        **copy.deepcopy(TURN_SCOPED_DEFAULTS),
+        "tenant_id": tenant_id,
+        "agent_id": agent_id,
+        "user_id": user_id,
+        "session_user_id": session_user_id,
+        "channel": channel,
+        "conversation_id": conversation_id,
+        "message": message,
+        "entry_action": entry_action,
+        "event_id": event_id,
+        "guided_flows_enabled": guided_flows_enabled,
+        "topic_routing_enabled": topic_routing_enabled,
+        "reset_requested": reset_requested,
+    }
 
 
 # ====================================================================
@@ -89,35 +144,25 @@ def build_online_thread_id(
     agent_id: str,
     channel: str,
     session_user_id: str,
-    *,
-    now: datetime | None = None,
-    timezone_name: str = "Asia/Shanghai",
 ) -> str:
     """Build a thread ID for the online conversation graph.
 
     Format:
-        ``online:<tenant_id>:<agent_id>:<channel>:<session_user_id>:<YYYY-MM-DD>``
+        ``online:<tenant_id>:<agent_id>:<channel>:<session_user_id>``
 
-    The date component is computed in the given timezone (default
-    ``Asia/Shanghai``) so that a user's conversation resets at midnight
-    Shanghai time regardless of the server's clock.
+    Stable across turns and dates.
 
     Args:
         tenant_id: Tenant identifier.
         agent_id: Agent identifier.
         channel: Communication channel (e.g. ``"dingtalk"``).
         session_user_id: End-user identifier for session scoping.
-        now: Override datetime (for testing).  If omitted, uses
-            ``datetime.now(zone)``.
-        timezone_name: IANA timezone name (default ``"Asia/Shanghai"``).
 
     Returns:
         A colon-delimited thread ID string.
     """
-    zone = ZoneInfo(timezone_name)
-    current = now.astimezone(zone) if now is not None else datetime.now(zone)
     return ":".join(
-        ("online", tenant_id, agent_id, channel, session_user_id, current.date().isoformat())
+        ("online", tenant_id, agent_id, channel, session_user_id)
     )
 
 
@@ -248,27 +293,25 @@ async def invoke_online_turn(
         agent.id,
         channel,
         session_user_id,
-        now=now,
-        timezone_name=settings.guided_flows.timezone,
     )
 
     # 5. Get graph
     graph = get_online_graph(checkpointer=checkpointer)
 
     # 6. Build input
-    input_state: dict[str, Any] = {
-        "tenant_id": tenant_id,
-        "agent_id": agent.id,
-        "user_id": user_id,
-        "session_user_id": session_user_id,
-        "channel": channel,
-        "conversation_id": conversation_id,
-        "message": message,
-        "entry_action": entry_action,
-        "event_id": event_id,
-        "guided_flows_enabled": settings.guided_flows.enabled,
-        "topic_routing_enabled": settings.topic_routing.enabled,
-    }
+    input_state = build_online_turn_input(
+        tenant_id=tenant_id,
+        agent_id=agent.id,
+        user_id=user_id,
+        session_user_id=session_user_id,
+        channel=channel,
+        conversation_id=conversation_id,
+        message=message,
+        entry_action=entry_action,
+        event_id=event_id,
+        guided_flows_enabled=settings.guided_flows.enabled,
+        topic_routing_enabled=settings.topic_routing.enabled,
+    )
 
     # 7. Invoke
     return await graph.ainvoke(

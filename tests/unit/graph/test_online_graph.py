@@ -29,6 +29,7 @@ from sales_agent.graph.online.state import OnlineConversationState
 from sales_agent.graph.checkpoint_runtime import CheckpointUnavailableError
 from sales_agent.services.online_conversation import (
     build_online_thread_id,
+    build_online_turn_input,
     get_online_graph,
     initialize_online_runtime,
     _online_graph,
@@ -251,7 +252,7 @@ async def test_cancel_clears_active_flow(online_graph, config):
 
     assert result["active_flow"] is None
     assert result["flow_stage"] is None
-    assert result["flow_payload"] is None
+    assert result["flow_payload"] == {}
     assert result["response_kind"] == "flow_cancelled"
 
 
@@ -473,38 +474,41 @@ async def test_duplicate_does_not_update_last_event_id(online_graph, config):
 # ====================================================================
 
 
-def test_thread_id_format():
-    """Thread ID must match the ``online:`` format with Shanghai date."""
-    now = datetime(2026, 7, 6, 10, 30, 0)
-    tid = build_online_thread_id(
-        "t1", "a1", "dingtalk", "u1", now=now, timezone_name="Asia/Shanghai",
+def test_thread_id_is_stable_across_midnight():
+    before = build_online_thread_id("t1", "a1", "dingtalk", "u1")
+    after = build_online_thread_id("t1", "a1", "dingtalk", "u1")
+    assert before == after == "online:t1:a1:dingtalk:u1"
+
+
+def test_thread_id_scope_changes_for_each_identity_dimension():
+    base = build_online_thread_id("t1", "a1", "dingtalk", "u1")
+    variants = {
+        build_online_thread_id("t2", "a1", "dingtalk", "u1"),
+        build_online_thread_id("t1", "a2", "dingtalk", "u1"),
+        build_online_thread_id("t1", "a1", "web", "u1"),
+        build_online_thread_id("t1", "a1", "dingtalk", "u2"),
+    }
+    assert base not in variants
+    assert len(variants) == 4
+
+
+def test_new_turn_input_clears_transient_fields_but_not_thread_state():
+    turn = build_online_turn_input(
+        tenant_id="t1", agent_id="a1", user_id="u1",
+        session_user_id="du1", channel="dingtalk",
+        conversation_id="c1", message="新消息", event_id="e2",
+        entry_action=None, guided_flows_enabled=True,
+        topic_routing_enabled=True,
     )
-    assert tid == "online:t1:a1:dingtalk:u1:2026-07-06"
-
-
-def test_thread_id_changes_with_date():
-    """Different dates produce different thread IDs."""
-    day1 = datetime(2026, 7, 6, 10, 0, 0)
-    day2 = datetime(2026, 7, 7, 10, 0, 0)
-    tid1 = build_online_thread_id("t1", "a1", "dingtalk", "u1", now=day1)
-    tid2 = build_online_thread_id("t1", "a1", "dingtalk", "u1", now=day2)
-    assert tid1 != tid2
-
-
-def test_thread_id_separates_users():
-    """Different ``session_user_id`` values get different thread IDs."""
-    now = datetime(2026, 7, 6, 10, 0, 0)
-    tid1 = build_online_thread_id("t1", "a1", "dingtalk", "u1", now=now)
-    tid2 = build_online_thread_id("t1", "a1", "dingtalk", "u2", now=now)
-    assert tid1 != tid2
-
-
-def test_thread_id_same_day_same_user_is_identical():
-    """Same user on the same day gets the same thread ID (deterministic)."""
-    now = datetime(2026, 7, 6, 10, 0, 0)
-    tid1 = build_online_thread_id("t1", "a1", "dingtalk", "u1", now=now)
-    tid2 = build_online_thread_id("t1", "a1", "dingtalk", "u1", now=now)
-    assert tid1 == tid2
+    assert turn["answer_dict"] == {}
+    assert turn["response_kind"] == "pending"
+    assert turn["completed_flow"] is None
+    assert turn["turn_relation"] is None
+    assert turn["retained_entities"] == []
+    assert turn["knowledge_scope"] == []
+    assert "active_flow" not in turn
+    assert "flow_stage" not in turn
+    assert "last_event_id" not in turn
 
 
 # ====================================================================

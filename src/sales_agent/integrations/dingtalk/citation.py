@@ -10,6 +10,7 @@ from typing import Any
 _SOURCE_TYPE_LABELS = {
     "ontology": "知识图谱",
     "web": "网络搜索",
+    "scenario_coach": "教练手册",
 }
 _DEFAULT_LABEL = "知识库"
 _MAX_SOURCES = 3

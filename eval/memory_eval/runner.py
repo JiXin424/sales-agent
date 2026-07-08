@@ -672,6 +672,68 @@ async def run_dingtalk_staging(args) -> int:
 # --- online-sample (Spec 4 §3.5, §10) ---
 
 
+# --- compare (Spec 4 §7) ---
+
+REGRESSION_TOLERANCE = 0.0  # no unexplained regression beyond tolerance (§6)
+
+
+def _metric_map(report: dict) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for metrics in report.get("groups", {}).values():
+        for m in metrics:
+            out[m["name"]] = m
+    return out
+
+
+def compare_reports(baseline: dict, candidate: dict) -> dict:
+    base_schema = baseline.get("versions", {}).get("memory_schema_version")
+    cand_schema = candidate.get("versions", {}).get("memory_schema_version")
+    if base_schema != cand_schema:
+        return {"schema_compatible": False, "labels": {},
+                "reason": f"schema {base_schema} != {cand_schema}"}
+
+    base = _metric_map(baseline)
+    cand = _metric_map(candidate)
+    labels: dict[str, str] = {}
+    for name, cm in cand.items():
+        if name not in base:
+            labels[name] = "new"
+            continue
+        bm = base[name]
+        if cm.get("error"):
+            labels[name] = "evaluator_error"
+        elif bm.get("error") and not cm.get("error"):
+            labels[name] = "fixed"
+        else:
+            delta = cm["score"] - bm["score"]
+            if delta > REGRESSION_TOLERANCE:
+                labels[name] = "improved"
+            elif delta < -REGRESSION_TOLERANCE:
+                labels[name] = "regressed"
+            else:
+                labels[name] = "unchanged"
+    for name in base:
+        if name not in cand:
+            labels[name] = "removed"
+    return {"schema_compatible": True, "labels": labels}
+
+
+def run_compare(args) -> int:
+    import json
+
+    with open(args.baseline, encoding="utf-8") as f:
+        baseline = json.load(f)
+    with open(args.candidate, encoding="utf-8") as f:
+        candidate = json.load(f)
+    out = compare_reports(baseline, candidate)
+    Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+    with open(args.output, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
+    print(f"compare: schema_compatible={out['schema_compatible']} labels={out['labels']}")
+    # Non-zero only on invalid execution (§11); a regression is reported, not fatal here.
+    return 0 if out["schema_compatible"] else 2
+
+
 async def run_online_sample(args) -> int:
     """§3.5: sample eligible completed threads; deterministic + limited semantic.
 
@@ -848,6 +910,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--max-threads", type=int, default=100,
                    help="bound on candidate threads sampled per run")
 
+    p = sub.add_parser("compare", help="compare two report JSON files (§7)")
+    p.add_argument("--baseline", required=True)
+    p.add_argument("--candidate", required=True)
+    p.add_argument("--output", default=f"{DEFAULT_OUTPUT}/compare.json")
+
     args = parser.parse_args(argv)
 
     # All async modes share one event loop / dispatch entry point.
@@ -859,6 +926,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return asyncio.run(_async_dispatch(args))
     if args.mode == "unit-memory":
         return run_unit_memory(args)
+    if args.mode == "compare":
+        return run_compare(args)
     # argparse already rejects unknown subcommands with SystemExit(2); this is a
     # defensive fallback for completeness.
     parser.error(f"unknown mode: {args.mode}")

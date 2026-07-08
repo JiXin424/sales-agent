@@ -38,7 +38,7 @@ class TestNodeEdgeCounts:
     @pytest.mark.parametrize(
         "graph_id,expected_nodes,expected_edges",
         [
-            ("online", 12, 16),
+            ("online", 12, 17),
             ("guided-flow", 5, 6),
             ("chat", 12, 14),
         ],
@@ -261,7 +261,7 @@ class TestEdges:
     """edges 字段从 compiled graph 取, source/target 必须是合法节点 id。"""
 
     @pytest.mark.parametrize("graph_id,expected_edges", [
-        ("online", 16),
+        ("online", 17),
         ("chat", 14),
         ("guided-flow", 6),
     ])

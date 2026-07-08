@@ -19,5 +19,6 @@ def route_context_resolution(state: OnlineConversationState) -> str:
 
     - ``"clarify"`` → the clarification response path
     - ``"resolved"`` → evidence routing then chat
+    - ``"control"`` → log control response then END (e.g. topic_restored)
     """
     return state.get("context_status", "resolved")

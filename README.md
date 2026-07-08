@@ -157,7 +157,7 @@ LangGraph `online_graph` 路由，取代遗留的 `quick_session_graph` 和 `dai
 - 钉钉 Stream 路径通过 `graph_stream.py` 中的 `online_graph` 路由，HTTP 路径通过
   `agent.py` 中的 `resolve_graph` 分派
 - **图注册表**：`graph/registry.py` 统一 `GRAPH_REGISTRY`，
-  含 `online`（统一在线会话）、`guided-flow`（引导流程）、`chat`（ChatPipeline 子图）。ontology 检索不再是独立子图，
+  含 `online`（统一在线会话）、`guided-flow`（引导流程）、`chat`（Chat 子图）。ontology 检索不再是独立子图，
   其步骤（extract_terms → graph_query → [vector_fallback] → compact_evidence）由
   `retrieve_node` 直接内联调用，证据回流主 `generate_node` 统一生成（保证 PromptRegistry
   的 system/task prompt 对 ontology 路径同样生效）
@@ -167,7 +167,7 @@ LangGraph `online_graph` 路由，取代遗留的 `quick_session_graph` 和 `dai
 GUIDED_FLOWS_ENABLED=true    # 启用统一引导流程（默认）
 GUIDED_FLOWS_ENABLED=false   # 路由所有文本到普通 Chat 管道
 ```
-设置 `GUIDED_FLOWS_ENABLED=false` 并重启实例后，所有消息走普通 ChatPipeline。
+设置 `GUIDED_FLOWS_ENABLED=false` 并重启实例后，所有消息走普通 Chat Graph。
 进行中的引导状态保存在进程内存中，重启或自然日切换后丢弃。
 
 **遗留行为说明：**
@@ -603,17 +603,15 @@ sales-agent/
 │   │       ├── health.py           #   /health, /ready, /diagnostics/model, /health/latency-stats
 │   │       ├── tenants.py          #   /tenants
 │   │       ├── documents.py        #   /tenants/{id}/documents/ingest
-│   │       ├── agent.py            #   /agent/chat（委托 ChatPipeline）
+│   │       ├── agent.py            #   /agent/chat（委托 Online Graph）
 │   │       ├── conversations.py    #   /conversations/{id}
 │   │       ├── feedback.py         #   /feedback
 │   │       ├── admin.py            #   /tenants/{id}/admin（监控、指标、工作流）
 │   │       ├── prompts.py          #   /tenants/{id}/prompts（Prompt 版本管理）
 │   │       ├── uploads.py          #   /tenants/{id}/knowledge（知识上传）
 │   │       └── pilot.py            #   /tenants/{id}/admin/pilot（36 端点，Phase D）
-│   ├── services/                   # 核心业务逻辑（25 个模块）
-│   │   ├── chat_pipeline.py        #   共享 Chat 管道（三级路径 + 条件化步骤）
-│   │   ├── path_router.py          #   路径路由（fast/standard/slow，纯规则 <1ms）
-│   │   ├── latency_tracker.py      #   阶段耗时追踪（PipelineTimings）
+│   ├── services/                   # 核心业务逻辑（22 个模块）
+│   │   ├── online_conversation.py  #   生产入口：invoke_online_turn（Online Graph 封装）
 │   │   ├── latency_stats.py        #   p50/p90/p95 百分位统计收集器
 │   │   ├── request_validator.py    #   请求校验
 │   │   ├── tenant_resolver.py      #   租户配置解析 + 模型 provider 构建（含缓存）
@@ -654,7 +652,7 @@ sales-agent/
 │   │   └── general_coaching.py     #   通用教练
 │   └── integrations/               # 外部集成
 │       └── dingtalk/               #   钉钉单聊集成
-│           ├── processor.py        #     事件处理（委托 ChatPipeline + 处理中提示）
+│           ├── processor.py        #     事件处理（委托 invoke_online_turn + 卡片进度）
 │           ├── stream_client.py    #     WebSocket 常驻连接
 │           ├── message_sender.py   #     消息发送（重试 + token 缓存）
 │           ├── message_renderer.py #     Markdown 渲染
@@ -663,8 +661,8 @@ sales-agent/
 └── tests/
     ├── conftest.py                 # 测试配置
     └── unit/                       # 160+ 单元测试
-        ├── test_chat_pipeline.py   #   ChatPipeline + 快速命令
-        ├── test_path_router.py     #   路径路由（22 个场景）
+        ├── graph/                  #   Chat/Online/Guided Flow 图测试（170 个）
+        ├── test_validation_node.py #   快速命令（help/reset）
         ├── test_latency_tracker.py #   耗时追踪
         ├── test_latency_stats.py   #   延迟统计
         ├── test_processing_notice.py # 处理中提示生命周期
@@ -717,8 +715,8 @@ PYTHONPATH=src pytest tests/integration/test_pilot_api.py -v
 - 任务路由 6 种类型 + 优先级 + 置信度 + 调用率日志（13 个）
 - 路径路由 fast/standard/slow + 配置开关 + 风险关键词（22 个）
 - 风险检查输入/来源/输出 + LLM 风险 + 组合（13 个）
-- ChatPipeline 快速命令 + 处理中提示（8 个）
-- 延迟追踪 + 百分位统计（11 个）
+- Chat Graph 快速命令（8 个）
+- 延迟统计（百分位收集器）
 - 请求校验（6 个）
 - 响应格式化（7 个）
 - 密钥解析 + 指纹 + 脱敏 + 租户匹配（17 个）

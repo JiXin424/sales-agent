@@ -47,6 +47,11 @@ class OnlineConversationState(TypedDict, total=False):
     # ── Output ────────────────────────────────────────────────────
     answer_dict: dict[str, Any]
     response_kind: str
+    # Chat Graph 末态透传（供 eval / 钉钉消费者直接从返回值取）
+    sources: list[dict]
+    risk_result: dict[str, Any]
+    usage: dict[str, int]
+    path: str | None
 
     # ── Deduplication ─────────────────────────────────────────────
     last_event_id: str | None

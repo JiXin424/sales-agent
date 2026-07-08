@@ -242,11 +242,24 @@ async def chat_node(
         context=ctx,
     )
 
-    return {
+    # Build return dict — only include optional passthrough fields when the
+    # Chat Graph actually set them, so we don't clobber upstream values
+    # (e.g. task_type set by evidence_routing) with None.
+    ret: dict[str, Any] = {
         "answer_dict": result.get("answer_dict") or result.get("final_answer", {}),
         "response_kind": "chat",
         "last_event_id": state.get("event_id"),
+        # sources/risk_result/usage default to empty — safe to always set
+        "sources": result.get("sources", []),
+        "risk_result": result.get("risk_result", {}),
+        "usage": result.get("usage", {}),
     }
+    # Optional scalar fields: only overwrite when Chat Graph provided a value
+    for key in ("route_confidence", "path", "task_type"):
+        val = result.get(key)
+        if val is not None:
+            ret[key] = val
+    return ret
 
 
 # =============================================================# duplicate_node

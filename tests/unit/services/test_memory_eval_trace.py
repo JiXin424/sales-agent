@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from sales_agent.services.memory_eval_trace import build_eval_trace, hash_scope
+from sales_agent.services.memory_eval_trace import (
+    build_eval_trace,
+    hash_scope,
+    hash_thread_id,
+)
 
 
 def test_hash_scope_is_stable_and_irreversible():
@@ -11,11 +15,26 @@ def test_hash_scope_is_stable_and_irreversible():
     assert "user-1" not in a
 
 
+def test_hash_thread_id_is_deterministic_and_irreversible():
+    raw = "online:tenant-1:agent-1:dt:user-1"
+    a = hash_thread_id(raw)
+    b = hash_thread_id(raw)
+    assert a == b
+    assert a.startswith("h:")
+    assert len(a) == 26  # "h:" + 24 hex chars
+    # Plaintext scope tokens must not appear in the hash output.
+    assert "user-1" not in a
+    assert "tenant-1" not in a
+    # Different thread_ids produce different hashes.
+    assert hash_thread_id("online:tenant-1:agent-1:dt:other-user") != a
+
+
 def test_build_eval_trace_captures_section_8_fields():
     state = {
-        "tenant_id": "t", "agent_id": "a", "user_id": "u",
+        "tenant_id": "tenant-1", "agent_id": "agent-1", "user_id": "user-1",
         "topic_id": "topic-7", "turn_relation": "switch",
-        "thread_id": "online:t:a:dt:u", "checkpoint_version": 3,
+        "thread_id": "online:tenant-1:agent-1:dt:user-1",
+        "checkpoint_version": 3,
         "memory_ids": ["m1"], "selected_memory_ids": ["m1"],
         "profile_version": "v9",
         "memory_degraded": False, "memory_degradation_reason": None,
@@ -26,6 +45,8 @@ def test_build_eval_trace_captures_section_8_fields():
     }
     trace = build_eval_trace(state)
     assert trace["scope_hash"].startswith("h:")
+    assert trace["thread_id"].startswith("h:")
+    assert "user-1" not in trace["thread_id"]
     assert trace["topic_id"] == "topic-7"
     assert trace["topic_transition"] == "switch"
     assert trace["checkpoint_version"] == 3

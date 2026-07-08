@@ -16,6 +16,11 @@ def hash_scope(tenant_id: str, agent_id: str, user_id: str) -> str:
     return "h:" + hashlib.sha256(raw).hexdigest()[:24]
 
 
+def hash_thread_id(thread_id: str) -> str:
+    """One-way hash of a thread_id so the trace never leaks plaintext scope."""
+    return "h:" + hashlib.sha256(thread_id.encode("utf-8")).hexdigest()[:24]
+
+
 def build_eval_trace(
     state: dict[str, Any],
     *,
@@ -35,7 +40,7 @@ def build_eval_trace(
         ),
         "topic_id": state.get("topic_id"),
         "topic_transition": state.get("turn_relation"),
-        "thread_id": state.get("thread_id"),
+        "thread_id": hash_thread_id(state["thread_id"]) if state.get("thread_id") else None,
         "checkpoint_version": state.get("checkpoint_version"),
         "eligible_memory_ids": state.get("memory_ids") or [],
         "selected_memory_ids": state.get("selected_memory_ids") or [],
@@ -58,4 +63,4 @@ def build_eval_trace(
     }
 
 
-__all__ = ["build_eval_trace", "hash_scope"]
+__all__ = ["build_eval_trace", "hash_scope", "hash_thread_id"]

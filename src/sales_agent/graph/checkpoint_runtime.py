@@ -63,6 +63,15 @@ async def initialize_production_checkpointer(
         # with autocommit enabled so they always succeed.
         await _run_migrations(pool, saver)
     except Exception as exc:
+        # Log the actual underlying error BEFORE wrapping it.
+        # The default "PostgreSQL checkpoint initialization failed"
+        # is not actionable.  This log line is the first thing an
+        # operator will see in docker logs / Sentry / CloudWatch.
+        logger.error(
+            "Checkpoint initialization failed: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
         await pool.close()
         raise CheckpointUnavailableError(
             "PostgreSQL checkpoint initialization failed"
@@ -100,7 +109,7 @@ async def _run_migrations(
                 "SELECT v FROM checkpoint_migrations ORDER BY v DESC LIMIT 1"
             )
             row = await cur.fetchone()
-            version = -1 if row is None else row["v"]
+            version = -1 if row is None else row[0]
 
             for v, migration in enumerate(migrations):
                 if v <= version:
@@ -110,7 +119,15 @@ async def _run_migrations(
                     v,
                     len(migrations) - 1,
                 )
-                await cur.execute(migration)
+                try:
+                    await cur.execute(migration)
+                except Exception:
+                    logger.error(
+                        "Checkpoint migration %d failed: %s",
+                        v,
+                        migration[:200],
+                    )
+                    raise
                 await cur.execute(
                     "INSERT INTO checkpoint_migrations (v) VALUES (%s) "
                     "ON CONFLICT (v) DO NOTHING",

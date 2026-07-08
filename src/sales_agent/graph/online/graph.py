@@ -54,6 +54,7 @@ from sales_agent.graph.online.nodes import (
     memory_command_node,
     normalize_turn_node,
     profile_recall_node,
+    profile_transparency_node,
     scenario_coach_node,
     reset_context_node,
 )
@@ -106,6 +107,7 @@ def build_online_graph() -> StateGraph:
     builder.add_node("memory_command", memory_command_node)
     builder.add_node("enqueue_memory_candidate", enqueue_memory_candidate_node)
     builder.add_node("profile_recall", profile_recall_node)
+    builder.add_node("profile_transparency", profile_transparency_node)
 
     # ── Edges ──────────────────────────────────────────────────────
     builder.add_edge(START, "normalize_turn")
@@ -117,6 +119,7 @@ def build_online_graph() -> StateGraph:
         {
             "duplicate": "duplicate",
             "reset": "reset_context",
+            "profile_transparency": "profile_transparency",
             "memory_command": "memory_command",
             "start": "guided_flow",
             "cancel": "guided_flow",
@@ -181,6 +184,7 @@ def build_online_graph() -> StateGraph:
     builder.add_edge("log_flow_output", END)
     builder.add_edge("duplicate", END)
     builder.add_edge("memory_command", END)
+    builder.add_edge("profile_transparency", END)
 
     builder.add_edge("log_scenario_response", END)
 

@@ -62,7 +62,9 @@ from sales_agent.services.memory.commands import (
 )
 from sales_agent.services.memory.contracts import MemoryOperationResult, MemoryScope
 from sales_agent.services.memory.profile_recall import retrieve_user_memory_context
+from sales_agent.services.memory.profile_repository import UserMemoryProfileRepository
 from sales_agent.services.memory.repository import AtomicMemoryRepository
+from sales_agent.services.memory.transparency import detect_transparency_command, render_memory_transparency
 
 import json
 import logging
@@ -178,6 +180,8 @@ def normalize_turn_node(state: OnlineConversationState) -> dict[str, Any]:
         flow_action = "duplicate"
     elif state.get("reset_requested"):
         flow_action = "reset"
+    elif state.get("user_profile_memory_enabled") and detect_transparency_command(message):
+        flow_action = "profile_transparency"
     elif state.get("long_term_memory_enabled") and detect_memory_command(message):
         flow_action = "memory_command"
     elif guided_enabled and requested_flow:
@@ -555,6 +559,38 @@ async def log_scenario_response_node(
 
 
 # =============================================================
+# profile_transparency_node (Task 6)
+# =============================================================
+
+async def profile_transparency_node(
+    state: OnlineConversationState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    ctx = _unpack_context(config) or {}
+    db = ctx.get("db")
+    if db is None:
+        text = "我现在暂时查不到长期记忆，请稍后再试。"
+    else:
+        repo = UserMemoryProfileRepository(db)
+        profile = await repo.get_current_profile(
+            MemoryScope(
+                tenant_id=state.get("tenant_id", ""),
+                agent_id=state.get("agent_id", ""),
+                user_id=state.get("user_id", ""),
+            )
+        )
+        text = render_memory_transparency(profile)
+    return {
+        "answer_dict": {
+            "summary": text,
+            "sections": [{"title": "长期记忆", "content": text}],
+        },
+        "response_kind": "profile_transparency",
+        "last_event_id": state.get("event_id"),
+    }
+
+
+# =============================================================
 # memory_command_node (Task 6)
 # =============================================================
 
@@ -655,7 +691,7 @@ async def enqueue_memory_candidate_node(
     """
     if not state.get("long_term_memory_enabled"):
         return {}
-    if state.get("response_kind") in {"duplicate", "memory", "clarification", "flow"}:
+    if state.get("response_kind") in {"duplicate", "memory", "profile_transparency", "clarification", "flow"}:
         return {}
     event_id = state.get("event_id")
     if not event_id:

@@ -61,6 +61,11 @@ def prf(*, tp: int, fp: int, fn: int, threshold: Optional[float] = None) -> Metr
 
 def confusion(*, expected: list[str], observed: list[str], labels: list[str]) -> ConfusionMatrix:
     """Build a labels×labels confusion matrix from paired sequences."""
+    if len(expected) != len(observed):
+        raise ValueError(
+            f"expected and observed must have same length; "
+            f"got {len(expected)} vs {len(observed)}"
+        )
     matrix = {row: {col: 0 for col in labels} for row in labels}
     for exp, obs in zip(expected, observed):
         if exp in matrix and obs in matrix[exp]:

@@ -9,6 +9,7 @@ from sales_agent.scenarios.loader import (
     get_scenario_registry,
     parse_scenario_md,
 )
+from sales_agent.scenarios.matcher import match_scenario
 from sales_agent.scenarios.models import (
     AnswerSection,
     Scenario,
@@ -23,5 +24,6 @@ __all__ = [
     "ScenarioQuestion",
     "ScenarioRegistry",
     "get_scenario_registry",
+    "match_scenario",
     "parse_scenario_md",
 ]

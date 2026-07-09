@@ -42,6 +42,13 @@ def test_web_sources_labeled_web_search():
     assert "[1] 博查结果 · 网络搜索" in out
 
 
+def test_web_search_source_type_labeled_web_search():
+    """web_fallback_and_analyze emits source_type='web_search' (not 'web')."""
+    sources = [{"title": "阿根廷VS埃及", "source_type": "web_search"}]
+    out = format_citation_block(sources)
+    assert "[1] 阿根廷VS埃及 · 网络搜索" in out
+
+
 def test_dedup_by_title():
     sources = [
         {"title": "同名文档", "source_type": "ontology"},

@@ -20,6 +20,9 @@ def source_type_label(source_type: str | None) -> str:
     """source_type → 中文标签。未知 / 空 → 知识库。"""
     if not source_type:
         return _DEFAULT_LABEL
+    # web_fallback_and_analyze emits "web_search"; accept any web* variant.
+    if source_type.startswith("web"):
+        return _SOURCE_TYPE_LABELS["web"]
     return _SOURCE_TYPE_LABELS.get(source_type, _DEFAULT_LABEL)
 
 

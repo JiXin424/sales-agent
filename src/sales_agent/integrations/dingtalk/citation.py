@@ -53,4 +53,5 @@ def format_citation_block(sources: list[dict[str, Any]] | None) -> str:
             break
     if not rows:
         return ""
-    return "\n\n──────────\n📖 引用来源\n" + "\n".join(rows)
+    # 钉钉互动卡片 markdown 需要空行(\n\n)才换行，单个 \n 会被折叠成一行。
+    return "\n\n────📖 引用来源─────\n\n" + "\n\n".join(rows)

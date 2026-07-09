@@ -17,6 +17,29 @@ from collections.abc import Awaitable, Callable
 
 import dingtalk_stream
 
+# --- websockets ping 兼容补丁 ---
+# websockets 15.x 默认 ping_interval=20s + ping_timeout=20s，与钉钉 wss 网关
+# 不兼容：网关对高频 ping 响应慢，20s 内无 pong 即抛 ConnectionClosedError，
+# 导致 dingtalk_stream SDK [start] network exception 反复重连，连接抖动期间
+# 钉钉推的消息送不进来（文字/图片/知识库查询全失效）。SDK 调
+# websockets.connect(uri) 未覆盖 ping 参数，且自带 60s keepalive，故禁用
+# websockets 自带 ping，只用 SDK keepalive。
+# 仅当调用方未显式传 ping_interval/ping_timeout 时生效，不影响其他调用方。
+import websockets
+
+if getattr(websockets.connect.__init__, "_sales_agent_ping_patched", False) is False:
+    _orig_connect_init = websockets.connect.__init__
+
+    def _patched_connect_init(self, *args, **kwargs):
+        if "ping_interval" not in kwargs:
+            kwargs["ping_interval"] = None
+        if "ping_timeout" not in kwargs:
+            kwargs["ping_timeout"] = None
+        return _orig_connect_init(self, *args, **kwargs)
+
+    _patched_connect_init._sales_agent_ping_patched = True  # type: ignore[attr-defined]
+    websockets.connect.__init__ = _patched_connect_init
+
 from sales_agent.core.config import get_settings
 from sales_agent.core.database import get_session_factory
 from sales_agent.core.tenant_runtime import get_tenant_runtime

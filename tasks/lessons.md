@@ -32,6 +32,7 @@
 - #41 neo4j **社区版无 `STOP DATABASE`**(Enterprise 才有);dump/load 运行中的库用「`docker stop` 容器 + `docker run --rm` 临时容器挂同一卷跑 `neo4j-admin database dump|load`」,临时目录 `chmod 777` 否则 AccessDenied;两端同大版本即可物理复制 store(带 schema/index)  `[deploy]`
 - #42 compose 服务名 DNS 别名可能未注册:api 能解析 `postgres`、容器名 `sales-agent-neo4j`,唯独解析不了服务名 `neo4j`(gaierror),bolt 本身正常(IP 直连 OK)→ `ensure_ontology_schema` 在 FastAPI lifespan startup 卡死(不报错不崩、`/health` 不响应);修:`docker network disconnect`+`connect --alias neo4j <net> sales-agent-neo4j`  `[deploy]`
 - #43 钉钉 Stream 收不到消息/图片/知识库全失效,根因是 websockets 15.x 默认 ping_interval=20s 与钉钉网关冲突->ConnectionClosedError 反复重连(`[start] network exception, error=` 空);SDK `websockets.connect(uri)` 未覆盖 ping 且自带 60s keepalive;修:monkey-patch `websockets.connect.__init__` 强制 ping_interval=None;prod2 是 16.0 不受影响、test 锁 15.0.1 是重灾区;"收不到消息"优先查 stream network exception 而非代码  `[deploy]`
+- #44 CI image-deploy 在主控机 render,env_file 在目标机本地不存在 -> render 脚本 _tenant_knowledge_engine fallback 检查 env_file 失败返回 legacy_rag -> 生成的 compose 退回 legacy_rag 且不注入 NEO4J_*,每次 CI 部署都把 ontology 租户打回 pgvector(无引用);根治:tenants.*.json 给租户显式写 knowledge_engine 字段(不依赖 env_file 推断)  `[deploy]`
 
 ## graph / LangGraph  (6 条)  → [lessons/langgraph.md](lessons/langgraph.md)
 - #20 跨层 response 形状契约必须写死;checkpoint 字段别假设,probe dump  `[graph]`

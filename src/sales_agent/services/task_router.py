@@ -106,7 +106,7 @@ _FACT_SIGNAL_PATTERNS: list[re.Pattern] = [
     re.compile(r"(价格|多少钱|怎么收费|报价|费用|成本|预算)"),
     re.compile(r"(政策|制度|规定|流程|售后|保障)"),
     re.compile(r"(案例|成功故事|客户见证|效果)"),
-    re.compile(r"(竞品|竞争对手|对比|区别|vs)"),
+    re.compile(r"(竞品|竞争对手|对比|区别)"),
     re.compile(r"(合同|合约|协议|签约|条款)"),
     re.compile(r"(交付|实施|上线|部署|售后|服务)"),
 ]
@@ -159,10 +159,10 @@ def apply_evidence_policy_guard(
         response_mode = "retrieve"
         reason_code = "policy_guard_upgraded_to_required"
 
-    # 检测非事实信号 — 降级策略（但已 required 的不降级）
+    # 检测非事实信号 — 降级策略（但已 required/web 的不降级；web 是离域联网决策，粘性）
     has_non_fact_signal = any(p.search(query) for p in _NON_FACT_SIGNAL_PATTERNS)
 
-    if has_non_fact_signal and knowledge_policy != "required":
+    if has_non_fact_signal and knowledge_policy not in ("required", "web"):
         knowledge_policy = "none"
         response_mode = "direct"
         if reason_code == "policy_guard_upgraded_to_required":

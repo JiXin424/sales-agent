@@ -568,6 +568,18 @@ Docker 镜像、不推源码。为让这些机器也能停服务/查健康，每
 容器名规则 `sales-agent-<id>-<role>` 与本机一致，目标机上 `bash scripts/stop-tenant.sh` 开箱即用。
 详见 `deploy/DEPLOY_USAGE.md`。
 
+### CI/CD 分支部署策略（main vs dev）
+
+| push 分支 | 部署目标 | 重建方式 |
+|---|---|---|
+| `main` | prod3 + prod2 + test **全部三台** | 仅应用容器（api/stream/worker/frontend）force-recreate；postgres/neo4j 不动，DB migration 由应用启动时 alembic 自动跑 |
+| `dev` | **仅本机 prod2**（taishan + taishankaifa2） | 应用容器 force-recreate；**test/prod3 不动** |
+
+- `main` 由 `.gitea/workflows/deploy.yml` 触发（构建 `:SHA`+`:latest`，fan-out `deploy/deploy-targets.json` 全部目标）。
+- `dev` 由 `.gitea/workflows/deploy-dev.yml` 触发（构建 `:dev`，fan-out `deploy/deploy-targets-dev.json`，仅 prod2）。
+- `FORCE_RECREATE_APP=1` 让 CI 部署强制重建应用容器（即使镜像 digest 未变）；手动 `scripts/deploy-release.sh` 不设该变量则只重建镜像变化的容器。
+- ⚠️ test/prod3 只跟 main。dev 分支领先 main 时，push main 会把 dev 部署过的 prod2 回退到 main 版本——发布前先把 dev merge 进 main。
+
 ## 项目结构
 
 ```
@@ -821,6 +833,7 @@ PYTHONPATH=src pytest tests/integration/test_pilot_api.py -v
 
 | 日期 | 摘要 |
 |------|------|
+| [2026-07-09](changelog/2026-07-09.md) | **CI/CD 分支部署策略：main 重建全部、dev 仅本机**：dev 不再碰 test（`deploy-targets-dev.json` 删 test 条目 + `deploy-dev.yml` 删 build deploy image 步骤），dev push 只重建本机 prod2；main push fan-out 三台（prod3+prod2+test）仅应用容器 force-recreate（postgres/neo4j 不动，由 `FORCE_RECREATE_APP` + `config --services` 黑名单过滤 infra 实现）；修 `ci-fanout.sh` 把 dev 部署代码错拉成 main 的硬编码 bug（按 `DEPLOY_BRANCH` 拉对应分支）。⚠️ main 落后 dev 50 commit，push main 前建议先 merge dev→main。详见 changelog。 |
 | [2026-07-09](changelog/2026-07-09.md) | **钉钉语音/图片支持流式互动卡片**：此前仅文字走流式卡片，语音/图片被硬门禁（`stream_client.py` `message_type == "text"`）挡在非流式路径。修复：① 抽出 `_should_stream` 门禁，受支持媒体类型在 `media_enabled` 时也进流式；② `_handle_streaming` 内接 `DingTalkMediaAdapter.to_agent_text`，先开「正在识别…」过渡卡片再 ASR/视觉转写，转写文本喂给同一流式图；③ `handle_dingtalk_stream_via_graph` 加可选 `card_id` 复用过渡卡（单卡 UX，文字路径零回归）；④ 修 CardSender 不可用兜底透传真实 `message_type`+媒体字段；⑤ 识别失败在原卡 finalize 友好提示。新增 12 个单测（门禁/转写/失败兜底/复用卡），dingtalk 111 + 相关 41 单测全过。遗留独立隐患：生成节点 `generate_node` 走非流式 `generate()`，token 级打字机可能未真正逐字（`graph_stream.py` 满屏调试日志印证），见 changelog。 |
 | [2026-07-09](changelog/2026-07-09.md) | **记忆评估与生产运维套件（Spec 4 整体交付）**：统一多轮场景 schema（42 场景）+ 版本化报告 + 确定性指标四组（隔离/安全 fail-closed、turn/topic、long-term-memory、recall-profile）+ 确定性 model double 驱动真实 Online Graph + 七个 CLI 模式（unit-memory / graph-multiturn / model-multiturn / dingtalk-staging / compare / online-sample / promote-trace）+ fail-closed 发布门禁 + 在线采样（非阻塞）+ promote-trace 反馈闭环 + 两张新表（`memory_eval_traces` / `promoted_regressions`）。新增运维入口 `scripts/run_memory_eval_gate.sh` 与操作手册 [`docs/runbooks/memory-evaluation.md`](docs/runbooks/memory-evaluation.md)；**不改动在线 Graph 请求路径**。 |
 | [2026-07-08](changelog/2026-07-08.md) | scenario-coach: E2E 修复 + Durable Short-Term Memory（持久化短期记忆）：PostgreSQL LangGraph 持久化、稳定 Thread ID、Turn-scoped reset、Advisory lock、Bounded topic restore、标准/流式路径统一、钉钉重复投递静默、Reset 状态机、24 场景评估门控。详见 [`docs/runbooks/short-term-memory.md`](docs/runbooks/short-term-memory.md)。**+ 统一租户 env 模板**（同日）：三份漂移模板收敛为唯一权威真源 `deploy/tenant.env.example`（按最全的 `taishan.env` 补齐 `DINGTALK_MEDIA_*`/`EMBEDDING_*`/`BOCHA_API_KEY` 等），`secrets/example.env`+`.env.example` 改软链；`deploy/Dockerfile` COPY + `deploy-remote.sh` 每次部署幂等落盘到无源码机 `secrets/example.env`——根治「无源码机看不到新增 env 变量」（fuduoduo scenarios 不生效的深层因）。 |

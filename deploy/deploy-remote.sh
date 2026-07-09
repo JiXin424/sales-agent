@@ -44,8 +44,17 @@ fi
 # 2. up：--project-directory 指向 workspace（compose 相对路径 ./data ./logs ./secrets 落在目标机数据上）；
 #    -p 匹配现有 project 名（复用现有容器/volume/network，避免重名冲突）；
 #    --env-file 注入 neo4j 密码（${NEO4J_PASSWORD} 插值）。
-docker compose -f "$COMPOSE" --project-directory "$WORKSPACE" -p "$PROJECT" \
-  --env-file "$WORKSPACE/secrets/neo4j.env" up -d
+COMPOSE_CMD=(docker compose -f "$COMPOSE" --project-directory "$WORKSPACE" -p "$PROJECT"
+  --env-file "$WORKSPACE/secrets/neo4j.env")
+"${COMPOSE_CMD[@]}" up -d
+
+# FORCE_RECREATE_APP=1（CI main/dev push 设）时强制重建应用容器（api/stream/worker/frontend），
+# 不触碰 postgres/neo4j 基础设施。即使镜像 digest 未变也重建，确保最新镜像一定落地。
+if [ "${FORCE_RECREATE_APP:-0}" = "1" ]; then
+  APP_SERVICES=$("${COMPOSE_CMD[@]}" config --services | grep -vE '^(postgres|neo4j)$')
+  echo "[deploy-remote] force-recreating app services: $APP_SERVICES"
+  "${COMPOSE_CMD[@]}" up -d --force-recreate --no-deps $APP_SERVICES
+fi
 
 # 3. 等 api running + /health 200（init_db 完成），再校验 DB schema 一致性。
 #    注意：旧版只 grep '-api' running 就 exit 0 —— 但容器 running ≠ app 就绪，

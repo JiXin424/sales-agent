@@ -805,6 +805,16 @@ fi
 echo "Starting services with $COMPOSE_FILE"
 docker compose -f "$COMPOSE_FILE" "${ENV_FILE_ARGS[@]}" up -d
 
+# FORCE_RECREATE_APP=1（CI main/dev push 设）时强制重建应用容器（api/stream/worker/frontend），
+# 不触碰 postgres/neo4j 基础设施。即使镜像 digest 未变也重建，确保最新代码一定生效。
+# config --services 黑名单过滤 infra，自动覆盖 frontend 及未来新增角色。
+if [ "${FORCE_RECREATE_APP:-0}" = "1" ]; then
+  APP_SERVICES=$(docker compose -f "$COMPOSE_FILE" "${ENV_FILE_ARGS[@]}" config --services \
+    | grep -vE '^(postgres|neo4j)$')
+  echo "Force-recreating app services (FORCE_RECREATE_APP=1): $APP_SERVICES"
+  docker compose -f "$COMPOSE_FILE" "${ENV_FILE_ARGS[@]}" up -d --force-recreate --no-deps $APP_SERVICES
+fi
+
 # ──────────────────────────────────────────────
 # 10. Auto-create tenant DB records
 # ──────────────────────────────────────────────

@@ -119,6 +119,13 @@ def _load_checkpoint(path):
 # ── 主评估 ──
 async def run_eval(tenant_id, kb_label, questions, model=None, agent_id=None,
                    concurrency=3, checkpoint_path=None, resume_from=None):
+    # eval 作为独立进程运行，必须自行触发生产启动钩子初始化 Online Graph
+    # （连接 checkpoint DB + 编译图），否则 invoke_online_turn 会抛
+    # CheckpointUnavailableError。生产里这一步在 app lifespan 中完成。
+    # 幂等，且与后续 invoke 处于同一事件循环，checkpointer 连接池不会跨 loop 失效。
+    from sales_agent.services.online_conversation import initialize_online_runtime
+    await initialize_online_runtime()
+
     skip_ids = resume_from or set()
     semaphore = asyncio.Semaphore(concurrency)
     results = []

@@ -29,6 +29,8 @@
 - #32 ci-fanout 部署 prod2(本机)会 stash+reset 本机工作区  `[deploy]`
 - #39 多机手动部署:compose `NEO4J_PASSWORD` 插值因宿主不同(source 各异)漂移→误碰共享 db/neo4j;`--no-deps` 是保险丝;`docker save|gzip|ssh|load` 绕 registry 推镜像  `[deploy]`
 - #40 无源码机 env 模板投递:模板必放 `deploy/`(唯一进 deploy 镜像的位置)+`deploy-remote.sh` 落盘 `secrets/example.env`;软链单一真源消除三份漂移;新增 env 变量必须同步模板否则「本地好、服务器坏」  `[deploy]`
+- #41 neo4j **社区版无 `STOP DATABASE`**(Enterprise 才有);dump/load 运行中的库用「`docker stop` 容器 + `docker run --rm` 临时容器挂同一卷跑 `neo4j-admin database dump|load`」,临时目录 `chmod 777` 否则 AccessDenied;两端同大版本即可物理复制 store(带 schema/index)  `[deploy]`
+- #42 compose 服务名 DNS 别名可能未注册:api 能解析 `postgres`、容器名 `sales-agent-neo4j`,唯独解析不了服务名 `neo4j`(gaierror),bolt 本身正常(IP 直连 OK)→ `ensure_ontology_schema` 在 FastAPI lifespan startup 卡死(不报错不崩、`/health` 不响应);修:`docker network disconnect`+`connect --alias neo4j <net> sales-agent-neo4j`  `[deploy]`
 
 ## graph / LangGraph  (6 条)  → [lessons/langgraph.md](lessons/langgraph.md)
 - #20 跨层 response 形状契约必须写死;checkpoint 字段别假设,probe dump  `[graph]`

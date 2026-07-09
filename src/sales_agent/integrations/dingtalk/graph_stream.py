@@ -105,6 +105,7 @@ async def handle_dingtalk_stream_via_graph(
     db,  # AsyncSession
     chat_model,  # ChatModel instance (required for LLM generation)
     embedding_model=None,  # EmbeddingModel instance (required for RAG retrieval)
+    card_id: str | None = None,  # reuse an existing card (e.g. the media recognition card) instead of opening a new one
 ) -> dict:
     """Process a DingTalk stream message through the Online Conversation Graph.
 
@@ -137,6 +138,9 @@ async def handle_dingtalk_stream_via_graph(
         db: Async SQLAlchemy session.
         chat_model: Configured chat model instance (required for LLM generation).
         embedding_model: Embedding model instance.
+        card_id: Optional existing card to reuse (e.g. the media "正在识别…"
+            recognition card). When provided, no new card is opened and the
+            streaming answer is written into this card.
 
     Returns:
         The final graph state dict (with ``thread_id`` for shared identity).
@@ -161,12 +165,14 @@ async def handle_dingtalk_stream_via_graph(
     # this caller's transaction commits/rolls back.
     await acquire_online_turn_lock(db, prepared.thread_id)
 
-    # 1. Create initial card
-    card_id = await card_sender.send_markdown_card(
-        dingtalk_user_id=dingtalk_user_id,
-        title="分析中...",
-        markdown_text="正在分析你的问题...",
-    )
+    # 1. Ensure a card exists — reuse a caller-provided card (e.g. the media
+    #    "正在识别…" recognition card) when present, otherwise open a new one.
+    if card_id is None:
+        card_id = await card_sender.send_markdown_card(
+            dingtalk_user_id=dingtalk_user_id,
+            title="分析中...",
+            markdown_text="正在分析你的问题...",
+        )
 
     # 2. Stream: messages, updates, and custom progress (P1)
     accumulated_text = ""

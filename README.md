@@ -130,6 +130,7 @@ python scripts/run_retrieval_eval.py --tenant taishan --mode hybrid --round 01
 ### 钉钉单聊集成
 
 - 支持 **Stream（WebSocket 常驻连接）** 和 **HTTP 回调** 两种模式
+- **流式互动卡片**（Stream 模式，`dingtalk.streaming_enabled: true`）：**文字 / 语音 / 图片**统一走打字机流式卡片；语音/图片先显示「正在识别…」过渡卡片（ASR 转写 / 视觉解读，需 `dingtalk.media_enabled: true`），转写完成后无缝接到回答流式。识别失败则在原卡片 finalize 友好提示。
 - 慢任务处理中提示：超过 5 秒自动发送"我正在结合资料整理，稍等一下。"
 - 消息速率限制（每用户每分钟 / 每天 / 每租户）
 - Markdown 格式回复
@@ -820,6 +821,7 @@ PYTHONPATH=src pytest tests/integration/test_pilot_api.py -v
 
 | 日期 | 摘要 |
 |------|------|
+| [2026-07-09](changelog/2026-07-09.md) | **钉钉语音/图片支持流式互动卡片**：此前仅文字走流式卡片，语音/图片被硬门禁（`stream_client.py` `message_type == "text"`）挡在非流式路径。修复：① 抽出 `_should_stream` 门禁，受支持媒体类型在 `media_enabled` 时也进流式；② `_handle_streaming` 内接 `DingTalkMediaAdapter.to_agent_text`，先开「正在识别…」过渡卡片再 ASR/视觉转写，转写文本喂给同一流式图；③ `handle_dingtalk_stream_via_graph` 加可选 `card_id` 复用过渡卡（单卡 UX，文字路径零回归）；④ 修 CardSender 不可用兜底透传真实 `message_type`+媒体字段；⑤ 识别失败在原卡 finalize 友好提示。新增 12 个单测（门禁/转写/失败兜底/复用卡），dingtalk 111 + 相关 41 单测全过。遗留独立隐患：生成节点 `generate_node` 走非流式 `generate()`，token 级打字机可能未真正逐字（`graph_stream.py` 满屏调试日志印证），见 changelog。 |
 | [2026-07-09](changelog/2026-07-09.md) | **记忆评估与生产运维套件（Spec 4 整体交付）**：统一多轮场景 schema（42 场景）+ 版本化报告 + 确定性指标四组（隔离/安全 fail-closed、turn/topic、long-term-memory、recall-profile）+ 确定性 model double 驱动真实 Online Graph + 七个 CLI 模式（unit-memory / graph-multiturn / model-multiturn / dingtalk-staging / compare / online-sample / promote-trace）+ fail-closed 发布门禁 + 在线采样（非阻塞）+ promote-trace 反馈闭环 + 两张新表（`memory_eval_traces` / `promoted_regressions`）。新增运维入口 `scripts/run_memory_eval_gate.sh` 与操作手册 [`docs/runbooks/memory-evaluation.md`](docs/runbooks/memory-evaluation.md)；**不改动在线 Graph 请求路径**。 |
 | [2026-07-08](changelog/2026-07-08.md) | scenario-coach: E2E 修复 + Durable Short-Term Memory（持久化短期记忆）：PostgreSQL LangGraph 持久化、稳定 Thread ID、Turn-scoped reset、Advisory lock、Bounded topic restore、标准/流式路径统一、钉钉重复投递静默、Reset 状态机、24 场景评估门控。详见 [`docs/runbooks/short-term-memory.md`](docs/runbooks/short-term-memory.md)。**+ 统一租户 env 模板**（同日）：三份漂移模板收敛为唯一权威真源 `deploy/tenant.env.example`（按最全的 `taishan.env` 补齐 `DINGTALK_MEDIA_*`/`EMBEDDING_*`/`BOCHA_API_KEY` 等），`secrets/example.env`+`.env.example` 改软链；`deploy/Dockerfile` COPY + `deploy-remote.sh` 每次部署幂等落盘到无源码机 `secrets/example.env`——根治「无源码机看不到新增 env 变量」（fuduoduo scenarios 不生效的深层因）。 |
 | [2026-07-07](changelog/2026-07-07.md) | **新增「会话历史」页：真实钉钉会话 checkpoint 只读回看（不 fork / 不 replay / 不动生产）**: LangGraph time-travel 此前只覆盖图调试 `debug:` 测试 run（真实会话被 `graph_debug._ensure_debug_thread` 403）。新增独立 router `conversation_history.py`（prefix `/agents/{agent_id}/history`），**仅 3 个 GET**（会话列表 / checkpoint 时间轴 / 单点 state），用 `conversation_id` 作 thread_id 调 `aget_state_history` 读回钉钉生产写入的 PG checkpoint；复用 graph_debug helper（DRY）。前端新增 `ConversationHistoryPage`（会话列表 + 手动输入兜底 + CheckpointDAG 时间轴 + JsonNode state viewer，均只读复用），挂 AgentLayout 子路由 `/agents/:agentId/history` + 侧边栏菜单。严格只读：AST/grep 证零 POST/aupdate_state/astream，不改 graph_stream/online_graph，无 DB migration。粒度=online graph 节点边界。后端 import + 前端 tsc 通过 + 接入 grep 持久化验证；真实会话端到端待部署。风险：state 含敏感数据，端点无强鉴权（同 graph_debug），依赖内网 |

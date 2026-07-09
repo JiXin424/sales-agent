@@ -130,6 +130,7 @@ python scripts/run_retrieval_eval.py --tenant taishan --mode hybrid --round 01
 ### 钉钉单聊集成
 
 - 支持 **Stream（WebSocket 常驻连接）** 和 **HTTP 回调** 两种模式
+- **流式互动卡片**（Stream 模式，`dingtalk.streaming_enabled: true`）：**文字 / 语音 / 图片**统一走打字机流式卡片；语音/图片先显示「正在识别…」过渡卡片（ASR 转写 / 视觉解读，需 `dingtalk.media_enabled: true`），转写完成后无缝接到回答流式。识别失败则在原卡片 finalize 友好提示。
 - 慢任务处理中提示：超过 5 秒自动发送"我正在结合资料整理，稍等一下。"
 - 消息速率限制（每用户每分钟 / 每天 / 每租户）
 - Markdown 格式回复
@@ -814,6 +815,7 @@ PYTHONPATH=src pytest tests/integration/test_pilot_api.py -v
 
 | 日期 | 摘要 |
 |------|------|
+| [2026-07-09](changelog/2026-07-09.md) | **钉钉语音/图片支持流式互动卡片**：此前仅文字走流式卡片，语音/图片被硬门禁（`stream_client.py` `message_type == "text"`）挡在非流式路径。修复：① 抽出 `_should_stream` 门禁，受支持媒体类型在 `media_enabled` 时也进流式；② `_handle_streaming` 内接 `DingTalkMediaAdapter.to_agent_text`，先开「正在识别…」过渡卡片再 ASR/视觉转写，转写文本喂给同一流式图；③ `handle_dingtalk_stream_via_graph` 加可选 `card_id` 复用过渡卡（单卡 UX，文字路径零回归）；④ 修 CardSender 不可用兜底透传真实 `message_type`+媒体字段；⑤ 识别失败在原卡 finalize 友好提示。新增 12 个单测（门禁/转写/失败兜底/复用卡），dingtalk 111 + 相关 41 单测全过。遗留独立隐患：生成节点 `generate_node` 走非流式 `generate()`，token 级打字机可能未真正逐字（`graph_stream.py` 满屏调试日志印证），见 changelog。 |
 | [2026-07-08](changelog/2026-07-08.md) | scenario-coach: E2E 修复 + Durable Short-Term Memory（持久化短期记忆）：PostgreSQL LangGraph 持久化、稳定 Thread ID、Turn-scoped reset、Advisory lock、Bounded topic restore、标准/流式路径统一、钉钉重复投递静默、Reset 状态机、24 场景评估门控。详见 [`docs/runbooks/short-term-memory.md`](docs/runbooks/short-term-memory.md)。 |
 | [2026-07-07](changelog/2026-07-07.md) | **新增「会话历史」页：真实钉钉会话 checkpoint 只读回看（不 fork / 不 replay / 不动生产）**: LangGraph time-travel 此前只覆盖图调试 `debug:` 测试 run（真实会话被 `graph_debug._ensure_debug_thread` 403）。新增独立 router `conversation_history.py`（prefix `/agents/{agent_id}/history`），**仅 3 个 GET**（会话列表 / checkpoint 时间轴 / 单点 state），用 `conversation_id` 作 thread_id 调 `aget_state_history` 读回钉钉生产写入的 PG checkpoint；复用 graph_debug helper（DRY）。前端新增 `ConversationHistoryPage`（会话列表 + 手动输入兜底 + CheckpointDAG 时间轴 + JsonNode state viewer，均只读复用），挂 AgentLayout 子路由 `/agents/:agentId/history` + 侧边栏菜单。严格只读：AST/grep 证零 POST/aupdate_state/astream，不改 graph_stream/online_graph，无 DB migration。粒度=online graph 节点边界。后端 import + 前端 tsc 通过 + 接入 grep 持久化验证；真实会话端到端待部署。风险：state 含敏感数据，端点无强鉴权（同 graph_debug），依赖内网 |
 | [2026-07-07](changelog/2026-07-07.md) | **钉钉端置信度引用改造（删正文自报 + 文末编号来源列表）**: ① 删 `prompts/system.py:88`「库类别→固定百分比」自报规则（原竞品库=80% 等硬编码），换为系统文末统一附来源——正文不再出现 `(置信度NN%)`。② 新增 `integrations/dingtalk/citation.py` 的 `format_citation_block`（ontology→知识图谱 / web→网络搜索 / 其余→知识库，≤3 条按 title 去重），`graph_stream` finalize 时拼到正文末尾（方案 A 代码层拼接，LLM 不参与，标题原样精确）。③ `generate_node` 透传 `state.sources` 进 `answer_dict`；web 兜底 sources 补 `source_type=web`。ontology confidence=0.8 硬编码保留在 metadata 不显示。dingtalk 93 + graph 49 单测通过；端到端 stream 验证待部署 |

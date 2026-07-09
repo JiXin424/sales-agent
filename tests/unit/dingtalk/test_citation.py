@@ -78,3 +78,15 @@ def test_display_title_preferred():
     out = format_citation_block(sources)
     assert "完整显示标题" in out
     assert "短" not in out  # 不用短 title
+
+
+def test_citation_header_banner_and_line_breaks():
+    """Header 是横幅样式；每条引用用空行分隔以在钉钉卡片里换行。"""
+    sources = [
+        {"title": "文档A", "source_type": "ontology"},
+        {"title": "文档B", "source_type": "web_search"},
+    ]
+    out = format_citation_block(sources)
+    assert "────📖 引用来源─────" in out
+    # 卡片 markdown 需 \n\n 才换行（单 \n 会折叠）
+    assert "[1] 文档A · 知识图谱\n\n[2] 文档B · 网络搜索" in out

@@ -88,5 +88,5 @@ def test_citation_header_banner_and_line_breaks():
     ]
     out = format_citation_block(sources)
     assert "────📖 引用来源─────" in out
-    # 卡片 markdown 需 \n\n 才换行（单 \n 会折叠）
-    assert "[1] 文档A · 知识图谱\n\n[2] 文档B · 网络搜索" in out
+    # 紧凑换行：条目间用 <br>（钉钉卡片 markdown 单 \n 折叠、\n\n 留空行）
+    assert "[1] 文档A · 知识图谱<br>[2] 文档B · 网络搜索" in out

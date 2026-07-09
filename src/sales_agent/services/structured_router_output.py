@@ -101,7 +101,7 @@ class EvidenceDecision(BaseModel):
 
     intent: str
     response_mode: Literal["direct", "retrieve"]
-    knowledge_policy: Literal["none", "optional", "required"]
+    knowledge_policy: Literal["none", "optional", "required", "web"]
     knowledge_scope: list[str] = Field(default_factory=list)
     retrieval_query: Optional[str] = None
     confidence: float = Field(ge=0, le=1)
@@ -109,9 +109,9 @@ class EvidenceDecision(BaseModel):
 
     @model_validator(mode="after")
     def _require_retrieval_query_when_required(self) -> EvidenceDecision:
-        if self.knowledge_policy == "required" and self.retrieval_query is None:
+        if self.knowledge_policy in ("required", "web") and self.retrieval_query is None:
             raise ValueError(
-                "retrieval_query must be provided when knowledge_policy is 'required'"
+                "retrieval_query must be provided when knowledge_policy is 'required' or 'web'"
             )
         return self
 

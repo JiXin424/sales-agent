@@ -27,18 +27,23 @@ knowledge_policy 字段决定是否需要检索知识库：
 - **none** — 不需要检索。适用于纯教练、情感支持、话术生成等不依赖企业知识的场景
 - **optional** — 可选检索。有相关知识更好，但没有也能回答。系统根据上下文自主决定
 - **required** — 必须检索。涉及产品、公司、价格、政策等企业知识时必须检索
+- **web** — 联网搜索。问题**明显超出企业福利销售领域**的事实/时事类查询（体育赛果、娱乐八卦、时事新闻、地理历史常识、技术编程、自然科学、健康医疗诊断等通用或非销售事实），用联网搜索回答，而非知识库
 
 response_mode 字段由 knowledge_policy 决定：
 - **direct** — 当 knowledge_policy 为 "none" 时使用
-- **retrieve** — 当 knowledge_policy 为 "required" 或 "optional" 时使用
+- **retrieve** — 当 knowledge_policy 为 "required"、"optional" 或 "web" 时使用
 
 retrieval_query 字段：
-- 当 knowledge_policy 为 "required" 时必须提供
+- 当 knowledge_policy 为 "required" 或 "web" 时必须提供
 - 当 knowledge_policy 为 "optional" 时建议提供
 - 当 knowledge_policy 为 "none" 时留空
 
 ## 检索激活原则（借自旧 intent_router）
 
+- **领域边界（决定 web vs KB 的关键）**：
+  - **企业福利销售领域内**（→ required/optional/none，**绝不 web**）：产品、价格、公司、政策、制度、案例、客户沟通、方案、竞品、销售技巧/方法、拜访、复盘、异议处理、话术、跟进、成交、客户背景等。
+  - **明显领域外**（→ **web**）：体育赛果、娱乐八卦、时事新闻、地理/历史/科学常识、技术编程/代码、健康医疗诊断、天气、股票行情等通用或非销售事实。
+- **保守优先，宁 KB 不 web（精准红线）**：只有**明确**在销售领域外才设 web。**只要问题可能涉及销售/客户/产品/公司**，就保持 required/optional（宁可多搜），绝不为边界模糊的提问设 web——误把销售题送 web 会丢失知识库支撑，是更严重的错误。
 - **宁可多搜，不可漏搜**：不确定一个问题是否需要知识库时，knowledge_policy 设为 required 或 optional。多搜到无关内容可被后续过滤，漏搜会导致回答无知识支撑。
 - **触发词对照**：
   - 产品/价格/多少钱/功能/服务/保障/承诺/赔付/资质/蛋糕/电影/年节/餐补/福利/商城 → knowledge_policy=required
@@ -61,11 +66,25 @@ retrieval_query 字段：
     需要结合具体产品知识
     → script_generation / required / retrieve
 
+下面三个例子区分「域外走 web」与「域内走 KB」（精准红线）：
+
+3. "昨天阿根廷和埃及谁赢了"
+    体育赛果，明确在销售领域外
+    → knowledge_qa / web / retrieve
+
+4. "福多多和东方福利网对比哪个好"
+    竞品对比，销售领域内（虽有"对比"，**不设 web**）
+    → knowledge_qa / required / retrieve
+
+5. "世界杯期间怎么给客户推福利"
+    虽提到体育赛事，但本质是销售策略，领域内（**不设 web**）
+    → knowledge_qa / required / retrieve
+
 ## 输出要求
 
 你输出的必须是**纯 JSON 对象**，不要使用 markdown 代码块或任何其他格式。
 intent 必须是上述十二种之一。
-knowledge_policy 必须是 "none"、"optional" 或 "required" 之一。
+knowledge_policy 必须是 "none"、"optional"、"required" 或 "web" 之一。
 response_mode 必须是 "direct" 或 "retrieve" 之一。
 
 ## 输出 JSON 格式
@@ -73,7 +92,7 @@ response_mode 必须是 "direct" 或 "retrieve" 之一。
 {
     "intent": "任务类型（小写英文，如 knowledge_qa）",
     "response_mode": "direct|retrieve",
-    "knowledge_policy": "none|optional|required",
+    "knowledge_policy": "none|optional|required|web",
     "knowledge_scope": ["产品知识", "销售政策"],
     "retrieval_query": "检索用的查询语句（required 时必须提供，否则留空）",
     "confidence": 置信度（0-1 之间的小数）,

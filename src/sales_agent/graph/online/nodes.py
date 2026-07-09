@@ -1592,7 +1592,7 @@ async def evidence_routing_node(
     )
 
     # Map validated decision to state fields
-    needs_retrieval = decision.knowledge_policy in ("required", "optional")
+    needs_retrieval = decision.knowledge_policy in ("required", "optional", "web")
 
     return {
         "task_type": decision.intent,
@@ -1658,7 +1658,7 @@ async def direct_evidence_routing_node(
         agent_id=agent_id,
     )
 
-    needs_retrieval = decision.knowledge_policy in ("required", "optional")
+    needs_retrieval = decision.knowledge_policy in ("required", "optional", "web")
 
     return {
         "task_type": decision.intent,

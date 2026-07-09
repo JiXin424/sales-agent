@@ -67,6 +67,18 @@ def select_retrieval_path(state: ChatGraphState):
     if state.get("knowledge_policy") == "none":
         return "skip"
 
+    # Out-of-domain / unknown queries routed by the Evidence Router with
+    # policy "web" go straight to Bocha web search, bypassing the knowledge
+    # base entirely (avoids irrelevant KB citations for sports/news/etc.).
+    if state.get("knowledge_policy") == "web":
+        ctx = {
+            "tenant_id": state["tenant_id"],
+            "message": state.get("retrieval_query") or state["message"],
+            "task_type": state.get("task_type", "knowledge_qa"),
+            "agent_id": state.get("agent_id"),
+        }
+        return [Send("retrieve", {**ctx, "retrieval_path": "web"})]
+
     from sales_agent.core.config import get_settings
     settings = get_settings()
 

@@ -58,6 +58,13 @@ async def retrieve_node(state: ChatGraphState, runtime: Runtime) -> dict:
     # P1: Custom stream progress
     writer({"phase": "retrieval_started", "path": path, "task_type": task_type})
 
+    # -- Path 0: Web search (out-of-domain / unknown, policy "web") --
+    # Primary Bocha web search — NOT a KB-empty fallback. Used when the
+    # Evidence Router decides the query is clearly outside the sales domain
+    # (sports results, news, general knowledge, tech/code, etc.).
+    if path == "web":
+        return await _retrieve_via_web(message=message, tenant_id=tenant_id, runtime=runtime)
+
     # -- Path 1: Ontology Neo4j knowledge graph (inline steps, no subgraph) --
     if path == "ontology":
         return await _retrieve_via_ontology(
@@ -72,6 +79,57 @@ async def retrieve_node(state: ChatGraphState, runtime: Runtime) -> dict:
     writer({"phase": "retrieval_skipped", "reason": "path_does_not_need_retrieval"})
     return {
         "retrieval_info": {"called": False, "reason": "path_does_not_need_retrieval"},
+        "sources": [],
+        "skip_generation": False,
+    }
+
+
+async def _retrieve_via_web(
+    *,
+    message: str,
+    tenant_id: str,
+    runtime: Runtime,
+) -> dict:
+    """Primary web-search retrieval for out-of-domain queries (policy "web").
+
+    Calls Bocha web search + LLM analysis (``web_fallback_and_analyze``) as
+    the PRIMARY retrieval path — not as a KB-empty fallback. Returns web
+    sources (``source_type="web"``) so the citation block labels them
+    「网络搜索」. On failure / no key / no results, returns empty sources;
+    ``evidence_gate`` then lets ``generate`` produce a clean answer without
+    fake KB citations (policy is "web", not "required", so the gate does not
+    block on empty).
+    """
+    writer = runtime.stream_writer
+    settings = get_settings()
+    writer({"phase": "web_search"})
+    web_result = await web_fallback_and_analyze(
+        message=message,
+        tenant_id=tenant_id,
+        runtime=runtime,
+        api_key=settings.web_search.api_key,
+        top_n=settings.web_search.top_n,
+    )
+    if web_result is not None:
+        return {
+            "retrieval_info": {
+                "called": True,
+                "provider": "web_search",
+                "source_count": len(web_result["sources"]),
+                "web_search_used": True,
+            },
+            "sources": web_result["sources"],
+            "skip_generation": False,
+            "ontology_context_text": web_result["ontology_context_text"],
+        }
+    writer({"phase": "web_search_empty"})
+    return {
+        "retrieval_info": {
+            "called": True,
+            "provider": "web_search",
+            "source_count": 0,
+            "web_search_used": True,
+        },
         "sources": [],
         "skip_generation": False,
     }

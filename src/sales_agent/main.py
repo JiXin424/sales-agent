@@ -227,6 +227,10 @@ app.include_router(dingtalk_router)
 from sales_agent.integrations.dingtalk.quick_entry import router as dingtalk_quick_entry_router
 app.include_router(dingtalk_quick_entry_router)
 
+# 注册钉钉销售动作卡片按钮回调路由
+from sales_agent.integrations.dingtalk.sales_action_callbacks import router as sales_action_callback_router
+app.include_router(sales_action_callback_router)
+
 
 # --- 全局异常处理 ---
 @app.exception_handler(TenantMismatchError)

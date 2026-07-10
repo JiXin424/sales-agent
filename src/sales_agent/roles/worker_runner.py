@@ -105,6 +105,37 @@ async def run() -> None:
         except Exception as e:
             logger.warning("Profile rebuild worker init skipped: %s", e)
 
+    # 销售动作提醒调度器
+    sales_action_task = None
+    if settings.sales_actions.enabled and settings.sales_actions.scheduler_enabled:
+        try:
+            from sales_agent.core.database import get_session_factory as _get_sf
+            from sales_agent.integrations.dingtalk.card_sender import DingTalkCardSender
+            from sales_agent.services.sales_actions.scheduler import (
+                sales_action_scheduler_loop,
+            )
+
+            _sa_factory = _get_sf()
+
+            def _make_sender() -> DingTalkCardSender:
+                return DingTalkCardSender(settings.dingtalk)
+
+            sales_action_task = asyncio.create_task(
+                sales_action_scheduler_loop(
+                    _sa_factory,
+                    _make_sender,
+                    settings.sales_actions.scan_interval_seconds,
+                    max_attempts=settings.sales_actions.max_attempts,
+                )
+            )
+            logger.info(
+                "Sales action scheduler started (scan=%ss, max_attempts=%d)",
+                settings.sales_actions.scan_interval_seconds,
+                settings.sales_actions.max_attempts,
+            )
+        except Exception as e:
+            logger.warning("Sales action scheduler init skipped: %s", e)
+
     # 长期记忆出箱 Worker
     memory_task = None
     if settings.long_term_memory.enabled and settings.long_term_memory.outbox_worker_enabled:
@@ -168,6 +199,13 @@ async def run() -> None:
             except asyncio.CancelledError:
                 pass
             logger.info("Profile rebuild worker stopped")
+        if sales_action_task is not None:
+            sales_action_task.cancel()
+            try:
+                await sales_action_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("Sales action scheduler stopped")
         if memory_task is not None:
             memory_task.cancel()
             try:

@@ -22,7 +22,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sales_agent.models.sales_action import (
@@ -435,18 +435,38 @@ class SalesActionRepository:
         *,
         now: datetime,
         limit: int = 50,
+        max_attempts: int = 5,
     ) -> list[SalesActionReminder]:
-        """认领所有到期且仍 ``scheduled`` 的提醒，翻转 为 ``sending``。
+        """认领到期提醒，翻转为 ``sending``。
 
-        跨租户全局认领（调度器视角）。使用 ``FOR UPDATE SKIP LOCKED``
-        保证多 worker 并发不重复认领。同一事务内二次调用看到的是已翻转
+        一次 ``FOR UPDATE SKIP LOCKED`` 同时覆盖：
+
+        - **到期未投递**：``status=="scheduled"`` 且 ``remind_at<=now``；
+        - **失败可重试**：``status=="failed"`` 且 ``next_attempt_at<=now``
+          且 ``attempts < max_attempts``（失败提醒原先一次失败即静默死亡，
+          Task 5 修复——见 task-5-context §MUST-DO repository extension）。
+
+        ``attempts >= max_attempts`` 的失败提醒不再被认领（dead-letter）。
+        跨租户全局认领（调度器视角）。同一事务内二次调用看到的是已翻转
         的 ``sending`` 行，因此返回 ``[]``。
         """
         rows = (
             await self.db.execute(
                 select(SalesActionReminder)
-                .where(SalesActionReminder.status == "scheduled")
-                .where(SalesActionReminder.remind_at <= now)
+                .where(
+                    or_(
+                        and_(
+                            SalesActionReminder.status == "scheduled",
+                            SalesActionReminder.remind_at <= now,
+                        ),
+                        and_(
+                            SalesActionReminder.status == "failed",
+                            SalesActionReminder.next_attempt_at.is_not(None),
+                            SalesActionReminder.next_attempt_at <= now,
+                            SalesActionReminder.attempts < max_attempts,
+                        ),
+                    )
+                )
                 .order_by(SalesActionReminder.remind_at.asc())
                 .limit(limit)
                 .with_for_update(skip_locked=True)
@@ -558,6 +578,109 @@ class SalesActionRepository:
                 )
             )
         ).scalar_one_or_none()
+
+    async def get_card_for_reminder(
+        self, reminder: SalesActionReminder
+    ) -> SalesActionCard | None:
+        """按 reminder.action_id + 同作用域加载关联卡片（用于取 dingtalk_user_id）。"""
+        if reminder.action_id is None:
+            return None
+        stmt = select(SalesActionCard).where(
+            SalesActionCard.id == reminder.action_id,
+            SalesActionCard.tenant_id == reminder.tenant_id,
+            SalesActionCard.agent_id == reminder.agent_id,
+            SalesActionCard.user_id == reminder.user_id,
+        )
+        return (await self.db.execute(stmt)).scalar_one_or_none()
+
+    async def list_cards_for_scope(
+        self, scope: SalesActionScope, *, status: str = "pending"
+    ) -> list[SalesActionCard]:
+        """列出某作用域内指定状态的卡片（digest 渲染用）。"""
+        stmt = (
+            select(SalesActionCard)
+            .where(
+                SalesActionCard.tenant_id == scope.tenant_id,
+                SalesActionCard.agent_id == scope.agent_id,
+                SalesActionCard.user_id == scope.user_id,
+                SalesActionCard.status == status,
+            )
+            .order_by(SalesActionCard.scheduled_at.asc())
+        )
+        return list((await self.db.execute(stmt)).scalars().all())
+
+    async def list_active_action_scopes(self) -> list[SalesActionScope]:
+        """枚举所有仍有 pending 动作的去重作用域（digest 创建用）。
+
+        返回的 :class:`SalesActionScope` 携带 ``dingtalk_user_id``（取自卡片），
+        供调度器随后投递 digest 卡片。
+        """
+        stmt = (
+            select(
+                SalesActionCard.tenant_id,
+                SalesActionCard.agent_id,
+                SalesActionCard.user_id,
+                SalesActionCard.timezone,
+                SalesActionCard.dingtalk_user_id,
+            )
+            .where(SalesActionCard.status == "pending")
+            .distinct()
+        )
+        rows = (await self.db.execute(stmt)).all()
+        scopes: list[SalesActionScope] = []
+        seen: set[tuple] = set()
+        for tenant_id, agent_id, user_id, _tz, dingtalk_user_id in rows:
+            key = (tenant_id, agent_id, user_id, dingtalk_user_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            scopes.append(
+                SalesActionScope(
+                    tenant_id=tenant_id,
+                    agent_id=agent_id,
+                    user_id=user_id,
+                    dingtalk_user_id=dingtalk_user_id,
+                )
+            )
+        return scopes
+
+    async def reminder_idempotency_key_exists(self, key: str) -> bool:
+        """幂等键是否已存在（digest 去重预检，避免唯一约束冲突）。"""
+        existing = (
+            await self.db.execute(
+                select(SalesActionReminder.id).where(
+                    SalesActionReminder.idempotency_key == key
+                )
+            )
+        ).scalar_one_or_none()
+        return existing is not None
+
+    def add_digest_reminder(
+        self,
+        scope: SalesActionScope,
+        *,
+        reminder_type: str,
+        remind_at: datetime,
+        idempotency_key: str,
+    ) -> SalesActionReminder:
+        """在当前会话中加入一条 digest 提醒（scheduled，立即到期）。
+
+        幂等性由调用方通过 :meth:`reminder_idempotency_key_exists` 预检 +
+        唯一约束兜底保证。``action_id=None`` —— digest 覆盖整个作用域的多个动作。
+        """
+        reminder = SalesActionReminder(
+            action_id=None,
+            tenant_id=scope.tenant_id,
+            agent_id=scope.agent_id,
+            user_id=scope.user_id,
+            remind_at=remind_at,
+            reminder_type=reminder_type,
+            status="scheduled",
+            attempts=0,
+            idempotency_key=idempotency_key,
+        )
+        self.db.add(reminder)
+        return reminder
 
 
 def _now_utc() -> datetime:

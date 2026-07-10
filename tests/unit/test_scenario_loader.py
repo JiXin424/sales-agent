@@ -46,10 +46,10 @@ def test_question_fields_populated():
     assert "概述" not in titles
     # 需判断-type Q01 has #### subsections like "价值还没立住"
     assert any("价值还没立住" in t for t in titles)
-    # every section has title + content
+    # every section has a title; content may be empty for a group header
+    # (e.g. "二、再应对" whose body is its following #### subsections)
     for s in q01.answer_sections:
         assert s.title
-        assert s.content
 
 
 def test_flow_type_question_has_step_sections():
@@ -87,3 +87,23 @@ def test_decision_model_defaults():
     assert d.matched_question_id is None
     assert d.confidence == 0.0
     assert d.reason_code == "unknown"
+
+
+def test_group_header_without_body_preserved():
+    """分组父标题（如「二、再应对」）下面直接接 #### 子标题、自身无独立正文时，
+    必须作为分组标题保留，不能被当作空 section 丢弃。
+
+    Regression: 这类标题统领后续子节，丢了它会让钉钉端渲染缺这一行分组标题。
+    """
+    md = _DATA_PATH.read_text(encoding="utf-8")
+    reg = parse_scenario_md(md)
+    # 需判断型场景都有「二、再应对」结构，Q01/Q04 为代表
+    for qid in ("Q01", "Q04"):
+        q = reg.get_question(qid)
+        assert q is not None
+        titles = [s.title for s in q.answer_sections]
+        assert any("二、再应对" in t for t in titles), f"{qid} 分组标题被丢弃: {titles}"
+        # 该分组标题下面应紧跟其 #### 子节（content 非空）
+        idx = next(i for i, t in enumerate(titles) if "二、再应对" in t)
+        assert q.answer_sections[idx].content == ""  # 父标题自身无正文
+        assert q.answer_sections[idx + 1].content  # 紧跟的子节有正文

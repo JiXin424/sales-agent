@@ -19,7 +19,7 @@ _NON_ENTITY_TERMS = {
 def is_entity_like(term: str) -> bool:
     """判断 term 是否像品牌/产品实体（剔除停用词与过短词）。"""
     t = (term or "").strip()
-    if len(t) < 1:
+    if len(t) < 2:
         return False
     return t.lower() not in _NON_ENTITY_TERMS
 
@@ -48,6 +48,8 @@ def compute_missing(
     max_n: int,
 ) -> list[str]:
     """返回未命中的实体候选，保持原顺序、去重，最多 max_n 个。"""
+    if max_n <= 0:
+        return []
     seen: set[str] = set()
     missing: list[str] = []
     for term in search_terms or []:

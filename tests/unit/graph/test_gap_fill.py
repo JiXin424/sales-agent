@@ -36,13 +36,13 @@ def test_compute_missing_filters_generic_terms():
 
 
 def test_compute_missing_caps_at_max_n():
-    missing = compute_missing(["A", "B", "C"], [], max_n=2)
-    assert missing == ["A", "B"]
+    missing = compute_missing(["产品A", "产品B", "产品C"], [], max_n=2)
+    assert missing == ["产品A", "产品B"]
 
 
 def test_compute_missing_preserves_order_and_dedupes():
-    missing = compute_missing(["A", "A", "B"], [], max_n=5)
-    assert missing == ["A", "B"]
+    missing = compute_missing(["AA", "AA", "BB"], [], max_n=5)
+    assert missing == ["AA", "BB"]
 
 
 def test_compute_missing_all_covered_returns_empty():

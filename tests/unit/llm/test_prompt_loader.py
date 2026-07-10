@@ -1,5 +1,6 @@
 import pytest, yaml
 from sales_agent.llm.prompt_loader import PromptTemplate, load_prompts, get_prompt
+from sales_agent.core.config import get_settings
 
 def _write_yaml(tmp_path, data):
     p = tmp_path / "prompts.yaml"
@@ -41,11 +42,11 @@ def test_unknown_key_raises(tmp_path):
         get_prompt("router", "nonexistent")
 
 def test_load_real_prompts_all_39_keys(tmp_path):
-    """加载真实 config/prompts.yaml，验证全部 39 个 category+key 可获取且 template 非空。"""
+    """加载真实 config/llm_config.yaml，验证全部 39 个 category+key 可获取且 template 非空。"""
     from pathlib import Path
-    real = Path("config/prompts.yaml")
+    real = Path(get_settings().llm_config_path)
     if not real.exists():
-        pytest.skip("config/prompts.yaml not found")
+        pytest.skip("config/llm_config.yaml not found")
     load_prompts(str(real))
     expected_categories = {
         "task": ["memory_extraction", "emotional_support", "knowledge_qa", "script_generation",

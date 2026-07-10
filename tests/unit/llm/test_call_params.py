@@ -65,7 +65,7 @@ def test_unknown_call_site_raises(tmp_path):
 def test_load_real_defaults_file_all_keys():
     """加载真实 config/llm_call_defaults.yaml，验证全部 24 个 key 就位且值正确。"""
     from sales_agent.core.config import get_settings
-    load_call_params(get_settings().llm_call_defaults_path)
+    load_call_params(get_settings().llm_config_path)
     expected = {
         "evidence_router": (0.0, 500), "task_router": (0.1, 200),
         "agent_executor": (0.3, 2000), "context_resolver": (0.0, 500),

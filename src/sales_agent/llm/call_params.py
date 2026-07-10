@@ -46,9 +46,7 @@ def load_call_params(path: str) -> None:
     raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
         raise ValueError(f"LLM 调用参数文件顶层必须是 dict: {path}")
-    raw = raw.get("params", {})
-    if not isinstance(raw, dict):
-        raise ValueError(f"LLM 调用参数文件缺少 'params' 段: {path}")
+    raw = raw.get("params", raw)  # 有 "params" 段取其内容，否则整个文件即参数（兼容）
     params: dict[str, CallParams] = {}
     for key, val in raw.items():
         if not isinstance(val, dict):

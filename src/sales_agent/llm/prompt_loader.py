@@ -38,9 +38,7 @@ def load_prompts(path: str) -> None:
     raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
         raise ValueError(f"Prompt 配置文件顶层必须是 dict: {path}")
-    raw = raw.get("prompts", {})
-    if not isinstance(raw, dict):
-        raise ValueError(f"Prompt 配置文件缺少 'prompts' 段: {path}")
+    raw = raw.get("prompts", raw)  # 有 "prompts" 段取其内容，否则整个文件即 prompt（兼容）
     prompts: dict[tuple[str, str], PromptTemplate] = {}
     for category, cat_dict in raw.items():
         if not isinstance(cat_dict, dict):

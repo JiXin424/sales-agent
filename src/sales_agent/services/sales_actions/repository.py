@@ -131,18 +131,21 @@ class SalesActionRepository:
         )
 
     async def _get_scoped_card(
-        self, scope: SalesActionScope, action_id: str
+        self,
+        scope: SalesActionScope,
+        action_id: str,
+        *,
+        for_update: bool = False,
     ) -> SalesActionCard | None:
-        return (
-            await self.db.execute(
-                select(SalesActionCard).where(
-                    SalesActionCard.id == action_id,
-                    SalesActionCard.tenant_id == scope.tenant_id,
-                    SalesActionCard.agent_id == scope.agent_id,
-                    SalesActionCard.user_id == scope.user_id,
-                )
-            )
-        ).scalar_one_or_none()
+        stmt = select(SalesActionCard).where(
+            SalesActionCard.id == action_id,
+            SalesActionCard.tenant_id == scope.tenant_id,
+            SalesActionCard.agent_id == scope.agent_id,
+            SalesActionCard.user_id == scope.user_id,
+        )
+        if for_update:
+            stmt = stmt.with_for_update()
+        return (await self.db.execute(stmt)).scalar_one_or_none()
 
     async def _cancel_active_reminders(
         self, scope: SalesActionScope, action_id: str
@@ -265,7 +268,10 @@ class SalesActionRepository:
           不重复写事件；
         - 否则翻转为 ``new_status``、取消在途提醒、写一条事件。
         """
-        card = await self._get_scoped_card(scope, action_id)
+        # Lock the card row so two concurrent terminal transitions serialize:
+        # the second waits, re-reads the now-terminal status, and returns
+        # already_done/already_terminal instead of writing a duplicate event.
+        card = await self._get_scoped_card(scope, action_id, for_update=True)
         if card is None:
             return ActionStateResult(action_id=action_id, status="not_found", reason_code="action_not_found")
 
@@ -337,8 +343,9 @@ class SalesActionRepository:
 
         - 缺失/跨作用域 → ``ActionStateResult(not_found)``；
         - 已终态 → ``ActionStateResult(already_terminal)``；
-        - 同一 ``(action_id, event_id, new_time)`` 重复请求 → 幂等返回已存在的提醒
-          （按 idempotency_key 去重，不抛 IntegrityError）。
+        - 同一 ``(action_id, event_id, new_time)`` 重复请求 → 幂等返回
+          ``ActionStateResult(status="snoozed", reason_code="already_snoozed")``
+          （按 idempotency_key 去重，不抛 IntegrityError，不重复插入提醒）。
         """
         card = await self._get_scoped_card(scope, action_id)
         if card is None:
@@ -353,16 +360,20 @@ class SalesActionRepository:
 
         key = snooze_idempotency_key(action_id, event_id, new_time)
 
-        # Idempotent dedup: a repeat snooze with the same (action_id, event_id,
-        # new_time) returns the existing reminder instead of crashing on the
-        # unique idempotency_key constraint.
+        # Idempotent dedup (mirrors complete_action's ``already_done``): a repeat
+        # snooze with the same (action_id, event_id, new_time) — exactly what
+        # DingTalk at-least-once button delivery produces — returns a clean
+        # result instead of crashing on the unique idempotency_key constraint.
+        # The unique constraint remains as the hard backstop for true concurrency.
         existing = (
             await self.db.execute(
                 select(SalesActionReminder).where(SalesActionReminder.idempotency_key == key)
             )
         ).scalar_one_or_none()
         if existing is not None:
-            return existing
+            return ActionStateResult(
+                action_id=action_id, status="snoozed", reason_code="already_snoozed"
+            )
 
         # Cancel prior in-flight reminders so only the new time fires —
         # otherwise the user gets pinged at the time they just deferred.

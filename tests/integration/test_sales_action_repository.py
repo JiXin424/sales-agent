@@ -297,7 +297,7 @@ async def test_snooze_cancels_original_reminder(db_session):
 
 @pytest.mark.asyncio
 async def test_snooze_is_idempotent_on_duplicate(db_session):
-    """同一 (action_id, event_id, new_time) 重复 snooze 返回已存在提醒，不抛错。"""
+    """同一 (action_id, event_id, new_time) 重复 snooze 幂等返回 already_snoozed，不抛错、不重复插入。"""
     repo = SalesActionRepository(db_session)
     scope = _scope()
     action = await _create_action(repo, scope)
@@ -305,7 +305,9 @@ async def test_snooze_is_idempotent_on_duplicate(db_session):
 
     first = await repo.snooze_action(scope, action.id, event_id="snooze1", new_time=new_time)
     second = await repo.snooze_action(scope, action.id, event_id="snooze1", new_time=new_time)
-    assert second.id == first.id  # same row, no crash
+    # duplicate is an idempotent no-op (no IntegrityError, no duplicate insert)
+    assert second.status == "snoozed"
+    assert second.reason_code == "already_snoozed"
 
     snooze_reminders = [
         r for r in (
@@ -317,6 +319,7 @@ async def test_snooze_is_idempotent_on_duplicate(db_session):
         ).scalars().all()
     ]
     assert len(snooze_reminders) == 1
+    assert first.id == snooze_reminders[0].id
 
 
 @pytest.mark.asyncio

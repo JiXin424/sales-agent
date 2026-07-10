@@ -1023,6 +1023,189 @@ async def sales_action_observe_node(
 
 
 # =============================================================
+# sales_action_replan_node (Task 5)
+# =============================================================
+
+def _build_scope(state: OnlineConversationState) -> SalesActionScope:
+    """Build a SalesActionScope from graph state identity fields."""
+    return SalesActionScope(
+        tenant_id=state.get("tenant_id", ""),
+        agent_id=state.get("agent_id", ""),
+        user_id=state.get("user_id", ""),
+        channel=state.get("channel", "dingtalk"),
+        dingtalk_user_id=state.get("session_user_id"),
+    )
+
+
+REPLAN_PROMPT = """
+你是一个销售策略修正器。根据已完成销售动作的结果，更新商机判断并给出受约束的恢复动作。
+
+成功动作 = 动作标题，成功信号 = 期望结果，实际结果 = 用户汇报。
+
+规则：
+1. outcome_tag="achieved" → 轻收尾，可选建议下一阶段
+2. outcome_tag="new_obstacle" → 把障碍写进客户事实；下一动作必须尊重新约束（如"预算冻结"→不做花钱/催款动作）
+3. outcome_tag="partial" → 总结进展，建议推进下一步
+4. outcome_tag="no_response" → 标记缺乏反馈，建议轻量检查
+
+返回 JSON:
+{
+  "memory_fact": "可写入的客户事实，或 null",
+  "cancel_siblings": true/false,
+  "next_action": {
+    "title": "下一动作标题",
+    "action_type": "...",
+    "success_criteria_new": "新的成功信号",
+    "suggested_time": "建议时间或 null",
+    "rationale": "为什么会提这个动作"
+  } | null,
+  "message": "给用户的诊断+建议文本"
+}
+"""
+
+
+async def sales_action_replan_node(
+    state: OnlineConversationState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """Replan: given an observed outcome, update customer knowledge and suggest the next constrained action.
+
+    Dual behavior:
+    - ``outcome_tag == "achieved"`` → light wrap-up message; no memory/cancel/suggest.
+    - ``outcome_tag in {partial, new_obstacle, no_response}`` → full replan:
+      write customer memory fact, cancel sibling actions matching pursuit_goal,
+      suggest the next constrained action via LLM.
+
+    The suggestion is returned for user confirmation — v1 does NOT auto-create cards.
+    """
+    if not state.get("pursuit_loop_enabled"):
+        return {}
+
+    ctx = _unpack_context(config) or {}
+    chat_model = ctx.get("chat_model")
+    db = ctx.get("db")
+    if chat_model is None or db is None:
+        return {}
+
+    action_id = state.get("sales_action_id")
+    if not action_id:
+        return {}
+
+    repo = SalesActionRepository(db)
+    scope = _build_scope(state)
+    card = await repo.get_card(scope, action_id)
+    if card is None or card.outcome_tag is None:
+        return {}  # no outcome -> nothing to replan
+
+    # ── achieved: light wrap-up ──
+    if card.outcome_tag == "achieved":
+        msg = f"恭喜达成「{card.title}」。"
+        if card.success_criteria:
+            msg += f" 成功信号「{card.success_criteria}」已命中。"
+        return {
+            "replan_suggestion": None,
+            "replan_cancelled_ids": [],
+            "response_kind": "chat",
+            "answer_dict": {"summary": msg, "sections": []},
+        }
+
+    # ── partial / new_obstacle / no_response: full replan ──
+    outcome_info = f"outcome_tag={card.outcome_tag}, outcome_note={card.outcome_note}"
+    customer_memories = await _load_customer_memories(db, scope, card.customer_name)
+
+    messages = [
+        {"role": "system", "content": REPLAN_PROMPT},
+        {"role": "user", "content": json.dumps({
+            "action_title": card.title,
+            "success_criteria": card.success_criteria or "",
+            "pursuit_goal": card.pursuit_goal or "",
+            "customer_name": card.customer_name or "",
+            "outcome": {"tag": card.outcome_tag, "note": card.outcome_note},
+            "customer_memories": customer_memories,
+        }, ensure_ascii=False)},
+    ]
+
+    try:
+        raw = await chat_model.generate(
+            messages=messages, response_format={"type": "json_object"}, max_tokens=800, temperature=0.0
+        )
+        # Parse JSON from LLM output (may be fenced in ```json … ```)
+        text = raw.strip()
+        import re
+        fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
+        if fenced:
+            text = fenced.group(1)
+        plan = json.loads(text)
+    except Exception:
+        plan = {"message": f"基于结果'{outcome_info}'，建议下一个推进动作。", "next_action": None, "memory_fact": None, "cancel_siblings": False}
+
+    # ── Write customer memory ──
+    if plan.get("memory_fact") and card.customer_name:
+        await repo.write_customer_memory(
+            scope, customer_scope=card.customer_name, fact=plan["memory_fact"]
+        )
+
+    # ── Cancel sibling actions ──
+    cancelled = []
+    if plan.get("cancel_siblings") and card.pursuit_goal:
+        cancelled = await repo.cancel_by_pursuit_goal(
+            scope, card.pursuit_goal, exclude_action_id=action_id, event_id=state.get("event_id")
+        )
+
+    # ── Build response ──
+    next_action = plan.get("next_action")
+    suggestion = None
+    if next_action and next_action.get("title"):
+        suggestion = {
+            "title": next_action["title"],
+            "action_type": next_action.get("action_type", "other"),
+            "success_criteria": next_action.get("success_criteria_new", ""),
+            "pursuit_goal": card.pursuit_goal,
+            "customer_name": card.customer_name,
+            "suggested_time": next_action.get("suggested_time"),
+            "rationale": next_action.get("rationale", ""),
+        }
+
+    result_text = plan.get("message", "已更新商机判断，建议下一步。")
+    if suggestion:
+        result_text += f"\n\n建议下一步：{suggestion['title']}。需要我帮你设个提醒吗？"
+
+    return {
+        "replan_suggestion": suggestion,
+        "replan_cancelled_ids": cancelled,
+        "suggested_sales_action": suggestion,
+        "response_kind": "chat",
+        "answer_dict": {"summary": result_text, "sections": []},
+    }
+
+
+async def _load_customer_memories(db, scope, customer_name: str | None) -> list[str]:
+    """Load customer-scoped memory facts for the replan context."""
+    if not customer_name:
+        return []
+    from sqlalchemy import select
+    from sales_agent.models.atomic_memory import AtomicMemory
+    result = await db.execute(
+        select(AtomicMemory).where(
+            AtomicMemory.tenant_id == scope.tenant_id,
+            AtomicMemory.agent_id == scope.agent_id,
+            AtomicMemory.subject_id == scope.user_id,
+            AtomicMemory.customer_scope == customer_name,
+            AtomicMemory.status == "active",
+        ).order_by(AtomicMemory.updated_at.desc()).limit(10)
+    )
+    import json
+    facts = []
+    for mem in result.scalars():
+        try:
+            data = json.loads(mem.content_json)
+            facts.append(data.get("fact", mem.search_text))
+        except Exception:
+            facts.append(mem.search_text)
+    return facts
+
+
+# =============================================================
 # reset_context_node (Task 6)
 # =============================================================
 

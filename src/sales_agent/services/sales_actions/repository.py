@@ -739,6 +739,102 @@ class SalesActionRepository:
         return await self._get_scoped_card(scope, action_id)
 
     # ------------------------------------------------------------------
+    # cancel_by_pursuit_goal (Task 5 — Replan)
+    # ------------------------------------------------------------------
+
+    async def cancel_by_pursuit_goal(
+        self,
+        scope: SalesActionScope,
+        pursuit_goal: str,
+        *,
+        exclude_action_id: str | None = None,
+        event_id: str | None = None,
+    ) -> list[str]:
+        """Cancel all pending actions with matching pursuit_goal (excluding the given one).
+
+        Returns list of cancelled action IDs.
+        """
+        stmt = (
+            select(SalesActionCard)
+            .where(
+                SalesActionCard.tenant_id == scope.tenant_id,
+                SalesActionCard.agent_id == scope.agent_id,
+                SalesActionCard.user_id == scope.user_id,
+                SalesActionCard.pursuit_goal == pursuit_goal,
+                SalesActionCard.status == "pending",
+            )
+        )
+        if exclude_action_id:
+            stmt = stmt.where(SalesActionCard.id != exclude_action_id)
+
+        result = await self.db.execute(stmt)
+        cards = result.scalars().all()
+
+        cancelled_ids = []
+        for card in cards:
+            card.status = "cancelled"
+            await self._cancel_active_reminders(scope, card.id)
+            self.db.add(self._event(
+                scope, action_id=card.id,
+                event_type="action_cancelled",
+                payload={"event_id": event_id, "reason": "superseded_by_replan", "pursuit_goal": pursuit_goal} if event_id else {"reason": "superseded_by_replan", "pursuit_goal": pursuit_goal},
+            ))
+            cancelled_ids.append(card.id)
+
+        await self.db.flush()
+        return cancelled_ids
+
+    # ------------------------------------------------------------------
+    # write_customer_memory (Task 5 — Replan)
+    # ------------------------------------------------------------------
+
+    async def write_customer_memory(
+        self,
+        scope: SalesActionScope,
+        *,
+        customer_scope: str,
+        fact: str,
+        memory_type: str = "sales_pattern",
+    ) -> str | None:
+        """Write or update a customer-scoped atomic memory fact. Idempotent via normalized_key.
+
+        Returns the memory ID or None on duplicate.
+        """
+        import hashlib, json
+        from sales_agent.models.atomic_memory import AtomicMemory
+
+        normalized_key = hashlib.blake2b(
+            f"{scope.tenant_id}:{customer_scope}:{fact[:80]}".encode(), digest_size=16
+        ).hexdigest()
+
+        # Check existing (idempotent)
+        existing = await self.db.execute(
+            select(AtomicMemory).where(AtomicMemory.normalized_key == normalized_key)
+        )
+        if existing.scalar_one_or_none():
+            return None
+
+        mem = AtomicMemory(
+            tenant_id=scope.tenant_id,
+            agent_id=scope.agent_id,
+            subject_type="user",
+            subject_id=scope.user_id,
+            memory_type=memory_type,
+            status="active",
+            source_kind="inferred_user",
+            source_conversation_id="",
+            source_message_ids_json="[]",
+            content_json=json.dumps({"fact": fact, "customer_scope": customer_scope}, ensure_ascii=False),
+            normalized_key=normalized_key,
+            search_text=fact,
+            confidence_band="corroborated",
+            customer_scope=customer_scope,
+        )
+        self.db.add(mem)
+        await self.db.flush()
+        return mem.id
+
+    # ------------------------------------------------------------------
     # observe
     # ------------------------------------------------------------------
 

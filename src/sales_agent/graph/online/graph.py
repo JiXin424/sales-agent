@@ -61,6 +61,7 @@ from sales_agent.graph.online.nodes import (
     reset_context_node,
     sales_action_command_node,
     sales_action_observe_node,
+    sales_action_replan_node,
     sales_action_suggestion_node,
 )
 from sales_agent.graph.online.state import OnlineConversationState
@@ -115,6 +116,7 @@ def build_online_graph() -> StateGraph:
     builder.add_node("profile_transparency", profile_transparency_node)
     builder.add_node("sales_action", sales_action_command_node)
     builder.add_node("sales_action_observe", sales_action_observe_node)
+    builder.add_node("sales_action_replan", sales_action_replan_node)
     builder.add_node("sales_action_suggestion", sales_action_suggestion_node)
 
     # ── Edges ──────────────────────────────────────────────────────
@@ -186,16 +188,20 @@ def build_online_graph() -> StateGraph:
         },
     )
 
-    # From sales_action_observe: outcome captured → END; fell through →
+    # From sales_action_observe: outcome captured → replan; fell through →
     # resume normal chat path.
     builder.add_conditional_edges(
         "sales_action_observe",
         route_after_observe,
         {
-            "observe_end": END,
+            "observe_end": "sales_action_replan",
             "resume_chat": "context_resolution",
         },
     )
+
+    # From sales_action_replan: replan output is response_kind="chat" with
+    # populated answer_dict → log_control_response persists it → END.
+    builder.add_edge("sales_action_replan", "log_control_response")
 
     # Clarification path
     builder.add_edge("clarification_response", "log_control_response")

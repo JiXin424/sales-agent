@@ -1,4 +1,4 @@
-"""验证 retrieve 节点 ontology 空结果时触发 web 兜底。"""
+"""验证 retrieve 节点 ontology 缺口补全与 web 兜底。"""
 
 from types import SimpleNamespace
 
@@ -8,7 +8,7 @@ from sales_agent.graph.chat.nodes.retrieval import _retrieve_via_ontology, _retr
 
 def _fake_settings():
     return SimpleNamespace(
-        web_search=SimpleNamespace(enabled=True, api_key="sk-test", top_n=5),
+        web_search=SimpleNamespace(enabled=True, api_key="sk-test", top_n=5, max_gap_entities=2),
         retrieval=SimpleNamespace(top_k=5, mode="hybrid"),
     )
 
@@ -21,8 +21,8 @@ class _FakeRuntime:
 
 @pytest.mark.asyncio
 async def test_ontology_empty_triggers_web_fallback(monkeypatch):
-    """ontology 无 graph_rows + vector_fallback 也空 → 调 web_fallback。"""
-    async def fake_extract(local, runtime): return {"search_terms": ["x"]}
+    """ontology 无 graph_rows + vector_fallback 也空 -> 对未命中实体调 web_fallback。"""
+    async def fake_extract(local, runtime): return {"search_terms": ["未知品牌"]}
     async def fake_query(local, runtime): return {"graph_rows": []}
     async def fake_vec(local, runtime): return {"graph_rows": [], "vector_fallback_used": True}
     def fake_compact(local): return {"compacted_evidence": {"entities": [], "facts": [], "source_documents": [], "confidence": 0.5}}
@@ -31,8 +31,8 @@ async def test_ontology_empty_triggers_web_fallback(monkeypatch):
     monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.vector_fallback_node", fake_vec)
     monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.compact_evidence_node", fake_compact)
 
-    async def fake_web(*, message, tenant_id, runtime, api_key, top_n):
-        return {"ontology_context_text": "## 联网搜索分析\n网搜结论", "sources": [{"title": "T"}], "web_used": True}
+    async def fake_web(**kwargs):
+        return {"ontology_context_text": "## 联网搜索分析\n网搜结论", "sources": [{"title": "T", "source_type": "web"}], "web_used": True}
     monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.web_fallback_and_analyze", fake_web)
 
     monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.get_settings", _fake_settings)
@@ -47,8 +47,8 @@ async def test_ontology_empty_triggers_web_fallback(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ontology_nonempty_skips_web_fallback(monkeypatch):
-    """ontology 有事实 → 不调 web_fallback，正常返回。"""
-    async def fake_extract(local, runtime): return {"search_terms": ["x"]}
+    """所有 search_terms 都被命中实体覆盖 -> 不调 web_fallback，正常返回。"""
+    async def fake_extract(local, runtime): return {"search_terms": ["E1"]}
     async def fake_query(local, runtime): return {"graph_rows": [{"name": "E1"}]}
     async def fake_vec(local, runtime): return {"graph_rows": [], "vector_fallback_used": False}
     def fake_compact(local): return {"compacted_evidence": {"entities": [{"name": "E1", "type": "Product"}], "facts": [{"subject": "E1", "predicate": "has", "object": "V"}], "source_documents": ["D1"], "confidence": 0.9}}
@@ -57,7 +57,7 @@ async def test_ontology_nonempty_skips_web_fallback(monkeypatch):
     monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.vector_fallback_node", fake_vec)
     monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.compact_evidence_node", fake_compact)
 
-    def fail_web(*a, **kw): raise AssertionError("web fallback should NOT be called when ontology has facts")
+    def fail_web(*a, **kw): raise AssertionError("web fallback should NOT be called when all terms covered")
     monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.web_fallback_and_analyze", fail_web)
     monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.get_settings", _fake_settings)
 
@@ -84,10 +84,102 @@ async def test_web_fallback_tags_source_type(monkeypatch):
         )
     monkeypatch.setattr("sales_agent.graph.retrieval.web_fallback.bocha_search", fake_bocha)
 
-    runtime = _FakeRuntime()  # chat_model=None → 走 else 分支，不调 LLM
+    runtime = _FakeRuntime()  # chat_model=None -> 走 else 分支，不调 LLM
     result = await web_fallback_and_analyze(
         message="q", tenant_id="t1", runtime=runtime, api_key="k", top_n=3,
     )
     assert result is not None
     assert all(s["source_type"] == "web" for s in result["sources"])
     assert result["sources"][0]["title"] == "A"  # 原字段保留
+
+
+@pytest.mark.asyncio
+async def test_ontology_partial_hit_triggers_web_for_missing(monkeypatch):
+    """全品C 命中、X品牌 缺失 -> 对 X品牌 定向 web，KB+web 合并。"""
+    async def fake_extract(local, runtime): return {"search_terms": ["全品C", "X品牌"]}
+    async def fake_query(local, runtime): return {"graph_rows": [{"e": {"name": "全品C", "type": "Product"}}]}
+    async def fake_vec(local, runtime): return {"graph_rows": [], "vector_fallback_used": False}
+    def fake_compact(local):
+        return {"compacted_evidence": {
+            "entities": [{"name": "全品C", "type": "Product"}],
+            "facts": [{"subject": "全品C", "predicate": "has", "object": "V"}],
+            "source_documents": ["D1"], "confidence": 0.9,
+        }}
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.extract_terms_node", fake_extract)
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.graph_query_node", fake_query)
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.vector_fallback_node", fake_vec)
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.compact_evidence_node", fake_compact)
+
+    calls = []
+
+    async def fake_web(**kwargs):
+        calls.append(kwargs)
+        return {"ontology_context_text": "## 联网搜索分析\nX品牌资料", "sources": [{"title": "X", "source_type": "web"}], "web_used": True}
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.web_fallback_and_analyze", fake_web)
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.get_settings", _fake_settings)
+
+    runtime = _FakeRuntime()
+    state = {"message": "全品C和X品牌区别", "tenant_id": "t1", "task_type": "knowledge_qa"}
+    result = await _retrieve_via_ontology(state, runtime, "t1", None, "knowledge_qa", "全品C和X品牌区别")
+
+    # 只对 X品牌 调一次，且 search_query 定向
+    assert len(calls) == 1
+    assert "X品牌" in calls[0]["search_query"]
+    assert calls[0]["context_message"] == "全品C和X品牌区别"
+    # KB 块（全品C）与 web 块（X品牌资料）并存
+    assert "全品C" in result["ontology_context_text"]
+    assert "X品牌资料" in result["ontology_context_text"]
+    # sources 两种来源都有
+    types = {s.get("source_type") for s in result["sources"]}
+    assert "ontology" in types and "web" in types
+    assert result["retrieval_info"]["web_search_used"] is True
+
+
+@pytest.mark.asyncio
+async def test_ontology_all_covered_skips_web(monkeypatch):
+    """search_terms 全部被命中实体覆盖 -> 不调 web。"""
+    async def fake_extract(local, runtime): return {"search_terms": ["全品C"]}
+    async def fake_query(local, runtime): return {"graph_rows": [{"e": {"name": "全品C", "type": "Product"}}]}
+    async def fake_vec(local, runtime): return {"graph_rows": [], "vector_fallback_used": False}
+    def fake_compact(local):
+        return {"compacted_evidence": {"entities": [{"name": "全品C", "type": "Product"}], "facts": [], "source_documents": [], "confidence": 0.8}}
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.extract_terms_node", fake_extract)
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.graph_query_node", fake_query)
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.vector_fallback_node", fake_vec)
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.compact_evidence_node", fake_compact)
+
+    def fail_web(*a, **kw): raise AssertionError("web 不应在全部实体已覆盖时调用")
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.web_fallback_and_analyze", fail_web)
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.get_settings", _fake_settings)
+
+    runtime = _FakeRuntime()
+    state = {"message": "全品C怎么样", "tenant_id": "t1", "task_type": "knowledge_qa"}
+    result = await _retrieve_via_ontology(state, runtime, "t1", None, "knowledge_qa", "全品C怎么样")
+    assert result["retrieval_info"]["web_search_used"] is False
+
+
+@pytest.mark.asyncio
+async def test_ontology_gap_fill_capped_by_max(monkeypatch):
+    """3 个未命中实体，max_gap_entities=2 -> web 只调 2 次。"""
+    async def fake_extract(local, runtime): return {"search_terms": ["品牌A", "品牌B", "品牌C"]}
+    async def fake_query(local, runtime): return {"graph_rows": []}
+    async def fake_vec(local, runtime): return {"graph_rows": [], "vector_fallback_used": True}
+    def fake_compact(local):
+        return {"compacted_evidence": {"entities": [], "facts": [], "source_documents": [], "confidence": 0.0}}
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.extract_terms_node", fake_extract)
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.graph_query_node", fake_query)
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.vector_fallback_node", fake_vec)
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.compact_evidence_node", fake_compact)
+
+    calls = []
+
+    async def fake_web(**kwargs):
+        calls.append(kwargs)
+        return {"ontology_context_text": "## 联网搜索分析\n资料", "sources": [{"title": "X", "source_type": "web"}], "web_used": True}
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.web_fallback_and_analyze", fake_web)
+    monkeypatch.setattr("sales_agent.graph.chat.nodes.retrieval.get_settings", _fake_settings)
+
+    runtime = _FakeRuntime()
+    state = {"message": "品牌A和品牌B和品牌C区别", "tenant_id": "t1", "task_type": "knowledge_qa"}
+    await _retrieve_via_ontology(state, runtime, "t1", None, "knowledge_qa", "品牌A和品牌B和品牌C区别")
+    assert len(calls) == 2

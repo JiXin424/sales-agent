@@ -22,7 +22,7 @@ class _FakeRuntime:
 
 @pytest.mark.asyncio
 async def test_web_fallback_returns_analysis_when_sources(monkeypatch):
-    """bocha 有结果 + LLM 分析成功 → 返回 analysis 拼好的 context。"""
+    """bocha 有结果 + LLM 分析成功 -> 返回 analysis 拼好的 context。"""
     async def fake_bocha(query, api_key, top_n=5):
         return WebSearchResult(
             query=query, success=True, raw_answer="摘要",
@@ -45,7 +45,7 @@ async def test_web_fallback_returns_analysis_when_sources(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_web_fallback_returns_none_when_disabled():
-    """api_key 为空 → 返回 None。"""
+    """api_key 为空 -> 返回 None。"""
     runtime = _FakeRuntime(_FakeChatModel(""))
     result = await web_fallback_and_analyze(
         message="x", tenant_id="t1", runtime=runtime, api_key="", top_n=5,
@@ -55,7 +55,7 @@ async def test_web_fallback_returns_none_when_disabled():
 
 @pytest.mark.asyncio
 async def test_web_fallback_returns_none_when_no_sources(monkeypatch):
-    """bocha 无结果 → 返回 None。"""
+    """bocha 无结果 -> 返回 None。"""
     async def fake_bocha(query, api_key, top_n=5):
         return WebSearchResult(query=query, success=False, error="Timeout")
     monkeypatch.setattr("sales_agent.graph.retrieval.web_fallback.bocha_search", fake_bocha)
@@ -64,3 +64,45 @@ async def test_web_fallback_returns_none_when_no_sources(monkeypatch):
         message="x", tenant_id="t1", runtime=runtime, api_key="sk-test", top_n=5,
     )
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_web_fallback_uses_search_query_for_bocha(monkeypatch):
+    """search_query 传给 Bocha，不传时退回 message。"""
+    captured = {}
+
+    async def fake_bocha(*, query, api_key, top_n):
+        captured["query"] = query
+        return WebSearchResult(
+            query=query, success=True, raw_answer="",
+            sources=[{"title": "T", "url": "u"}],
+        )
+    monkeypatch.setattr("sales_agent.graph.retrieval.web_fallback.bocha_search", fake_bocha)
+
+    runtime = _FakeRuntime(_FakeChatModel('{"analysis":"a","has_relevant":true}'))
+    await web_fallback_and_analyze(
+        message="全品C和X品牌区别",
+        tenant_id="t1", runtime=runtime, api_key="k",
+        search_query="X品牌 产品 功能 介绍",
+    )
+    assert captured["query"] == "X品牌 产品 功能 介绍"
+
+
+@pytest.mark.asyncio
+async def test_web_fallback_defaults_search_query_to_message(monkeypatch):
+    """不传 search_query -> Bocha 用 message。"""
+    captured = {}
+
+    async def fake_bocha(*, query, api_key, top_n):
+        captured["query"] = query
+        return WebSearchResult(
+            query=query, success=True, raw_answer="",
+            sources=[{"title": "T", "url": "u"}],
+        )
+    monkeypatch.setattr("sales_agent.graph.retrieval.web_fallback.bocha_search", fake_bocha)
+
+    runtime = _FakeRuntime(_FakeChatModel('{"analysis":"a","has_relevant":true}'))
+    await web_fallback_and_analyze(
+        message="某问题", tenant_id="t1", runtime=runtime, api_key="k",
+    )
+    assert captured["query"] == "某问题"

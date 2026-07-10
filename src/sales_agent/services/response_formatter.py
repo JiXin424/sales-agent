@@ -64,6 +64,10 @@ def format_text_output(answer: dict[str, Any]) -> str:
             lines.append(f"{title}：")
             lines.append(content)
             lines.append("")
+        elif title:
+            # 分组父标题（无独立正文，统领后续子节）作为纯标题行输出，不丢
+            lines.append(title)
+            lines.append("")
 
     return "\n".join(lines).strip()
 

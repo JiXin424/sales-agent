@@ -28,6 +28,7 @@ from sales_agent.graph.retrieval.ontology_graph import (
     compact_evidence_node,
 )
 from sales_agent.graph.retrieval.web_fallback import web_fallback_and_analyze
+from sales_agent.graph.retrieval.gap_fill import compute_missing
 
 logger = logging.getLogger(__name__)
 
@@ -201,29 +202,71 @@ async def _retrieve_via_ontology(
             "ontology_context_text": "",
         }
 
-    # Step 5: Build ontology_context_text from compacted evidence
+    # Step 5: Build KB context block from compacted evidence
     compacted = local.get("compacted_evidence", {})
-    onto_lines = ["## 知识图谱（本体）检索结果"]
     entities = compacted.get("entities", [])
-    if entities:
-        onto_lines.append(f"匹配实体 ({len(entities)}): " + ", ".join(
-            f"{e.get('name', '')}({e.get('type', '')})" for e in entities[:20]
-        ))
     facts = compacted.get("facts", [])
-    if facts:
-        onto_lines.append(f"相关事实 ({len(facts)}):")
-        for f in facts[:15]:
-            onto_lines.append(
-                f"  - [{f.get('subject', '')}] {f.get('predicate', '')} "
-                f"{f.get('object', '')} {f.get('value', '')}"[:200]
-            )
     docs = compacted.get("source_documents", [])
-    if docs:
-        onto_lines.append(f"来源文档: {', '.join(docs[:10])}")
-    ontology_context_text = "\n".join(onto_lines)
 
-    # Build sources from source_documents
-    # text 字段携带完整检索上下文（实体+事实），供 eval retrieval_context 使用；
+    kb_lines: list[str] = []
+    if entities or facts or docs:
+        kb_lines.append("## 知识图谱（本体）检索结果")
+        if entities:
+            kb_lines.append(f"匹配实体 ({len(entities)}): " + ", ".join(
+                f"{e.get('name', '')}({e.get('type', '')})" for e in entities[:20]
+            ))
+        if facts:
+            kb_lines.append(f"相关事实 ({len(facts)}):")
+            for f in facts[:15]:
+                kb_lines.append(
+                    f"  - [{f.get('subject', '')}] {f.get('predicate', '')} "
+                    f"{f.get('object', '')} {f.get('value', '')}"[:200]
+                )
+        if docs:
+            kb_lines.append(f"来源文档: {', '.join(docs[:10])}")
+    kb_text = "\n".join(kb_lines)
+
+    # Step 6: 缺口补全--对 KB 未命中的实体走定向 web 搜索。
+    # 用 search_terms（期望实体）减去命中实体名，得到未命中实体；
+    # 每个 web 结果的 context 块与 sources 追加合并到 KB 结果（非替换）。
+    settings = get_settings()
+    matched_names = [e.get("name", "") for e in entities]
+    missing = compute_missing(
+        local.get("search_terms", []),
+        matched_names,
+        max_n=settings.web_search.max_gap_entities,
+    )
+
+    web_text_parts: list[str] = []
+    web_sources: list[dict] = []
+    if missing and settings.web_search.enabled:
+        writer({"phase": "web_gap_fill", "missing_entities": missing})
+        for entity in missing:
+            try:
+                web_result = await web_fallback_and_analyze(
+                    message=message,
+                    search_query=f"{entity} 产品 功能 介绍",
+                    context_message=message,
+                    tenant_id=tenant_id,
+                    runtime=runtime,
+                    api_key=settings.web_search.api_key,
+                    top_n=settings.web_search.top_n,
+                )
+            except Exception as e:
+                logger.warning("Web gap-fill failed for entity=%r: %s", entity, e)
+                web_result = None
+            if web_result is not None:
+                web_text_parts.append(web_result["ontology_context_text"])
+                web_sources.extend(web_result["sources"])
+
+    web_used = bool(web_text_parts)
+
+    # 合并 context 文本：KB 块在前，web 块（## 联网搜索分析）在后。
+    parts = [p for p in [kb_text, *web_text_parts] if p.strip()]
+    ontology_context_text = "\n".join(parts)
+
+    # Build KB sources from source_documents.
+    # text 字段携带完整检索上下文（KB+web 合并），供 eval retrieval_context 使用；
     # 钉钉 renderer 仍取 title/display_title 做文末引用。
     sources = [
         {
@@ -234,38 +277,14 @@ async def _retrieve_via_ontology(
             "score": compacted.get("confidence", 0.8),
             "source_type": "ontology",
         }
-        for title in compacted.get("source_documents", [])[:3]
+        for title in docs[:3]
     ]
-
-    # Step 6: Web 兜底——ontology 无实体无事实时调联网搜索
-    settings = get_settings()
-    if not entities and not facts and settings.web_search.enabled:
-        writer({"phase": "web_fallback"})
-        web_result = await web_fallback_and_analyze(
-            message=message,
-            tenant_id=tenant_id,
-            runtime=runtime,
-            api_key=settings.web_search.api_key,
-            top_n=settings.web_search.top_n,
-        )
-        if web_result is not None:
-            return {
-                "retrieval_info": {
-                    "called": True,
-                    "provider": "ontology_neo4j",
-                    "vector_fallback_used": local.get("vector_fallback_used", False),
-                    "source_count": len(web_result["sources"]),
-                    "web_search_used": True,
-                },
-                "sources": web_result["sources"],
-                "skip_generation": False,
-                "ontology_context_text": web_result["ontology_context_text"],
-            }
 
     writer({
         "phase": "ontology_retrieval_complete",
         "entity_count": len(entities),
         "fact_count": len(facts),
+        "web_search_used": web_used,
     })
 
     return {
@@ -273,10 +292,10 @@ async def _retrieve_via_ontology(
             "called": True,
             "provider": "ontology_neo4j",
             "vector_fallback_used": local.get("vector_fallback_used", False),
-            "source_count": len(sources),
-            "web_search_used": False,
+            "source_count": len(sources) + len(web_sources),
+            "web_search_used": web_used,
         },
-        "sources": sources,
+        "sources": sources + web_sources,
         "skip_generation": False,
         "ontology_context_text": ontology_context_text,
     }

@@ -23,15 +23,21 @@ async def web_fallback_and_analyze(
     runtime: Runtime,
     api_key: str,
     top_n: int = 5,
+    search_query: str | None = None,
+    context_message: str | None = None,
 ) -> dict | None:
     """调 Bocha 搜索 + LLM 分析，返回拼好 analysis 的 context dict。
 
     Args:
-        message: 用户问题，作为搜索 query。
+        message: 用户问题（默认搜索词与分析上下文的兜底）。
         tenant_id: 租户 ID（用于解析 web_analysis prompt）。
         runtime: LangGraph runtime，需 context 含 chat_model。
         api_key: Bocha API key，为空则跳过。
         top_n: 搜索结果数。
+        search_query: 传给 Bocha 的查询词；缺省退回 message。
+            部分命中缺口补全用「{实体} 产品 功能 介绍」定向搜索。
+        context_message: 喂给分析 LLM 的用户问题；缺省退回 message，
+            让分析保留原句意图（如「哪个适合中小企业」）。
 
     Returns:
         {"ontology_context_text": str, "sources": list, "web_used": True} 或 None
@@ -40,9 +46,9 @@ async def web_fallback_and_analyze(
     if not api_key:
         return None
 
-    web_result = await bocha_search(query=message, api_key=api_key, top_n=top_n)
+    web_result = await bocha_search(query=search_query or message, api_key=api_key, top_n=top_n)
     if not web_result.success or not web_result.sources:
-        logger.info("Web fallback: no sources for query=%s", message[:80])
+        logger.info("Web fallback: no sources for query=%s", (search_query or message)[:80])
         return None
 
     # 拼搜索结果文本供 LLM 分析
@@ -62,7 +68,10 @@ async def web_fallback_and_analyze(
         from sales_agent.prompts.web_analysis_prompt import WEB_ANALYSIS_PROMPT
         template = WEB_ANALYSIS_PROMPT
 
-    rendered = template.format(search_results=search_text)
+    rendered = template.format(
+        search_results=search_text,
+        user_question=context_message or message,
+    )
 
     chat_model = runtime.context.get("chat_model")
     analysis_text = ""

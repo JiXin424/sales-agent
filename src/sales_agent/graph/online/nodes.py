@@ -1857,12 +1857,51 @@ async def direct_evidence_routing_node(
     if not message or (not override and not chat_model):
         return {}
 
+    # Load recent conversation context so the evidence router can
+    # disambiguate short follow-up messages (e.g. "需要" in response to
+    # the assistant's previous offer to calculate costs).  On the
+    # direct_chat path topic_id is never set (context_resolution is
+    # bypassed), so we query by conversation_id only.
+    recent_context: str | None = None
+    conv_id = state.get("conversation_id", "")
+    if db is not None and conv_id:
+        try:
+            from sqlalchemy import select
+            from sales_agent.models.conversation import ConversationMessage
+
+            conditions = [
+                ConversationMessage.conversation_id == conv_id,
+                ConversationMessage.tenant_id == (state.get("tenant_id", "")),
+                ConversationMessage.role.in_(["user", "assistant"]),
+            ]
+            stmt = (
+                select(ConversationMessage)
+                .where(*conditions)
+                .order_by(ConversationMessage.created_at.desc())
+                .limit(4)
+            )
+            result = await db.execute(stmt)
+            rows = list(reversed(result.scalars().all()))
+
+            if rows:
+                lines = ["## 最近对话上下文"]
+                for m in rows:
+                    label = "用户" if m.role == "user" else "助手"
+                    lines.append(f"{label}: {m.content}")
+                recent_context = "\n".join(lines)
+        except Exception:
+            logger.warning(
+                "Failed to load recent context for direct evidence routing",
+                exc_info=True,
+            )
+
     decision = await evidence_router_fn(
         standalone_query=message,
         chat_model=chat_model,
         db=db,
         tenant_id=tenant_id,
         agent_id=agent_id,
+        recent_context=recent_context,
     )
 
     needs_retrieval = decision.knowledge_policy in ("required", "optional", "web")

@@ -268,3 +268,51 @@ class TestRouteIntentEvidence:
         result = apply_evidence_policy_guard("我很焦虑", decision)
         assert result.knowledge_policy == "none"
         assert result.response_mode == "direct"
+
+    # --- recent_context 参数测试 ---
+
+    @pytest.mark.asyncio
+    async def test_recent_context_included_in_llm_call(self):
+        """recent_context 应出现在发送给 LLM 的用户消息中。"""
+        fake = _FakeChatModel(
+            '{"intent":"knowledge_qa","response_mode":"retrieve",'
+            '"knowledge_policy":"required","knowledge_scope":["产品"],'
+            '"retrieval_query":"全品B和全品C成本对比","confidence":0.9,"reason_code":"follow_up"}'
+        )
+        await route_intent_evidence(
+            standalone_query="需要",
+            chat_model=fake,
+            recent_context=(
+                "## 最近对话上下文\n"
+                "用户: 全品C有电影吗\n"
+                "助手: 全品C没有电影...需要我帮你算一下全品B和全品C+电影卡的成本对比吗？"
+            ),
+        )
+        assert fake.received_messages is not None
+        assert len(fake.received_messages) == 2  # system + user
+        user_msg = fake.received_messages[1]["content"]
+        assert "最近对话上下文" in user_msg
+        assert "全品C有电影吗" in user_msg
+        assert "用户消息：需要" in user_msg
+
+    @pytest.mark.asyncio
+    async def test_recent_context_optional_and_backward_compatible(self):
+        """不传 recent_context 不报错，行为不变。"""
+        decision = await route_intent_evidence(
+            standalone_query="你好",
+            chat_model=_FakeChatModel(
+                '{"intent":"emotional_support","response_mode":"direct",'
+                '"knowledge_policy":"none","knowledge_scope":[],'
+                '"retrieval_query":null,"confidence":0.9,"reason_code":"greeting"}'
+            ),
+        )
+        assert decision.intent == "emotional_support"
+        assert decision.knowledge_policy == "none"
+
+    def test_recent_context_signature(self):
+        """验证 route_intent_evidence 接受 recent_context 参数且默认为 None。"""
+        import inspect
+        sig = inspect.signature(route_intent_evidence)
+        assert "recent_context" in sig.parameters
+        param = sig.parameters["recent_context"]
+        assert param.default is None

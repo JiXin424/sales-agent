@@ -104,6 +104,7 @@ async def route_intent_evidence(
     db: AsyncSession | None = None,
     tenant_id: str | None = None,
     agent_id: str | None = None,
+    recent_context: str | None = None,
 ) -> EvidenceDecision:
     """路由意图与证据策略。
 
@@ -124,6 +125,9 @@ async def route_intent_evidence(
         （运营后台编辑生效），否则回退到模块常量 :data:`EVIDENCE_ROUTER_PROMPT`。
     tenant_id, agent_id :
         租户 / Agent 标识，用于 PromptRegistry 解析。
+    recent_context :
+        最近对话上下文（可选）。提供时作为用户消息前缀，
+        帮助 LLM 对简短跟进消息进行准确的意图分类。
 
     Returns
     -------
@@ -137,7 +141,10 @@ async def route_intent_evidence(
         agent_id,
         default=EVIDENCE_ROUTER_PROMPT,
     )
-    user_content = f"用户消息：{standalone_query}\n"
+    if recent_context:
+        user_content = f"{recent_context}\n\n用户消息：{standalone_query}\n"
+    else:
+        user_content = f"用户消息：{standalone_query}\n"
     if stable_identity:
         user_content += f"\n用户身份：{stable_identity.get('name', '未知')}\n"
 

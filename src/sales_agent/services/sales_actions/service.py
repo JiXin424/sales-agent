@@ -445,6 +445,8 @@ class SalesActionService:
             missing_fields=[f for f in new.missing_fields if f not in old.missing_fields] or old.missing_fields,
             needs_clarification=new.needs_clarification,
             clarification_question=new.clarification_question,
+            success_criteria=old.success_criteria or new.success_criteria,
+            pursuit_goal=old.pursuit_goal or new.pursuit_goal,
         )
 
     # ------------------------------------------------------------------

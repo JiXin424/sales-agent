@@ -273,6 +273,9 @@ async def _deliver_single(repo: SalesActionRepository, sender, reminder) -> bool
         out_track_id = await sender.send_markdown_card(
             scope.dingtalk_user_id, card.title, md
         )
+        # 关闭流式卡片的"生成中/加载中"指示器并定格内容：该卡片模板是 AI 流式
+        # 卡片(callbackType=STREAM),只 createAndDeliver 不发结束帧会一直转圈。
+        await sender.streaming_finalize(out_track_id, md)
         await repo.record_delivery_success(
             scope,
             reminder_id=reminder.id,
@@ -324,6 +327,8 @@ async def _deliver_digest(repo: SalesActionRepository, sender, reminder) -> bool
         title = "晚间小结"
     try:
         out_track_id = await sender.send_markdown_card(dingtalk_user_id, title, md)
+        # 关闭流式卡片的"生成中/加载中"指示器并定格内容（同 _deliver_single）。
+        await sender.streaming_finalize(out_track_id, md)
         await repo.record_delivery_success(
             scope,
             reminder_id=reminder.id,

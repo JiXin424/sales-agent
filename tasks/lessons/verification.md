@@ -61,3 +61,8 @@
 - **教训**:澄清流程把上一轮半成品存进 checkpoint `pending_partial`,下一轮 `_merge_partial(old,new)` 补全。`missing_fields=[f for f in new.missing_fields if f not in old.missing_fields] or old.missing_fields` 里的 `or old` 兜底:当本轮已补全(new.missing_fields=[])时列表推导为空 → 回退把**旧的 missing 复活**。于是一旦某轮把 `["title"]` 塞进 pending_partial,之后每轮即使 title 已抽对(title='测试'),`validate` 仍因 `"title" in missing_fields` 判 `missing_title`,用户「他总是解析不出来我要做的事儿」。同理 `scheduled_at=old or new` 会让旧的过期时间赢 → past_time。真实模型复现证明抽取本身正确,锅在合并。修复:①missing_fields 改为「两轮报缺并集 − 合并后已填字段」,与实际值一致;②`_extract_with_merge` 里本轮若已是完整显式建提醒(title+时间+explicit、无需澄清)则**旁路合并**直接采用并丢弃旧 partial——完整新请求不该被陈旧空标题/过期时间污染(澄清答复如「明天3点」缺标题,不触发旁路,仍正常补全)。
 - **检查**:合并/兜底逻辑里的 `newval or oldval`、`filtered or fallback` 要问「新值合法地为空时会不会错误复活旧值」。跨会话/跨轮累积的状态(checkpoint 半成品)要能被一条自足的新输入清零,别让陈旧状态永久污染。此类 bug 需有历史状态才复现,无状态单测/复现会假通过。
 - **相关**:#50 #38
+
+## #52 钉钉流式卡片必须发 streaming_finalize 才定格;「投递 success」≠「用户看到内容」
+- **教训**:销售动作提醒到点、DB `deliveries.status=success`、拿到 `card_instance_id`,但钉钉卡片一直"加载中"不出内容。根因:卡片模板是钉钉 AI 流式卡片(`createAndDeliver` 带 `callbackType=STREAM`),创建后处于"生成中"态,必须再发 `streaming_finalize`(isFinalize=true)关闭指示器并定格内容。普通聊天回复正常,是因为走了 `send_markdown_card → streaming_update → streaming_finalize` 三步;而 scheduler 一次性推送只 `send_markdown_card`、没 finalize,故永远转圈。DB 记成功是因为 `createAndDeliver` 本身返回成功——**「投递成功」只证明卡片 API 接受了,不证明用户看到了内容**。修复:一次性卡片推送在创建后补 `streaming_finalize`(内容/outTrackId 与创建一致),模式同 `stream_client.py` 的"创建后立即 finalize"兜底。
+- **检查**:凡用钉钉流式/AI 卡片(`callbackType=STREAM`),不管流式聊天还是一次性推送,都要以 `streaming_finalize` 收尾。别把"API 返回 success / DB 记 success"当成"用户看到了内容"——卡片/UI 的渲染态要真机看,成功码只到"接受"层。
+- **相关**:#4 #49

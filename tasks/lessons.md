@@ -71,3 +71,4 @@
 - #49 「答应了但没发生」先判功能路径 vs 幻觉:核对出站文案是否命中该功能硬编码模板(如 `已创建提醒：…`),命中=走了功能路径、未命中=落普通 chat 模型幻觉承诺一个门控关/未接通的能力。根因常是 prompt 迁 YAML 落下+调用点缺 import+调用在 try 外击穿降级契约(#38 同类)。门控功能修复用暗启动(休眠代码全铺零行为变化)+金丝雀(单租户 env 开关先端到端验)  `[verify]`
 - #50 给 LLM 的「当前时间」必须与 prompt 声明时区一致:容器默认 UTC + prompt 写 Asia/Shanghai → LLM 把相对时间(「1分钟后」)按 +08:00 输出同钟点数,换算回 UTC 早 8h → 被判 past_time 拒建。构造抽取消息时 now.astimezone(声明时区) 再写入,tz-aware 比较才对(timestamptz 存储天然安全)  `[verify]`
 - #51 跨轮合并的 `field=[...] or old.field` 兜底会复活旧值(new 补全后列表为空即回退旧),checkpoint 半成品一旦中毒每轮都失败(title 已给仍判 missing_title)。合并后字段按**合并后实际值**重算;且一条本身完整的新请求不该与陈旧半成品合并,直接旁路(否则旧的过期时间/空标题反污染完整请求)  `[verify]`
+- #52 钉钉 AI 流式卡片(createAndDeliver callbackType=STREAM)创建后必须发 streaming_finalize 结束帧(isFinalize=true)才关闭"生成中"、定格内容,否则永远"加载中"不出内容;一次性推送(提醒/digest)也要 finalize,别只照搬聊天流的 create。DB deliveries.status=success ≠ 用户看到内容(createAndDeliver 本身返回成功即算投递成功),渲染态必须真机看  `[verify]`

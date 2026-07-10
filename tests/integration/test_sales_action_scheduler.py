@@ -48,6 +48,7 @@ class FakeSender:
     def __init__(self, *, fail: bool = False):
         self.sends: list[tuple[str, str, str, str]] = []  # (user, title, md, out_track_id)
         self.updates: list[tuple[str, str]] = []
+        self.finalizes: list[tuple[str, str]] = []  # (out_track_id, content)
         self._fail = fail
         self._n = 0
 
@@ -58,6 +59,10 @@ class FakeSender:
         out = f"fake_out_{self._n}"
         self.sends.append((dingtalk_user_id, title, markdown_text, out))
         return out
+
+    async def streaming_finalize(self, out_track_id, content, *, key="content"):
+        # 关闭流式卡片"生成中"指示器；缺此帧卡片会一直"加载中"
+        self.finalizes.append((out_track_id, content))
 
     async def update_card(self, out_track_id, markdown_text):
         self.updates.append((out_track_id, markdown_text))
@@ -182,6 +187,9 @@ async def test_due_reminder_delivered_once(session_factory):
     assert "张总" in md
     assert title  # non-empty card title
     assert result.delivered == 1
+    # 必须发流式结束帧关闭"生成中/加载中",且内容/outTrackId 与创建一致，
+    # 否则钉钉卡片会一直转圈不出内容（回归守护）。
+    assert sender.finalizes == [(out, md)]
     assert result.failed == 0
 
     # reminder flipped to delivered, delivery row recorded with card_instance_id

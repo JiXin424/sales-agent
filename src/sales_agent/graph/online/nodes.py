@@ -873,6 +873,14 @@ async def sales_action_command_node(
     # routes back here and can merge the user's follow-up answer.
     pending = result.reason_code if result.operation == "clarify" else None
     pending_partial = result.pending_partial if result.operation == "clarify" else None
+
+    # When completing an action with pursuit_loop_enabled, set
+    # pending_observe_action_id so the next user message routes to
+    # sales_action_observe_node to capture the outcome.
+    observe_pending: str | None = None
+    if result.operation == "complete" and state.get("pursuit_loop_enabled") and result.action_id:
+        observe_pending = result.action_id
+
     return {
         "answer_dict": {
             "summary": result.response_text,
@@ -888,6 +896,7 @@ async def sales_action_command_node(
         "sales_action_reason_code": result.reason_code,
         "sales_action_pending_clarification": pending,
         "sales_action_pending_partial": pending_partial,
+        "pending_observe_action_id": observe_pending,
         "last_event_id": state.get("event_id"),
     }
 

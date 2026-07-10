@@ -206,6 +206,8 @@ class SalesActionService:
             source_kind="explicit_user",
             context_snapshot={"message": message},
             agent_advice="",
+            success_criteria=decision.success_criteria,
+            pursuit_goal=decision.pursuit_goal,
         )
         self._discard_pending(scope, conversation_id)
         return SalesActionOperationResult(

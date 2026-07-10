@@ -59,18 +59,8 @@ async def extract_terms_node(state: dict, runtime: Runtime) -> dict:
     # 解析 ontology_term_extractor prompt：runtime.context.get("db") 由生产入口
     # （dingtalk/graph_stream.py:122 / online_conversation.py:228-233）注入；
     # tenant_id/agent_id 直接从 state 取。db/ids 缺失时回退到模块常量。
-    from sales_agent.services.prompt_resolver_helper import resolve_knowledge_prompt
-    db = runtime.context.get("db")
-    tenant_id = state.get("tenant_id")
-    agent_id = state.get("agent_id")
-    prompt = await resolve_knowledge_prompt(
-        db,
-        "ontology_term_extractor",
-        tenant_id,
-        agent_id,
-        default=_ENTITY_EXTRACTION_PROMPT,
-        question=question,
-    )
+    from sales_agent.llm.prompt_loader import get_prompt as _get_prompt
+    prompt = _get_prompt("knowledge", "ontology_term_extractor").template.format(question=question)
 
     try:
         p = get_call_params("ontology_graph")

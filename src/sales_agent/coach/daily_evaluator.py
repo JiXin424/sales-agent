@@ -589,13 +589,10 @@ class DailyEvaluationService:
         system_msg = "你是销售能力评估引擎，只输出 JSON。"
         if tenant_id:
             try:
-                from sales_agent.services.prompt_registry import PromptRegistry
+                from sales_agent.llm.prompt_loader import get_prompt
 
-                reg = PromptRegistry(self.db)
-                user_tpl = await reg.resolve_prompt("coach", "coach_daily_eval", tenant_id, agent_id)
-                sys_tpl = await reg.resolve_prompt("coach", "coach_daily_eval_system", tenant_id, agent_id)
-                user_prompt = user_tpl.format(conversation_block=conversation_block)
-                system_msg = sys_tpl
+                user_prompt = get_prompt("coach", "coach_daily_eval").template.format(conversation_block=conversation_block)
+                system_msg = get_prompt("coach", "coach_daily_eval_system").template
             except Exception as e:  # noqa: BLE001
                 logger.warning("Coach daily_eval prompt resolve failed, fallback to builtin: %s", e)
         messages = [

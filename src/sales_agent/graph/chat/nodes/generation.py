@@ -17,7 +17,7 @@ from langgraph.runtime import Runtime
 
 from sales_agent.graph.chat.state import ChatGraphState
 from sales_agent.services.agent_executor import execute_agent
-from sales_agent.services.prompt_resolver_helper import resolve_execution_prompts
+from sales_agent.llm.prompt_loader import get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -83,17 +83,11 @@ async def generate_node(state: ChatGraphState, runtime: Runtime) -> dict:
     prompt_text: str | None = state.get("prompt_text")
     system_prompt_text: str | None = state.get("system_prompt_text")
 
-    if db is not None:
-        try:
-            resolved_prompt, resolved_system = await resolve_execution_prompts(
-                db, agent_id, tenant_id, task_type,
-            )
-            if resolved_prompt:
-                prompt_text = resolved_prompt
-            if resolved_system:
-                system_prompt_text = resolved_system
-        except Exception:
-            logger.warning("Prompt resolution failed, using state-level prompts", exc_info=True)
+    try:
+        prompt_text = get_prompt("task", task_type).template
+        system_prompt_text = get_prompt("system", "system_constraint").template
+    except Exception:
+        logger.warning("Prompt resolution failed, using state-level prompts", exc_info=True)
 
     message = state["message"]
     history_messages = state.get("history_messages", [])

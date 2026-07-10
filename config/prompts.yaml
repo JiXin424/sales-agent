@@ -886,6 +886,7 @@ web:
     description: 联网搜索结果分析
     placeholders:
     - search_results
+    - user_question
     template: '你是网络信息分析专家。你处理的是互联网公开搜索结果。
 
 

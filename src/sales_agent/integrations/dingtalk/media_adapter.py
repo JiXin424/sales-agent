@@ -17,6 +17,7 @@ from openai import AsyncOpenAI
 
 from sales_agent.integrations.dingtalk.config import DingTalkConfig
 from sales_agent.llm.call_params import get_call_params
+from sales_agent.llm.prompt_loader import get_prompt
 from sales_agent.integrations.dingtalk.message_sender import DingTalkAccessTokenManager
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ _RECOGNITION_TEXT_KEYS = {
     "transcription",
 }
 
-# --- 模块级 prompt 常量（注册进 BUILTIN_PROMPTS，获得 DB 覆盖路径） ---
+# --- 模块级 prompt 常量（保留供 prompt_defaults.py 引用；内容已迁移至 config/prompts.yaml） ---
 MEDIA_VISION_SYSTEM_PROMPT = (
     "你是销售陪跑助手的图片理解模块。请用中文简洁描述图片中的文字、场景、"
     "客户意图和对销售回复有用的信息，不要编造看不到的内容。"
@@ -167,12 +168,12 @@ class DingTalkMediaAdapter:
             messages=[
                 {
                     "role": "system",
-                    "content": MEDIA_VISION_SYSTEM_PROMPT,
+                    "content": get_prompt("system", "media_vision_system").template,
                 },
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": MEDIA_VISION_USER_PROMPT},
+                        {"type": "text", "text": get_prompt("task", "media_vision_user").template},
                         {"type": "image_url", "image_url": {"url": data_url}},
                     ],
                 },
@@ -213,7 +214,7 @@ class DingTalkMediaAdapter:
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": MEDIA_AUDIO_TRANSCRIBE_PROMPT},
+                        {"type": "text", "text": get_prompt("task", "media_audio_transcribe").template},
                         {"type": "input_audio", "input_audio": {"data": audio_b64, "format": audio_format}},
                     ],
                 }

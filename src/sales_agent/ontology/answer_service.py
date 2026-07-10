@@ -261,13 +261,8 @@ class OntologyAnswerService:
                 生效）；DB 未配置时回退到内置 :data:`ONTOLOGY_RESPONSE_PROMPT`。
         """
         if prompt_text is None:
-            from sales_agent.services.prompt_resolver_helper import resolve_knowledge_prompt
-            prompt_text = await resolve_knowledge_prompt(
-                self.db,
-                "ontology_response",
-                self.tenant_id,
-                self.agent_id,
-                default=ONTOLOGY_RESPONSE_PROMPT,
+            from sales_agent.llm.prompt_loader import get_prompt as _get_prompt
+            prompt_text = _get_prompt("knowledge", "ontology_response").template.format(
                 graph_json=json.dumps(
                     _compact_evidence(graph_evidence, question=message),
                     ensure_ascii=False,

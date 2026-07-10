@@ -55,19 +55,9 @@ async def web_fallback_and_analyze(
     # 拼搜索结果文本供 LLM 分析
     search_text = web_search_sources_to_context(web_result)
 
-    # 解析 web_analysis prompt（三级回退：DB active → 内置默认）
-    from sales_agent.services.prompt_registry import PromptRegistry
-    db = runtime.context.get("db")
-    template = None
-    if db is not None:
-        registry = PromptRegistry(db)
-        try:
-            template = await registry.resolve_prompt("web", "web_analysis", tenant_id)
-        except ValueError:
-            template = None
-    if template is None:
-        from sales_agent.prompts.web_analysis_prompt import WEB_ANALYSIS_PROMPT
-        template = WEB_ANALYSIS_PROMPT
+    # 解析 web_analysis prompt（YAML 全局加载）
+    from sales_agent.llm.prompt_loader import get_prompt
+    template = get_prompt("web", "web_analysis").template
 
     rendered = template.format(
         search_results=search_text,

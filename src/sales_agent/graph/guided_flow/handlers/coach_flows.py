@@ -377,7 +377,7 @@ _ADVANCERS = {
 # ============================================================
 
 from sales_agent.graph.guided_flow.types import FlowAdvance, FlowServices, FlowStart
-from sales_agent.services.prompt_resolver_helper import resolve_quick_session_prompts
+from sales_agent.llm.prompt_loader import get_prompt
 
 
 def start_small_win() -> FlowStart:
@@ -392,10 +392,16 @@ async def advance_small_win(
     services: FlowServices,
 ) -> FlowAdvance:
     prompts: dict[str, str] = {}
-    if services.db is not None:
-        prompts = await resolve_quick_session_prompts(
-            services.db, services.tenant_id, services.agent_id
-        )
+    try:
+        prompts = {
+            "sw_system": get_prompt("coach", "coach_sw_system").template,
+            "sw_card": get_prompt("coach", "coach_sw_card").template,
+            "sb_system": get_prompt("coach", "coach_sb_system").template,
+            "sb_split": get_prompt("coach", "coach_sb_split").template,
+            "sb_card": get_prompt("coach", "coach_sb_card").template,
+        }
+    except Exception:
+        logger.warning("Coach prompts resolution failed", exc_info=True)
     next_stage, next_payload, reply, completed = await _sw_advance(
         services.chat_model, stage, payload, text, prompts
     )
@@ -414,10 +420,16 @@ async def advance_sales_block(
     services: FlowServices,
 ) -> FlowAdvance:
     prompts: dict[str, str] = {}
-    if services.db is not None:
-        prompts = await resolve_quick_session_prompts(
-            services.db, services.tenant_id, services.agent_id
-        )
+    try:
+        prompts = {
+            "sw_system": get_prompt("coach", "coach_sw_system").template,
+            "sw_card": get_prompt("coach", "coach_sw_card").template,
+            "sb_system": get_prompt("coach", "coach_sb_system").template,
+            "sb_split": get_prompt("coach", "coach_sb_split").template,
+            "sb_card": get_prompt("coach", "coach_sb_card").template,
+        }
+    except Exception:
+        logger.warning("Coach prompts resolution failed", exc_info=True)
     next_stage, next_payload, reply, completed = await _sb_advance(
         services.chat_model, stage, payload, text, prompts
     )

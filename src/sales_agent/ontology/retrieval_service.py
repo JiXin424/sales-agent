@@ -56,15 +56,8 @@ class OntologyRetrievalService:
             logger.info("Ontology entity extraction: no chat_model, using raw question as search term")
             return [question]
 
-        from sales_agent.services.prompt_resolver_helper import resolve_knowledge_prompt
-        prompt = await resolve_knowledge_prompt(
-            self.db,
-            "ontology_term_extractor",
-            self.tenant_id,
-            self.agent_id,
-            default=_ENTITY_EXTRACTION_PROMPT,
-            question=question,
-        )
+        from sales_agent.llm.prompt_loader import get_prompt as _get_prompt
+        prompt = _get_prompt("knowledge", "ontology_term_extractor").template.format(question=question)
         try:
             p = get_call_params("ontology_retrieval")
             raw = await self.chat_model.generate(

@@ -402,16 +402,9 @@ async def ontology_query(agent_id: str, req: OntologyQueryRequest, db: DbSession
     agent = await _load_agent_or_404(agent_id, db)
     client, retrieval, answer_service = await _build_explorer_services(agent, db)
     try:
-        # 预解析 ontology_response 模板（generate_answer / _build_full_context 共用）
-        from sales_agent.ontology.answer_service import ONTOLOGY_RESPONSE_PROMPT
-        from sales_agent.services.prompt_resolver_helper import resolve_knowledge_prompt
-        response_template = await resolve_knowledge_prompt(
-            db,
-            "ontology_response",
-            agent.tenant_id,
-            agent.id,
-            default=ONTOLOGY_RESPONSE_PROMPT,
-        )
+        # 预解析 ontology_response 模板（YAML 全局加载）
+        from sales_agent.llm.prompt_loader import get_prompt
+        response_template = get_prompt("knowledge", "ontology_response").template
         evidence = await retrieval.retrieve(
             tenant_id=agent.tenant_id, agent_id=agent.id, question=req.query
         )
@@ -448,16 +441,9 @@ async def ontology_query_stream(agent_id: str, req: OntologyQueryRequest, db: Db
 
     async def _stream():
         try:
-            # 预解析 ontology_response 模板（generate_answer / _build_full_context 共用）
-            from sales_agent.ontology.answer_service import ONTOLOGY_RESPONSE_PROMPT
-            from sales_agent.services.prompt_resolver_helper import resolve_knowledge_prompt
-            response_template = await resolve_knowledge_prompt(
-                db,
-                "ontology_response",
-                agent.tenant_id,
-                agent.id,
-                default=ONTOLOGY_RESPONSE_PROMPT,
-            )
+            # 预解析 ontology_response 模板（YAML 全局加载）
+            from sales_agent.llm.prompt_loader import get_prompt
+            response_template = get_prompt("knowledge", "ontology_response").template
             yield _step(1, "检索知识图谱…", "processing")
             evidence = await retrieval.retrieve(
                 tenant_id=agent.tenant_id, agent_id=agent.id, question=req.query

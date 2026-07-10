@@ -94,11 +94,8 @@ async def risk_check_node(state: ChatGraphState, runtime: Runtime) -> dict:
         and result.action != "block"
     ):
         try:
-            from sales_agent.services.prompt_resolver_helper import resolve_risk_prompt
-
-            risk_prompt = None
-            if db is not None and tenant_id:
-                risk_prompt = await resolve_risk_prompt(db, tenant_id, agent_id)
+            from sales_agent.llm.prompt_loader import get_prompt as _get_prompt
+            risk_prompt = _get_prompt("risk", "risk_check").template
             llm_risk = await checker.check_llm_risk(
                 message=message,
                 answer_text=answer_text,

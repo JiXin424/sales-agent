@@ -245,6 +245,8 @@ class SalesActionsConfig(BaseModel):
     default_snooze_minutes: int = 30
     expire_after_days: int = 7
     llm_confidence_threshold: float = 0.75
+    # New — gates the Plan→Observe→Replan loop below the existing sales_actions.enabled
+    pursuit_loop_enabled: bool = False
 
 
 class Settings(BaseModel):

@@ -60,6 +60,18 @@ def route_after_scenario(state: OnlineConversationState) -> str:
     return "chat"
 
 
+def route_after_observe(state: OnlineConversationState) -> str:
+    """Route after ``sales_action_observe_node``.
+
+    - ``"observe_end"`` -> END -- outcome was captured or skipped.
+    - ``"resume_chat"`` -> context_resolution -- the node fell through without
+      capturing an outcome (missing card, early-exit, etc.).
+    """
+    if state.get("sales_action_operation") == "observe":
+        return "observe_end"
+    return "resume_chat"
+
+
 def route_after_sales_action(state: OnlineConversationState) -> str:
     """Return the next node after ``sales_action_command_node``.
 

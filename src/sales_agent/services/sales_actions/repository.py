@@ -730,6 +730,48 @@ class SalesActionRepository:
             )
         ).scalar_one_or_none()
 
+    async def get_card(
+        self,
+        scope: SalesActionScope,
+        action_id: str,
+    ) -> SalesActionCard | None:
+        """Get a single action card by scoped ID (read-only)."""
+        return await self._get_scoped_card(scope, action_id)
+
+    # ------------------------------------------------------------------
+    # observe
+    # ------------------------------------------------------------------
+
+    async def write_outcome(
+        self,
+        scope: SalesActionScope,
+        action_id: str,
+        *,
+        outcome_tag: str,
+        outcome_note: str,
+        met_signal: bool,
+        event_id: str | None = None,
+    ) -> ActionStateResult:
+        """Write Observe result to a card. Idempotent: no-op if already written."""
+        card = await self._get_scoped_card(scope, action_id, for_update=True)
+        if card is None:
+            return ActionStateResult(action_id=action_id, status="not_found", reason_code="action_not_found")
+        if card.outcome_tag is not None:
+            return ActionStateResult(
+                action_id=action_id, status="already_observed", reason_code="outcome_already_captured"
+            )
+        card.outcome_tag = outcome_tag
+        card.outcome_note = outcome_note
+        card.outcome_met_signal = met_signal
+        card.outcome_captured_at = datetime.now(timezone.utc)
+        self.db.add(self._event(
+            scope, action_id=action_id,
+            event_type="action_observed",
+            payload={"event_id": event_id, "outcome_tag": outcome_tag, "met_signal": met_signal} if event_id else {"outcome_tag": outcome_tag},
+        ))
+        await self.db.flush()
+        return ActionStateResult(action_id=action_id, status="observed", reason_code="outcome_captured")
+
     async def get_card_for_reminder(
         self, reminder: SalesActionReminder
     ) -> SalesActionCard | None:

@@ -14,7 +14,11 @@ from datetime import datetime
 from typing import Any
 
 from sales_agent.prompts.sales_action_extractor_prompt import SALES_ACTION_EXTRACTOR_PROMPT
-from sales_agent.services.sales_actions.contracts import SalesActionExtraction
+from sales_agent.services.sales_actions.contracts import (
+    OUTCOME_TAGS,
+    OutcomeExtraction,
+    SalesActionExtraction,
+)
 from sales_agent.services.structured_router_output import parse_model_json
 
 logger = logging.getLogger(__name__)
@@ -93,3 +97,97 @@ async def parse_sales_action_request(
             "(message=%r)", message
         )
         return _low_confidence_none(timezone)
+
+
+OBSERVE_EXTRACTOR_PROMPT = """
+你是一个销售结果分类器。根据用户的回复和动作的预期成功信号，分类动作结果。
+
+分类标签（outcome_tag）：
+- achieved: 用户明确达成目标（如"约到了""他已经确认了"）
+- partial: 有推进但未完全达成（如"他回了消息但没给时间"）
+- new_obstacle: 出现新障碍/异议（如"他说预算冻结""他们换技术负责人了"）
+- no_response: 用户没给出结果信息（如"好的""知道了"）
+
+返回 JSON: {"outcome_tag": "<标签>", "outcome_note": "语义摘要", "met_signal": true/false, "confidence": 0.0-1.0}
+"""
+
+
+def _fallback_outcome(reply: str, *, confidence: float = 0.3) -> OutcomeExtraction:
+    """Keyword-heuristic fallback when LLM parse fails."""
+    positive = any(w in reply for w in ["约到", "确认", "完成", "搞定", "可以", "没问题", "同意了"])
+    obstacle = any(w in reply for w in ["预算", "冻结", "异议", "换人", "不接", "拒绝", "暂停", "再说"])
+    partial = any(w in reply for w in ["回复", "消息", "微信", "问了", "还没", "等"])
+
+    if obstacle:
+        tag = "new_obstacle"
+    elif positive:
+        tag = "achieved"
+    elif partial:
+        tag = "partial"
+    else:
+        tag = "no_response"
+
+    return OutcomeExtraction(
+        outcome_tag=tag,
+        outcome_note=reply[:256],
+        met_signal=(tag == "achieved"),
+        confidence=confidence,
+        parse_failed=True,
+    )
+
+
+async def parse_observe_outcome(
+    reply: str,
+    success_criteria: str,
+    chat_model: Any,
+) -> OutcomeExtraction:
+    """Parse a user's reply into a structured outcome against the given success_criteria.
+
+    Retries once on parse failure; falls back to keyword-heuristic on both-fail.
+    """
+    import json
+    import re
+    from json_repair import repair_json
+
+    messages = [
+        {"role": "system", "content": OBSERVE_EXTRACTOR_PROMPT},
+        {"role": "user", "content": (
+            f"成功信号：{success_criteria}\n"
+            f"用户回复：{reply}\n"
+            f"请分类此动作结果。"
+        )},
+    ]
+
+    for attempt in range(2):
+        try:
+            raw = await chat_model.generate(
+                messages=messages,
+                response_format={"type": "json_object"},
+                max_tokens=300,
+                temperature=0.0,
+            )
+            # Parse JSON using the same codec as parse_model_json but without
+            # requiring a full Pydantic schema (we validate fields manually).
+            text = raw.strip()
+            fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
+            if fenced:
+                text = fenced.group(1)
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                data = repair_json(text, return_objects=True)
+
+            if (
+                isinstance(data, dict)
+                and data.get("outcome_tag") in OUTCOME_TAGS
+            ):
+                return OutcomeExtraction(
+                    outcome_tag=data["outcome_tag"],
+                    outcome_note=data.get("outcome_note", reply[:256]),
+                    met_signal=data.get("met_signal", data["outcome_tag"] == "achieved"),
+                    confidence=data.get("confidence", 0.8 if attempt == 0 else 0.5),
+                )
+        except Exception:
+            continue
+
+    return _fallback_outcome(reply)

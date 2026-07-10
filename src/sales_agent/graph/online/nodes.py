@@ -100,7 +100,7 @@ from sales_agent.services.sales_actions import (
     SalesActionService,
     detect_fast_action_intent,
 )
-from sales_agent.services.sales_actions.parser import parse_sales_action_request
+from sales_agent.services.sales_actions.parser import parse_observe_outcome, parse_sales_action_request
 from sales_agent.services.sales_actions.time_parser import validate_action_extraction
 
 logger = logging.getLogger(__name__)
@@ -173,7 +173,10 @@ def normalize_turn_node(state: OnlineConversationState) -> dict[str, Any]:
        sales-action node (Task 4).
     9. **Explicit sales-action command** — ``detect_fast_action_intent`` matches
        (create/complete/cancel/snooze/list) (Task 4).
-    10. **Chat** — default.
+    10. **Pending observe** — ``pursuit_loop_enabled`` & ``pending_observe_action_id``
+        is set from a prior turn where an action was completed without outcome.
+        Routes to :func:`sales_action_observe_node` (Task 4).
+    11. **Chat** — default.
 
     Reset must not fire on a duplicate — a redelivered reset event is a
     no-op, not a second state clear.
@@ -215,6 +218,10 @@ def normalize_turn_node(state: OnlineConversationState) -> dict[str, Any]:
     elif state.get("sales_actions_enabled") and detect_fast_action_intent(message) != "none":
         # Explicit sales-action command (create/complete/cancel/snooze/list).
         flow_action = "sales_action"
+    elif state.get("pursuit_loop_enabled") and state.get("pending_observe_action_id"):
+        # A prior turn completed an action without outcome; route this turn to
+        # observe so the user's reply is classified as an outcome.
+        flow_action = "sales_action_observe"
     else:
         flow_action = "chat"
 
@@ -943,6 +950,75 @@ async def sales_action_suggestion_node(
             "success_criteria": decision.success_criteria,
             "pursuit_goal": decision.pursuit_goal,
         },
+    }
+
+
+# =============================================================
+# sales_action_observe_node (Task 4)
+# =============================================================
+
+async def sales_action_observe_node(
+    state: OnlineConversationState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """Observe: capture an action's outcome from the user's reply.
+
+    Dual entry:
+    1. Inline -- action just completed and the user gave a result in the same message.
+    2. Delayed -- pending_observe_action_id was set on a prior turn; this turn's message
+       is the user's reply to the observe prompt.
+    """
+    ctx = _unpack_context(config) or {}
+    chat_model = ctx.get("chat_model")
+    if chat_model is None:
+        return {}
+
+    # Determine which action to observe
+    action_id = state.get("sales_action_id") or state.get("pending_observe_action_id")
+    if not action_id:
+        return {}
+    message = state.get("message", "").strip()
+    if not message:
+        return {}
+
+    db = ctx.get("db")
+    repo = SalesActionRepository(db)
+    scope = SalesActionScope(
+        tenant_id=state.get("tenant_id", ""),
+        agent_id=state.get("agent_id", ""),
+        user_id=state.get("user_id", ""),
+        channel=state.get("channel", "dingtalk"),
+        dingtalk_user_id=state.get("session_user_id"),
+    )
+
+    # Load the card to get its success_criteria
+    card = await repo.get_card(scope, action_id)
+    if card is None or not card.success_criteria:
+        # No success_criteria -> not a pursuit action; skip observe
+        return {"pending_observe_action_id": None}
+
+    # Parse outcome
+    extraction = await parse_observe_outcome(
+        reply=message,
+        success_criteria=card.success_criteria,
+        chat_model=chat_model,
+    )
+
+    # Write to DB
+    result = await repo.write_outcome(
+        scope, action_id,
+        outcome_tag=extraction.outcome_tag,
+        outcome_note=extraction.outcome_note,
+        met_signal=extraction.met_signal,
+        event_id=state.get("event_id"),
+    )
+
+    return {
+        "sales_action_id": action_id,
+        "pending_observe_action_id": None,
+        "sales_action_operation": "observe",
+        "sales_action_status": result.status,
+        "sales_action_reason_code": result.reason_code,
     }
 
 

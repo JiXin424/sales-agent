@@ -32,6 +32,7 @@ from __future__ import annotations
 from langgraph.graph import END, START, StateGraph
 
 from sales_agent.graph.online.edges import (
+    route_after_observe,
     route_after_scenario,
     route_after_sales_action,
     route_context_resolution,
@@ -59,6 +60,7 @@ from sales_agent.graph.online.nodes import (
     scenario_coach_node,
     reset_context_node,
     sales_action_command_node,
+    sales_action_observe_node,
     sales_action_suggestion_node,
 )
 from sales_agent.graph.online.state import OnlineConversationState
@@ -112,6 +114,7 @@ def build_online_graph() -> StateGraph:
     builder.add_node("profile_recall", profile_recall_node)
     builder.add_node("profile_transparency", profile_transparency_node)
     builder.add_node("sales_action", sales_action_command_node)
+    builder.add_node("sales_action_observe", sales_action_observe_node)
     builder.add_node("sales_action_suggestion", sales_action_suggestion_node)
 
     # ── Edges ──────────────────────────────────────────────────────
@@ -133,6 +136,7 @@ def build_online_graph() -> StateGraph:
             "direct_chat": "direct_evidence_routing",
             "scenario_coach": "scenario_coach",
             "sales_action": "sales_action",
+            "sales_action_observe": "sales_action_observe",
         },
     )
 
@@ -178,6 +182,17 @@ def build_online_graph() -> StateGraph:
         route_after_sales_action,
         {
             "sales_action_end": END,
+            "resume_chat": "context_resolution",
+        },
+    )
+
+    # From sales_action_observe: outcome captured → END; fell through →
+    # resume normal chat path.
+    builder.add_conditional_edges(
+        "sales_action_observe",
+        route_after_observe,
+        {
+            "observe_end": END,
             "resume_chat": "context_resolution",
         },
     )

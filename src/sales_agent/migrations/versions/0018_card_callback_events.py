@@ -1,7 +1,7 @@
 """Add dingtalk_card_callback_events table (card 点赞/点踩/问题反馈 raw capture).
 
-Revision ID: 0017_card_callback_events
-Revises: 0016_sales_action_cards
+Revision ID: 0018_card_callback_events
+Revises: 0017
 Create Date: 2026-07-10
 """
 
@@ -10,8 +10,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0017_card_callback_events"
-down_revision: Union[str, None] = "0016_sales_action_cards"
+revision: str = "0018_card_callback_events"
+down_revision: Union[str, None] = "0017"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

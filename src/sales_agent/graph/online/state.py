@@ -120,6 +120,17 @@ class OnlineConversationState(TypedDict, total=False):
     # reason_code mirror for the DingTalk turn result.
     sales_action_reason_code: str | None
 
+    # ── Pursuit Loop (Plan → Observe → Replan) ─────────────────────
+    # Per-turn gate (mirrors sales_actions_enabled).
+    pursuit_loop_enabled: bool
+    # Cross-turn: set after an action is completed without an inline outcome;
+    # the next turn routes to observe. NOT in TURN_SCOPED_DEFAULTS.
+    pending_observe_action_id: str | None
+    # Per-turn: output of replan_node (the suggested next action, if any).
+    replan_suggestion: dict[str, Any] | None
+    # Per-turn: list of action IDs cancelled by the replan step (for audit).
+    replan_cancelled_ids: list[str]
+
 
 __all__ = [
     "OnlineConversationState",

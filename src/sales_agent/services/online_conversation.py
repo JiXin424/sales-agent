@@ -92,6 +92,13 @@ TURN_SCOPED_DEFAULTS: dict[str, Any] = {
     "sales_action_reason_code": None,
     "suggested_sales_action": None,
     "sales_action_suggestion_enabled": False,
+    # Pursuit-loop per-turn defaults.
+    # NOTE: pending_observe_action_id is intentionally NOT listed —
+    # it must persist across turns via checkpoint (same pattern as
+    # sales_action_pending_clarification).
+    "pursuit_loop_enabled": False,
+    "replan_suggestion": None,
+    "replan_cancelled_ids": [],
 }
 
 
@@ -105,6 +112,7 @@ def build_online_turn_input(
     long_term_memory_enabled: bool = False,
     user_profile_memory_enabled: bool = False,
     sales_actions_enabled: bool = False,
+    pursuit_loop_enabled: bool = False,
 ) -> OnlineConversationState:
     return {
         **copy.deepcopy(TURN_SCOPED_DEFAULTS),
@@ -124,6 +132,7 @@ def build_online_turn_input(
         "long_term_memory_enabled": long_term_memory_enabled,
         "user_profile_memory_enabled": user_profile_memory_enabled,
         "sales_actions_enabled": sales_actions_enabled,
+        "pursuit_loop_enabled": pursuit_loop_enabled,
     }
 
 
@@ -327,6 +336,9 @@ async def prepare_online_turn(
         long_term_memory_enabled=settings.long_term_memory.enabled,
         user_profile_memory_enabled=settings.user_profile_memory.enabled,
         sales_actions_enabled=settings.sales_actions.enabled,
+        pursuit_loop_enabled=(
+            settings.sales_actions.enabled and settings.sales_actions.pursuit_loop_enabled
+        ),
     )
     return PreparedOnlineTurn(
         graph=get_online_graph(checkpointer=checkpointer),

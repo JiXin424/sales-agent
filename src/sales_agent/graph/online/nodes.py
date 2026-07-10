@@ -778,6 +778,7 @@ def _sales_action_error_state(message: str, reason_code: str) -> dict[str, Any]:
         "sales_action_status": "failed",
         "sales_action_reason_code": reason_code,
         "sales_action_pending_clarification": None,
+        "sales_action_pending_partial": None,
     }
 
 
@@ -837,6 +838,10 @@ async def sales_action_command_node(
             topic_id=state.get("topic_id"),
             source_event_id=state.get("event_id"),
             now=ctx.get("now") or datetime.now(timezone.utc),
+            # Carry the cross-turn clarification partial from checkpoint state
+            # so the service can merge the user's follow-up answer (e.g.
+            # "下午3点") against the stashed title/customer.
+            pending_partial=state.get("sales_action_pending_partial"),
         )
     except Exception:
         logger.exception("sales_action_command_node failed")
@@ -851,11 +856,14 @@ async def sales_action_command_node(
             "sales_action_status": "not_handled",
             "sales_action_reason_code": result.reason_code or "not_an_action",
             "sales_action_pending_clarification": None,
+            "sales_action_pending_partial": None,
         }
 
     # Handled as a sales action — surface the reply + metadata.
-    # On a clarify result, carry the reason so the next turn routes back here.
+    # On a clarify result, carry the reason + the partial so the next turn
+    # routes back here and can merge the user's follow-up answer.
     pending = result.reason_code if result.operation == "clarify" else None
+    pending_partial = result.pending_partial if result.operation == "clarify" else None
     return {
         "answer_dict": {
             "summary": result.response_text,
@@ -870,6 +878,7 @@ async def sales_action_command_node(
         "sales_action_scheduled_at": result.scheduled_at,
         "sales_action_reason_code": result.reason_code,
         "sales_action_pending_clarification": pending,
+        "sales_action_pending_partial": pending_partial,
         "last_event_id": state.get("event_id"),
     }
 

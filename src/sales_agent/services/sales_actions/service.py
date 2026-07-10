@@ -74,6 +74,11 @@ class SalesActionOperationResult:
     reason_code: str = ""
     # 附带的活跃任务摘要（list / suggest 时供 Task 4 渲染卡片）
     actions: list[dict[str, Any]] = field(default_factory=list)
+    # On a ``clarify`` result: the partial extraction (``SalesActionExtraction``
+    # serialized via ``model_dump()``) that the caller should persist across
+    # turns (e.g. in graph checkpoint state) so the follow-up turn can merge
+    # the user's answer against it. ``None`` on all non-clarify results.
+    pending_partial: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +113,9 @@ class SalesActionService:
         self.repo = repo
         self.chat_model = chat_model
         # 多轮澄清的半成品，按 (tenant, agent, user, conversation) 缓存。
-        # NOTE: 进程内缓存；多 worker 部署需迁移到共享存储（Task 5+ 视情况）。
+        # NOTE: 这只是同实例内的回退存储；跨轮真正传递半成品靠调用方
+        # (Online Graph checkpoint state → ``handle_message(pending_partial=)``)，
+        # 因为该节点每轮构造一个新的 service 实例，实例缓存会在第二轮丢失。
         self._pending: dict[tuple[str, str, str, str], _PendingPartial] = {}
 
     # ------------------------------------------------------------------
@@ -124,10 +131,15 @@ class SalesActionService:
         topic_id: str | None,
         source_event_id: str | None,
         now: datetime,
+        pending_partial: dict[str, Any] | None = None,
     ) -> SalesActionOperationResult:
         """理解一条用户消息并驱动销售动作状态机。
 
         这是 Task 4（Online Graph）调用本服务的唯一入口。
+
+        ``pending_partial`` 为可选的跨轮半成品抽取（上一轮 clarify 时由调用方
+        从 checkpoint 透传进来），让本轮回答（如「下午3点」）能合并到已存的
+        标题/客户上。不传则回退到实例内 ``self._pending`` 缓存。
         """
         fast = detect_fast_action_intent(message)
 
@@ -139,7 +151,7 @@ class SalesActionService:
 
         # create / suggest / clarify / none —— 需要 LLM 抽取
         extraction = await self._extract_with_merge(
-            scope, message, conversation_id, now
+            scope, message, conversation_id, now, pending_partial=pending_partial
         )
         decision = validate_action_extraction(extraction, now=now)
 
@@ -167,6 +179,7 @@ class SalesActionService:
                 status="clarify",
                 response_text=decision.response_text,
                 reason_code=decision.reason_code,
+                pending_partial=extraction.model_dump(),
             )
 
         if decision.action == "suggest":
@@ -279,6 +292,7 @@ class SalesActionService:
                 response_text="你想推迟到什么时候？",
                 reason_code="missing_time",
                 action_id=target.id,
+                pending_partial=extraction.model_dump(),
             )
         result = await self.repo.snooze_action(
             scope, target.id, event_id=source_event_id or "", new_time=new_time
@@ -377,18 +391,37 @@ class SalesActionService:
         message: str,
         conversation_id: str,
         now: datetime,
+        *,
+        pending_partial: dict[str, Any] | None = None,
     ) -> SalesActionExtraction:
-        """跑 LLM 抽取；若存在上一轮的澄清半成品，尝试合并补全。"""
+        """跑 LLM 抽取；若存在上一轮的澄清半成品，尝试合并补全。
+
+        半成品的来源优先级：调用方透传的 ``pending_partial``（checkpoint
+        真相源）→ 实例内 ``self._pending`` 缓存（同实例回退）。
+        """
         extraction = await parse_sales_action_request(
             message, self.chat_model, now, timezone="Asia/Shanghai"
         )
 
-        partial = self._pending.get(self._key(scope, conversation_id))
-        if partial is None:
+        # Source of truth: caller-passed partial (graph checkpoint). Fall back
+        # to the in-instance dict for callers that reuse one service instance.
+        partial_extraction: SalesActionExtraction | None = None
+        if pending_partial is not None:
+            try:
+                partial_extraction = SalesActionExtraction.model_validate(pending_partial)
+            except Exception:
+                logger.warning("invalid pending_partial payload; ignoring merge")
+                partial_extraction = None
+        if partial_extraction is None:
+            partial = self._pending.get(self._key(scope, conversation_id))
+            if partial is not None:
+                partial_extraction = partial.extraction
+
+        if partial_extraction is None:
             return extraction
 
         # 合并：用本轮抽取补全上一轮缺失的字段（典型：缺时间 → 用户回答时间）
-        merged = self._merge_partial(partial.extraction, extraction)
+        merged = self._merge_partial(partial_extraction, extraction)
         # 合并后若仍可建提醒则消费半成品；否则保留等待下一轮
         if merged.title and merged.scheduled_at:
             self._discard_pending(scope, conversation_id)

@@ -107,6 +107,12 @@ class OnlineConversationState(TypedDict, total=False):
     # sales-action node to complete/re-clarify/abandon. Deliberately NOT in
     # TURN_SCOPED_DEFAULTS so the checkpoint value survives across turns.
     sales_action_pending_clarification: str | None
+    # Cross-turn: the partial SalesActionExtraction (serialized via
+    # ``model_dump()``) stashed on a clarify turn, so the follow-up turn can
+    # merge the user's answer (e.g. "下午3点") against the stored title/customer.
+    # Deliberately NOT in TURN_SCOPED_DEFAULTS so the checkpoint value survives
+    # across turns; cleared on successful completion or chat fall-through.
+    sales_action_pending_partial: dict[str, Any] | None
     # reason_code mirror for the DingTalk turn result.
     sales_action_reason_code: str | None
 

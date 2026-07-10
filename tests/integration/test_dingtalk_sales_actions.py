@@ -147,6 +147,134 @@ async def test_invoke_online_turn_clarify_sets_pending_flag(
 
 
 # ====================================================================
+# Two-turn clarification completion (regression: review Important I-1)
+# ====================================================================
+
+
+class FakeMarkerChatModel:
+    """Return canned extraction JSON keyed by a substring marker in the message.
+
+    Mirrors the FakeChatModel pattern in tests/unit/sales_actions/test_service.py.
+    Lets turn-1 and turn-2 of a clarification flow return *different* extractions
+    (turn-1 has the title but no time; turn-2 has the time but no title) so the
+    merge can be exercised without a real LLM.
+    """
+
+    def __init__(self, responses: dict[str, dict]):
+        self.responses = responses
+        self.calls = 0
+
+    async def generate(self, messages, temperature=None, max_tokens=None, response_format=None):
+        self.calls += 1
+        user = next((m["content"] for m in messages if m["role"] == "user"), "")
+        for marker, payload in self.responses.items():
+            if marker in user:
+                return json.dumps(payload, ensure_ascii=False)
+        return json.dumps({"intent": "none", "confidence": 0.0}, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_two_turn_clarification_completes_via_checkpoint(
+    db_session, sample_tenant, active_agent,
+):
+    """Cross-turn clarification COMPLETION works end-to-end.
+
+    Turn 1: "提醒我给张总回电话" (no time) → clarify, state carries the partial
+    extraction (title/customer) and the pending flag.
+
+    Turn 2: "下午3点" → the partial from checkpoint state merges with the
+    turn-2 time → a SalesActionCard IS created with the merged title + the
+    scheduled time; the partial and pending flag are cleared.
+
+    This is the regression that was missing: the node constructs a fresh
+    SalesActionService each turn, so the (now checkpoint-passed) partial is
+    the only way the merge can find the turn-1 title.
+    """
+    now = datetime(2026, 7, 10, 12, 0, tzinfo=timezone.utc)
+    fake = FakeMarkerChatModel({
+        # Turn 1: title + customer, but NO scheduled_at → missing_time clarify.
+        "给张总回电话": {
+            "intent": "create_action",
+            "explicit_create": True,
+            "confidence": 0.95,
+            "title": "给张总回电话",
+            "customer_name": "张总",
+            "action_type": "call_back",
+            "timezone": "Asia/Shanghai",
+        },
+        # Turn 2: a time only (no title) → after merge title comes from turn 1.
+        "3点": {
+            "intent": "create_action",
+            "explicit_create": True,
+            "confidence": 0.9,
+            "scheduled_at": "2026-07-11T15:00:00+00:00",
+            "timezone": "Asia/Shanghai",
+        },
+    })
+    # One shared in-memory checkpointer so turn-2 reads turn-1's checkpoint.
+    checkpointer = InMemorySaver()
+
+    # ── Turn 1: missing time → clarify + stash partial ───────────────
+    turn1 = await invoke_online_turn(
+        db=db_session,
+        tenant_id=sample_tenant,
+        agent_id=active_agent.id,
+        user_id="test_user_002",
+        session_user_id="dt_staff_2",
+        channel="dingtalk",
+        conversation_id="conv-clarify-2turn",
+        message="提醒我给张总回电话",
+        event_id="evt-2turn-1",
+        chat_model=fake,
+        embedding_model=MagicMock(),
+        now=now,
+        checkpointer=checkpointer,
+    )
+    assert turn1["sales_action_operation"] == "clarify"
+    assert turn1["sales_action_pending_clarification"] == "missing_time"
+    # The partial extraction (with the title) is carried in checkpoint state.
+    partial = turn1["sales_action_pending_partial"]
+    assert partial is not None
+    assert "给张总回电话" in partial["title"]
+    assert partial["customer_name"] == "张总"
+
+    # ── Turn 2: "下午3点" → merge completes → create ────────────────
+    turn2 = await invoke_online_turn(
+        db=db_session,
+        tenant_id=sample_tenant,
+        agent_id=active_agent.id,
+        user_id="test_user_002",
+        session_user_id="dt_staff_2",  # same session → same thread_id → same checkpoint
+        channel="dingtalk",
+        conversation_id="conv-clarify-2turn",
+        message="下午3点",
+        event_id="evt-2turn-2",
+        chat_model=fake,
+        embedding_model=MagicMock(),
+        now=now,
+        checkpointer=checkpointer,
+    )
+    assert turn2["sales_action_operation"] == "create"
+    assert turn2["sales_action_status"] == "created"
+    action_id = turn2["sales_action_id"]
+    assert action_id
+    # The partial + pending flag are cleared on completion.
+    assert turn2["sales_action_pending_clarification"] is None
+    assert turn2["sales_action_pending_partial"] is None
+
+    # A real card was persisted with the MERGED title + the turn-2 time.
+    card = (
+        await db_session.execute(
+            select(SalesActionCard).where(SalesActionCard.id == action_id)
+        )
+    ).scalar_one()
+    assert "张总回电话" in card.title
+    assert card.customer_name == "张总"
+    assert card.status == "pending"
+    assert card.scheduled_at == datetime(2026, 7, 11, 15, 0, tzinfo=timezone.utc)
+
+
+# ====================================================================
 # handle_dingtalk_event — full DingTalk processor mapping
 # ====================================================================
 

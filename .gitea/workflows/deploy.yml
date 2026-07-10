@@ -98,7 +98,8 @@ jobs:
           IMAGE="${REGISTRY}/${IMAGE_NAME}:${SHA}"
           FRONTEND_IMAGE="${REGISTRY}/${FRONTEND_IMAGE_NAME}:${SHA}"
           echo "Rolling out backend=${IMAGE} frontend=${FRONTEND_IMAGE}"
-          IMAGE="${IMAGE}" FRONTEND_IMAGE="${FRONTEND_IMAGE}" scripts/ci-fanout.sh
+          DEPLOY_BRANCH=main FORCE_RECREATE_APP=1 \
+            IMAGE="${IMAGE}" FRONTEND_IMAGE="${FRONTEND_IMAGE}" scripts/ci-fanout.sh
 
   sync-code:
     runs-on: ubuntu-latest

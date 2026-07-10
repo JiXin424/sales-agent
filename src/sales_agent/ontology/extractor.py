@@ -4,11 +4,15 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sales_agent.core.exceptions import ModelFailedError
 from sales_agent.llm.base import ChatModel
+from sales_agent.llm.call_params import get_call_params
 from sales_agent.ontology.schemas import EntityCandidate, EvidenceItem, FactCandidate
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -115,18 +119,18 @@ FACT_EXTRACTION_PROMPT = """你是销售知识本体抽取专家。请从文档�
 async def _generate_with_retry(
     chat_model: ChatModel,
     messages: list[dict[str, str]],
-    temperature: float = 0.1,
-    max_tokens: int = 5000,
+    call_site: str,
     max_retries: int = _MAX_EXTRACTION_RETRIES,
 ) -> str:
     """调用 LLM generate，带退避重试（处理服务暂时不可用等瞬时错误）。"""
+    p = get_call_params(call_site)
     last_error: str = ""
     for attempt in range(max_retries + 1):
         try:
             return await chat_model.generate(
                 messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
+                temperature=p.temperature,
+                max_tokens=p.max_tokens,
             )
         except ModelFailedError as exc:
             last_error = str(exc)
@@ -145,8 +149,23 @@ async def _generate_with_retry(
     raise ModelFailedError(detail=f"Unexpected retry loop exit: {last_error}")
 
 
-async def extract_entities(chat_model: ChatModel, content: str) -> list[EntityCandidate]:
-    """从文档中提取实体。长文档自动分片提取后去重合并。"""
+async def extract_entities(
+    chat_model: ChatModel,
+    content: str,
+    *,
+    db: AsyncSession | None = None,
+    tenant_id: str | None = None,
+    agent_id: str | None = None,
+) -> list[EntityCandidate]:
+    """从文档中提取实体。长文档自动分片提取后去重合并。
+
+    Parameters
+    ----------
+    db, tenant_id, agent_id :
+        可选 DB 上下文，传入时走 ``PromptRegistry`` 三级回退（运营后台编辑
+        ``knowledge/entity_extraction`` 生效），否则回退到模块常量
+        :data:`ENTITY_EXTRACTION_PROMPT`。单测不传仍走旧路径。
+    """
     chunks = _chunk_content(content)
     seen: set[str] = set()
     all_entities: list[EntityCandidate] = []
@@ -155,11 +174,19 @@ async def extract_entities(chat_model: ChatModel, content: str) -> list[EntityCa
         # 分片间加延迟，降低 API 瞬时并发压力
         if len(chunks) > 1:
             await asyncio.sleep(3)
+        from sales_agent.services.prompt_resolver_helper import resolve_knowledge_prompt
+        prompt = await resolve_knowledge_prompt(
+            db,
+            "entity_extraction",
+            tenant_id,
+            agent_id,
+            default=ENTITY_EXTRACTION_PROMPT,
+            content=chunk,
+        )
         raw = await _generate_with_retry(
             chat_model,
-            messages=[{"role": "user", "content": ENTITY_EXTRACTION_PROMPT.format(content=chunk)}],
-            temperature=0.1,
-            max_tokens=5000,
+            messages=[{"role": "user", "content": prompt}],
+            call_site="ontology_entity_extraction",
         )
         for entity in parse_entities_json(raw):
             key = (entity.type, entity.name)
@@ -200,12 +227,23 @@ async def extract_facts(
     content: str,
     entities: list[EntityCandidate],
     batch_size: int = FACT_BATCH_SIZE,
+    *,
+    db: AsyncSession | None = None,
+    tenant_id: str | None = None,
+    agent_id: str | None = None,
 ) -> list[FactCandidate]:
-    """按实体分批抽取事实。长文档遍历全部分片，跨分片去重合并。
+    """按实体分批抽取事实。长文档遍历全分片，跨分片去重合并。
 
     原实现只取 ``chunks[0]``（首 3000 字符），导致长文档后半部分的事实
     （如零风险承诺的赔付条款）永远不会被 LLM 看到。修复后每个分片独立
     提取事实，按 (subject_name, predicate, object_name) 去重。
+
+    Parameters
+    ----------
+    db, tenant_id, agent_id :
+        可选 DB 上下文，传入时走 ``PromptRegistry`` 三级回退（运营后台编辑
+        ``knowledge/fact_extraction`` 生效），否则回退到模块常量
+        :data:`FACT_EXTRACTION_PROMPT`。单测不传仍走旧路径。
     """
     chunks = _chunk_content(content)
     seen: set[tuple[str, str, str | None]] = set()
@@ -225,11 +263,20 @@ async def extract_facts(
                 [{"type": e.type, "name": e.name, "aliases": e.aliases, "properties": e.properties} for e in batch],
                 ensure_ascii=False,
             )
+            from sales_agent.services.prompt_resolver_helper import resolve_knowledge_prompt
+            prompt = await resolve_knowledge_prompt(
+                db,
+                "fact_extraction",
+                tenant_id,
+                agent_id,
+                default=FACT_EXTRACTION_PROMPT,
+                content=chunk,
+                entities_json=entities_json,
+            )
             raw = await _generate_with_retry(
                 chat_model,
-                messages=[{"role": "user", "content": FACT_EXTRACTION_PROMPT.format(content=chunk, entities_json=entities_json)}],
-                temperature=0.1,
-                max_tokens=6000,
+                messages=[{"role": "user", "content": prompt}],
+                call_site="ontology_fact_extraction",
             )
             for fact in parse_facts_json(raw):
                 key = (fact.subject_name, fact.predicate, fact.object_name)

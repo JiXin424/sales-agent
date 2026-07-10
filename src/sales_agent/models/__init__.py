@@ -76,7 +76,16 @@ from .optimization_auth import (
     OptimizationApiCredential,
     OptimizationCommandAudit,
 )
+from .atomic_memory import AtomicMemory, MemoryOutboxJob, MemoryAuditEvent
+from .user_memory_profile import UserMemoryProfile, UserProfileRebuildJob
+from .memory_eval import MemoryEvalTraceRecord, PromotedRegression
 from .quick_session import QuickSession
+from .sales_action import (
+    SalesActionCard,
+    SalesActionReminder,
+    SalesActionDelivery,
+    SalesActionEvent,
+)
 
 
 def _import_dingtalk_models():
@@ -160,4 +169,15 @@ __all__ = [
     "OptimizationApiCredential",
     "OptimizationCommandAudit",
     "QuickSession",
+    "AtomicMemory",
+    "MemoryOutboxJob",
+    "MemoryAuditEvent",
+    "UserMemoryProfile",
+    "UserProfileRebuildJob",
+    "MemoryEvalTraceRecord",
+    "PromotedRegression",
+    "SalesActionCard",
+    "SalesActionReminder",
+    "SalesActionDelivery",
+    "SalesActionEvent",
 ]

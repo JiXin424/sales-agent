@@ -6,9 +6,6 @@ from sqlalchemy import select, func
 from sales_agent.models.runtime_release import AgentRuntimeBinding
 
 
-pytestmark = pytest.mark.anyio
-
-
 @pytest.mark.asyncio
 async def test_bootstrap_creates_one_binding_per_agent(db_session, active_agent):
     """Two calls to ensure_baseline for the same Agent must return the same release."""

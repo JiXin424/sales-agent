@@ -13,10 +13,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from sales_agent.graph.nodes.context_load import load_context_node
-from sales_agent.graph.nodes.routing import routing_node
-from sales_agent.graph.nodes.evidence_gate import evidence_gate
-from sales_agent.graph.state import ChatGraphState
+from sales_agent.graph.chat.nodes.context_load import load_context_node
+from sales_agent.graph.chat.nodes.routing import routing_node
+from sales_agent.graph.chat.nodes.evidence_gate import evidence_gate
+from sales_agent.graph.chat.state import ChatGraphState
 
 
 # ===================================================================
@@ -136,7 +136,15 @@ class TestContextLoadWithTopic:
 class TestRoutingPrecomputed:
     """routing_node short-circuits when precomputed_route=True."""
 
-    def test_precomputed_route_returns_existing_fields(self):
+    @pytest.fixture
+    def mock_runtime(self):
+        """Runtime with no chat_model — flag defaults off, rule path used."""
+        runtime = MagicMock()
+        runtime.context = {"db": AsyncMock(), "chat_model": None}
+        return runtime
+
+    @pytest.mark.asyncio
+    async def test_precomputed_route_returns_existing_fields(self, mock_runtime):
         """With precomputed_route=True, return existing task/policy fields."""
         state: ChatGraphState = {
             "tenant_id": "t1",
@@ -149,13 +157,14 @@ class TestRoutingPrecomputed:
             "knowledge_policy": "required",
             "needs_retrieval": True,
         }
-        result = routing_node(state)
+        result = await routing_node(state, mock_runtime)
         assert result["task_type"] == "knowledge_qa"
         assert result["needs_retrieval"] is True
         assert "knowledge_policy" in result
         assert result["knowledge_policy"] == "required"
 
-    def test_precomputed_route_no_task_type(self):
+    @pytest.mark.asyncio
+    async def test_precomputed_route_no_task_type(self, mock_runtime):
         """With precomputed_route=True but no existing fields, return defaults."""
         state: ChatGraphState = {
             "tenant_id": "t1",
@@ -165,10 +174,11 @@ class TestRoutingPrecomputed:
             "channel": "local",
             "precomputed_route": True,
         }
-        result = routing_node(state)
+        result = await routing_node(state, mock_runtime)
         assert result["task_type"] is None
 
-    def test_normal_routing_still_works(self):
+    @pytest.mark.asyncio
+    async def test_normal_routing_still_works(self, mock_runtime):
         """Without precomputed_route, routing_node calls route_task normally."""
         state: ChatGraphState = {
             "tenant_id": "t1",
@@ -177,7 +187,7 @@ class TestRoutingPrecomputed:
             "conversation_id": "c1",
             "channel": "local",
         }
-        result = routing_node(state)
+        result = await routing_node(state, mock_runtime)
         # General coaching fallback
         assert result["task_type"] is not None
         assert result["route_confidence"] >= 0
@@ -246,7 +256,7 @@ class TestTopicSummaryUpdate:
     @pytest.mark.asyncio
     async def test_log_node_passes_topic_id(self):
         """log_node passes topic_id to conversation_logger.log_conversation."""
-        from sales_agent.graph.nodes.logging_node import log_node
+        from sales_agent.graph.chat.nodes.logging_node import log_node
         from unittest.mock import MagicMock, patch, AsyncMock
 
         runtime = MagicMock()
@@ -264,7 +274,7 @@ class TestTopicSummaryUpdate:
         }
 
         with patch(
-            "sales_agent.graph.nodes.logging_node.conversation_logger.log_conversation",
+            "sales_agent.graph.chat.nodes.logging_node.conversation_logger.log_conversation",
             new_callable=AsyncMock,
         ) as mock_log:
             result = await log_node(state, runtime)
@@ -273,3 +283,32 @@ class TestTopicSummaryUpdate:
         # Verify topic_id was passed through
         call_kwargs = mock_log.call_args[1]
         assert call_kwargs.get("topic_id") == "topic_xyz"
+
+    @pytest.mark.asyncio
+    async def test_log_node_reraises_when_log_conversation_fails(self):
+        """log_node must re-raise when log_conversation raises — a failed
+        terminal persistence is not swallowable. The worker/session owner
+        retains commit/rollback responsibility (Task 6 Step 6)."""
+        from sales_agent.graph.chat.nodes.logging_node import log_node
+
+        runtime = MagicMock()
+        db = AsyncMock()
+        runtime.context = {"db": db}
+
+        state: ChatGraphState = {
+            "tenant_id": "t1",
+            "user_id": "u1",
+            "message": "test",
+            "conversation_id": "c1",
+            "channel": "local",
+            "topic_id": "topic_xyz",
+            "answer_dict": {"summary": "ok", "sections": []},
+        }
+
+        with patch(
+            "sales_agent.graph.chat.nodes.logging_node.conversation_logger.log_conversation",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("db connection lost"),
+        ):
+            with pytest.raises(RuntimeError, match="db connection lost"):
+                await log_node(state, runtime)

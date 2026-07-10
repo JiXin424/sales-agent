@@ -10,7 +10,7 @@ import { Outlet, useNavigate, useLocation, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   AppstoreOutlined, BookOutlined, DashboardOutlined, EditOutlined, ExperimentOutlined, MessageOutlined,
-  NodeIndexOutlined, SettingOutlined, TrophyOutlined, ApartmentOutlined,
+  NodeIndexOutlined, SettingOutlined, TrophyOutlined, ApartmentOutlined, HistoryOutlined, ScheduleOutlined,
 } from '@ant-design/icons';
 import { getAgent } from '@/api/agents';
 import { useAgent } from '@/context/AgentContext';
@@ -34,9 +34,11 @@ function agentNavItems(agentId: string) {
     { key: `${base}/knowledge`, icon: <BookOutlined />, label: '知识库' },
     { key: `${base}/ontology`, icon: <NodeIndexOutlined />, label: '本体探索' },
     { key: `${base}/graph-debug`, icon: <ApartmentOutlined />, label: '图调试' },
+    { key: `${base}/history`, icon: <HistoryOutlined />, label: '会话历史' },
     { key: `${base}/optimization`, icon: <ExperimentOutlined />, label: '知识迭代' },
     { key: `${base}/prompts`, icon: <EditOutlined />, label: 'Prompt' },
     { key: `${base}/conversations`, icon: <MessageOutlined />, label: '对话记录' },
+    { key: `${base}/sales-actions`, icon: <ScheduleOutlined />, label: '销售任务' },
     { key: `${base}/coach`, icon: <TrophyOutlined />, label: '教练' },
     { key: `${base}/settings`, icon: <SettingOutlined />, label: '设置' },
   ];
@@ -94,6 +96,10 @@ export default function AgentLayout() {
   const selectedKey =
     items.find((it) => location.pathname.startsWith(it.key))?.key || `${agentId}/overview`;
 
+  // graph-debug 保留侧边栏 + Header（导航不变），但去掉 Content 的
+  // margin/padding 让 Mermaid 图在主区最大化放大。其它路由保持白卡片样式。
+  const isGraphDebug = location.pathname.includes('/graph-debug');
+
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <Sider width={208} style={{ background: '#fff' }}>
@@ -128,7 +134,13 @@ export default function AgentLayout() {
             {agent.tenant_id}
           </Typography.Text>
         </Header>
-        <Content style={{ margin: 24, padding: 24, background: '#fff', borderRadius: 8, minHeight: 280 }}>
+        <Content
+          style={
+            isGraphDebug
+              ? { margin: 0, padding: 0, background: '#fff', minHeight: 0 }
+              : { margin: 24, padding: 24, background: '#fff', borderRadius: 8, minHeight: 280 }
+          }
+        >
           <Outlet />
         </Content>
       </Layout>

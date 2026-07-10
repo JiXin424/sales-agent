@@ -44,11 +44,6 @@ def get_client() -> ObservabilityApiClient:
     return _client
 
 
-def set_client(client: ObservabilityApiClient) -> None:
-    global _client
-    _client = client
-
-
 # ── FastMCP wrapper ──────────────────────────────────────────────────────────
 
 

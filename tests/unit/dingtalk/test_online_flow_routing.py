@@ -4,15 +4,20 @@ Asserts:
 
 - Processor passes ``session_user_id=sender_id``, internal ``user_id``,
   ``event_id`` and resolved Agent ID to ``invoke_online_turn``.
-- Streaming path uses ``get_online_graph`` (not ``build_chat_graph_compiled``).
+- Streaming path uses ``prepare_online_turn`` (shared with standard path).
 - Quick-entry ``_fulfill_quick_action`` passes ``entry_action`` to
   ``invoke_online_turn`` and never accesses legacy ``QuickSession``.
 - ``resolve_dingtalk_agent_id`` returns the bound Agent when present,
   otherwise the tenant default.
+- Standard and streaming paths share the same ``prepare_online_turn``
+  contract (Task 6 parity).
+- Reset commands route through the Graph with ``reset_requested=True``
+  instead of regenerating the conversation ID (Task 6 reset).
 """
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -267,19 +272,111 @@ class TestProcessorRouting:
 
 
 # ====================================================================
+# Duplicate delivery is a no-op
+# ====================================================================
+
+
+class TestDuplicateDeliveryNoOp:
+    """When ``invoke_online_turn`` returns ``response_kind == "duplicate"``,
+    the processor must NOT render or reply — duplicate delivery is silent
+    and side-effect free."""
+
+    @pytest.mark.asyncio
+    async def test_duplicate_does_not_reply(self):
+        reply_fn = AsyncMock()
+
+        mock_db = AsyncMock()
+        mock_settings = MagicMock()
+        mock_settings.conversation.reset_commands = ["reset", "/reset", "新话题"]
+        mock_runtime = MagicMock()
+        mock_runtime.tenant_id = "test_tenant"
+        mock_config = MagicMock()
+
+        with patch(
+            "sales_agent.integrations.dingtalk.processor.resolve_dingtalk_agent_id",
+            new_callable=AsyncMock,
+            return_value="agent_123",
+        ):
+            with patch(
+                "sales_agent.integrations.dingtalk.processor.invoke_online_turn",
+                new_callable=AsyncMock,
+                return_value={
+                    "response_kind": "duplicate",
+                    "thread_id": "online:test_tenant:agent_123:dingtalk:ding_user_001",
+                },
+            ):
+                with patch(
+                    "sales_agent.integrations.dingtalk.processor.DingTalkMessageRenderer",
+                ) as mock_renderer_cls:
+                    renderer_instance = MagicMock()
+                    renderer_instance.render.return_value = "Rendered text"
+                    mock_renderer_cls.return_value = renderer_instance
+
+                    with patch(
+                        "sales_agent.integrations.dingtalk.command_parser.DingTalkCommandParser",
+                    ) as mock_parser_cls:
+                        parser_instance = MagicMock()
+                        parser_instance.parse.return_value.is_reset = False
+                        mock_parser_cls.return_value = parser_instance
+
+                        with patch(
+                            "sales_agent.integrations.dingtalk.user_mapper.DingTalkUserMapper",
+                        ) as mock_user_mapper_cls:
+                            user_mapper_instance = AsyncMock()
+                            user_mapper_instance.get_or_create_user.return_value = (
+                                "internal_user_001"
+                            )
+                            mock_user_mapper_cls.return_value = user_mapper_instance
+
+                            with patch(
+                                "sales_agent.integrations.dingtalk.conversation_mapper.DingTalkConversationMapper",
+                            ) as mock_conv_mapper_cls:
+                                conv_instance = MagicMock()
+                                conv_instance.generate_conversation_id.return_value = "conv_001"
+                                mock_conv_mapper_cls.return_value = conv_instance
+
+                                from sales_agent.integrations.dingtalk.processor import (
+                                    handle_dingtalk_event,
+                                )
+
+                                result = await handle_dingtalk_event(
+                                    db=mock_db,
+                                    config=mock_config,
+                                    settings=mock_settings,
+                                    runtime=mock_runtime,
+                                    event_id="dup_event_001",
+                                    corp_id="corp_001",
+                                    sender_id="ding_user_001",
+                                    sender_name="Test User",
+                                    message_type="text",
+                                    text="hello",
+                                    dingtalk_conversation_id="conv_001",
+                                    reply_fn=reply_fn,
+                                )
+
+        # No reply, no render — duplicate delivery must be a no-op.
+        from sales_agent.integrations.dingtalk.turn_result import DingTalkTurnResult
+        assert isinstance(result, DingTalkTurnResult)
+        assert result.response_kind == "duplicate"
+        assert result.rendered_text == ""
+        reply_fn.assert_not_awaited()
+        renderer_instance.render.assert_not_called()
+
+
+# ====================================================================
 # Streaming path routing
 # ====================================================================
 
 
 class TestStreamingPath:
-    """The streaming handler must use ``get_online_graph`` instead of
-    ``build_chat_graph_compiled`` and include online state fields."""
+    """The streaming handler must use ``prepare_online_turn`` (shared with
+    the standard path) instead of building its own thread/input state."""
 
     @pytest.mark.asyncio
-    async def test_get_online_graph_called_instead_of_chat_graph(self):
-        """Verify that ``handle_dingtalk_stream_via_graph`` uses
-        ``get_online_graph`` with online state fields."""
-        # Mock the graph to behave like an async iterable producing updates
+    async def test_streaming_uses_prepare_online_turn(self):
+        """``handle_dingtalk_stream_via_graph`` delegates thread/input/config
+        to ``prepare_online_turn`` and calls ``acquire_online_turn_lock``
+        before streaming."""
         async def _fake_astream(*args, **kwargs):
             yield ("updates", {"normalize_turn": {"flow_action": "chat"}})
             yield (
@@ -290,118 +387,418 @@ class TestStreamingPath:
         mock_graph = MagicMock()
         mock_graph.astream = _fake_astream
 
+        prepared = SimpleNamespace(
+            graph=mock_graph,
+            thread_id="online:test_tenant:agent_123:dingtalk:ding_user_001",
+            input_state={
+                "tenant_id": "test_tenant",
+                "agent_id": "agent_123",
+                "session_user_id": "ding_user_001",
+                "channel": "dingtalk",
+                "message": "Test message",
+                "event_id": "event_001",
+                "guided_flows_enabled": True,
+            },
+            config={"configurable": {"thread_id": "online:test_tenant:agent_123:dingtalk:ding_user_001"}},
+            context={"db": MagicMock(), "chat_model": MagicMock(), "embedding_model": MagicMock(), "now": None},
+        )
+
         mock_card_sender = AsyncMock()
         mock_card_sender.send_markdown_card.return_value = "card_001"
 
-        from unittest.mock import AsyncMock as AMock
-
-        reply_fn = AMock()
-
-        # Mock get_settings to return guided_flows enabled
-        mock_settings = MagicMock()
-        mock_settings.guided_flows.enabled = True
-
-        mock_checkpointer = MagicMock()
+        reply_fn = AsyncMock()
 
         with patch(
-            "sales_agent.integrations.dingtalk.graph_stream.get_checkpointer",
-            return_value=mock_checkpointer,
-        ):
+            "sales_agent.integrations.dingtalk.graph_stream.prepare_online_turn",
+            new_callable=AsyncMock,
+            return_value=prepared,
+        ) as mock_prepare:
             with patch(
-                "sales_agent.integrations.dingtalk.graph_stream.get_settings",
-                return_value=mock_settings,
-            ):
-                with patch(
-                    "sales_agent.integrations.dingtalk.graph_stream.get_online_graph",
-                    return_value=mock_graph,
-                ) as mock_get_online:
-                    from sales_agent.integrations.dingtalk.graph_stream import (
-                        handle_dingtalk_stream_via_graph,
-                    )
+                "sales_agent.integrations.dingtalk.graph_stream.acquire_online_turn_lock",
+                new_callable=AsyncMock,
+            ) as mock_lock:
+                from sales_agent.integrations.dingtalk.graph_stream import (
+                    handle_dingtalk_stream_via_graph,
+                )
 
-                    result = await handle_dingtalk_stream_via_graph(
-                        tenant_id="test_tenant",
-                        user_id="internal_user_001",
-                        dingtalk_user_id="ding_user_001",
-                        message="Test message",
-                        conversation_id="conv_001",
-                        agent_id="agent_123",
-                        event_id="event_001",
-                        reply_fn=reply_fn,
-                        card_sender=mock_card_sender,
-                        db=MagicMock(),
-                        chat_model=MagicMock(),
-                        embedding_model=MagicMock(),
-                    )
+                result = await handle_dingtalk_stream_via_graph(
+                    tenant_id="test_tenant",
+                    user_id="internal_user_001",
+                    dingtalk_user_id="ding_user_001",
+                    message="Test message",
+                    conversation_id="conv_001",
+                    agent_id="agent_123",
+                    event_id="event_001",
+                    reply_fn=reply_fn,
+                    card_sender=mock_card_sender,
+                    db=MagicMock(),
+                    chat_model=MagicMock(),
+                    embedding_model=MagicMock(),
+                )
 
-        # Must have used get_online_graph
-        mock_get_online.assert_called_once()
-        # Result should contain the answer_dict from the stream
-        assert "answer_dict" in result
+        mock_prepare.assert_awaited_once()
+        mock_lock.assert_awaited_once()
+        assert mock_lock.call_args[0][1] == prepared.thread_id
+        assert result["thread_id"] == prepared.thread_id
         assert result["answer_dict"]["summary"] == "Streamed reply"
 
-    @pytest.mark.asyncio
-    async def test_streaming_includes_online_state_fields(self):
-        """The input state passed to the online graph should include
-        session_user_id, event_id, and guided_flows_enabled."""
-        captured_state = {}
 
-        async def _fake_astream(input_state, config, context=None, stream_mode=None):
-            nonlocal captured_state
-            captured_state = input_state
-            yield ("updates", {"normalize_turn": {"flow_action": "chat"}})
+# ====================================================================
+# Standard / Stream parity (Task 6 Step 1)
+# ====================================================================
+
+
+class TestStandardStreamParity:
+    """Both ``invoke_online_turn`` and ``handle_dingtalk_stream_via_graph``
+    must delegate to ``prepare_online_turn`` for thread_id, input_state,
+    config, context, and the Graph — neither builds its own thread/input."""
+
+    @staticmethod
+    def _make_prepared():
+        async def _fake_astream(*args, **kwargs):
             yield (
                 "updates",
-                {"chat": {"answer_dict": {"summary": "Result", "sections": []}}},
+                {"chat": {"answer_dict": {"summary": "ok", "sections": []}}},
             )
 
-        mock_graph = MagicMock()
-        mock_graph.astream = _fake_astream
+        graph = MagicMock()
+        graph.ainvoke = AsyncMock(
+            return_value={"answer_dict": {"summary": "ok"}, "response_kind": "chat"},
+        )
+        graph.astream = _fake_astream
+        return SimpleNamespace(
+            graph=graph,
+            thread_id="online:t1:a1:dingtalk:du1",
+            input_state={
+                "tenant_id": "t1", "agent_id": "a1", "user_id": "u1",
+                "session_user_id": "du1", "channel": "dingtalk",
+                "conversation_id": "c1", "message": "hello", "event_id": "e1",
+            },
+            config={"configurable": {"thread_id": "online:t1:a1:dingtalk:du1"}},
+            context={
+                "db": AsyncMock(), "chat_model": MagicMock(),
+                "embedding_model": MagicMock(), "now": None,
+            },
+        )
 
-        mock_card_sender = AsyncMock()
-        mock_card_sender.send_markdown_card.return_value = "card_002"
-
-        reply_fn = AsyncMock()
-        mock_settings = MagicMock()
-        mock_settings.guided_flows.enabled = True
+    @pytest.mark.asyncio
+    async def test_invoke_online_turn_uses_prepared_values_and_lock(self):
+        prepared = self._make_prepared()
+        db = AsyncMock()
 
         with patch(
-            "sales_agent.integrations.dingtalk.graph_stream.get_checkpointer",
+            "sales_agent.services.online_conversation.prepare_online_turn",
+            new_callable=AsyncMock,
+            return_value=prepared,
         ):
             with patch(
-                "sales_agent.integrations.dingtalk.graph_stream.get_settings",
-                return_value=mock_settings,
+                "sales_agent.services.online_conversation.acquire_online_turn_lock",
+                new_callable=AsyncMock,
+            ) as mock_lock:
+                from sales_agent.services.online_conversation import invoke_online_turn
+
+                result = await invoke_online_turn(
+                    db=db, tenant_id="t1", agent_id="a1", user_id="u1",
+                    session_user_id="du1", channel="dingtalk",
+                    conversation_id="c1", message="hello", event_id="e1",
+                )
+
+        mock_lock.assert_awaited_once_with(db, prepared.thread_id)
+        prepared.graph.ainvoke.assert_awaited_once_with(
+            prepared.input_state, prepared.config, context=prepared.context,
+        )
+        assert result["thread_id"] == prepared.thread_id
+
+    @pytest.mark.asyncio
+    async def test_streaming_uses_prepared_values_and_lock(self):
+        prepared = self._make_prepared()
+
+        mock_card_sender = AsyncMock()
+        mock_card_sender.send_markdown_card.return_value = "card_parity"
+
+        with patch(
+            "sales_agent.integrations.dingtalk.graph_stream.prepare_online_turn",
+            new_callable=AsyncMock,
+            return_value=prepared,
+        ):
+            with patch(
+                "sales_agent.integrations.dingtalk.graph_stream.acquire_online_turn_lock",
+                new_callable=AsyncMock,
+            ) as mock_lock:
+                from sales_agent.integrations.dingtalk.graph_stream import (
+                    handle_dingtalk_stream_via_graph,
+                )
+
+                await handle_dingtalk_stream_via_graph(
+                    tenant_id="t1", user_id="u1", dingtalk_user_id="du1",
+                    message="hello", conversation_id="c1", agent_id="a1",
+                    event_id="e1", reply_fn=AsyncMock(),
+                    card_sender=mock_card_sender, db=MagicMock(),
+                    chat_model=MagicMock(), embedding_model=MagicMock(),
+                )
+
+        mock_lock.assert_awaited_once()
+        assert mock_lock.call_args[0][1] == prepared.thread_id
+
+    @pytest.mark.asyncio
+    async def test_neither_path_builds_own_thread_id(self):
+        """Neither path may call ``get_online_graph`` directly — the prepared
+        turn already owns the graph."""
+        prepared = self._make_prepared()
+        db = AsyncMock()
+
+        with patch(
+            "sales_agent.services.online_conversation.prepare_online_turn",
+            new_callable=AsyncMock,
+            return_value=prepared,
+        ):
+            with patch(
+                "sales_agent.services.online_conversation.get_online_graph",
+            ) as mock_get_graph:
+                with patch(
+                    "sales_agent.services.online_conversation.acquire_online_turn_lock",
+                    new_callable=AsyncMock,
+                ):
+                    from sales_agent.services.online_conversation import invoke_online_turn
+
+                    await invoke_online_turn(
+                        db=db, tenant_id="t1", agent_id="a1", user_id="u1",
+                        session_user_id="du1", channel="dingtalk",
+                        conversation_id="c1", message="hi", event_id="e1",
+                    )
+
+        mock_get_graph.assert_not_called()
+
+
+# ====================================================================
+# Reset via handle_dingtalk_event (Task 6 Step 2)
+# ====================================================================
+
+
+class TestResetViaProcessor:
+    """Reset commands must route through the Graph with ``reset_requested=True``
+    instead of regenerating the conversation ID locally."""
+
+    @pytest.mark.asyncio
+    async def test_pure_reset_passes_reset_requested_and_keeps_conversation_id(self):
+        """A pure reset command (no suffix) calls ``invoke_online_turn`` with
+        ``reset_requested=True`` and keeps the same conversation_id."""
+        reply_fn = AsyncMock()
+        mock_db = AsyncMock()
+        mock_settings = MagicMock()
+        mock_settings.conversation.reset_commands = ["重新开始", "新话题", "/reset"]
+        mock_runtime = MagicMock()
+        mock_runtime.tenant_id = "test_tenant"
+        mock_config = MagicMock()
+
+        reset_result = {
+            "response_kind": "reset",
+            "answer_dict": {"summary": "已开启新话题。你可以直接说当前要处理的销售问题。", "sections": []},
+            "active_flow": None, "flow_stage": None, "flow_payload": {},
+            "turn_relation": "new",
+            "thread_id": "online:test_tenant:agent_123:dingtalk:ding_user_001",
+        }
+
+        with patch(
+            "sales_agent.integrations.dingtalk.processor.resolve_dingtalk_agent_id",
+            new_callable=AsyncMock, return_value="agent_123",
+        ):
+            with patch(
+                "sales_agent.integrations.dingtalk.processor.invoke_online_turn",
+                new_callable=AsyncMock, return_value=reset_result,
+            ) as mock_invoke:
+                with patch(
+                    "sales_agent.integrations.dingtalk.processor.DingTalkMessageRenderer",
+                ) as mock_renderer_cls:
+                    renderer_instance = MagicMock()
+                    renderer_instance.render.return_value = "已开启新话题"
+                    mock_renderer_cls.return_value = renderer_instance
+
+                    with patch(
+                        "sales_agent.integrations.dingtalk.command_parser.DingTalkCommandParser",
+                    ) as mock_parser_cls:
+                        parser_instance = MagicMock()
+                        parser_instance.parse.return_value = SimpleNamespace(
+                            is_reset=True, is_help=False, remaining_message="",
+                        )
+                        mock_parser_cls.return_value = parser_instance
+
+                        with patch(
+                            "sales_agent.integrations.dingtalk.user_mapper.DingTalkUserMapper",
+                        ) as mock_user_mapper_cls:
+                            user_mapper_instance = AsyncMock()
+                            user_mapper_instance.get_or_create_user.return_value = "internal_user_001"
+                            mock_user_mapper_cls.return_value = user_mapper_instance
+
+                            with patch(
+                                "sales_agent.integrations.dingtalk.conversation_mapper.DingTalkConversationMapper",
+                            ) as mock_conv_mapper_cls:
+                                mock_conv_mapper_cls.generate_conversation_id.return_value = "conv_001"
+
+                                from sales_agent.integrations.dingtalk.processor import (
+                                    handle_dingtalk_event,
+                                )
+
+                                result = await handle_dingtalk_event(
+                                    db=mock_db, config=mock_config, settings=mock_settings,
+                                    runtime=mock_runtime, event_id="reset_ev_001",
+                                    corp_id="corp_001", sender_id="ding_user_001",
+                                    sender_name="Test User", message_type="text",
+                                    text="重新开始", dingtalk_conversation_id="conv_001",
+                                    reply_fn=reply_fn,
+                                )
+
+        call_kwargs = mock_invoke.call_args[1]
+        assert call_kwargs["reset_requested"] is True
+        assert call_kwargs["conversation_id"] == "conv_001"
+        reply_fn.assert_awaited_once()
+        from sales_agent.integrations.dingtalk.turn_result import DingTalkTurnResult
+        assert isinstance(result, DingTalkTurnResult)
+        assert result.response_kind == "reset"
+        assert result.thread_id == "online:test_tenant:agent_123:dingtalk:ding_user_001"
+
+    @pytest.mark.asyncio
+    async def test_reset_with_suffix_routes_suffix_to_graph(self):
+        """``重新开始，帮我写开场白`` calls ``invoke_online_turn`` with
+        ``reset_requested=True`` and ``message='帮我写开场白'``."""
+        reply_fn = AsyncMock()
+        mock_db = AsyncMock()
+        mock_settings = MagicMock()
+        mock_settings.conversation.reset_commands = ["重新开始", "新话题"]
+        mock_runtime = MagicMock()
+        mock_runtime.tenant_id = "test_tenant"
+        mock_config = MagicMock()
+
+        chat_result = {
+            "response_kind": "chat",
+            "answer_dict": {"summary": "好的，这是你的开场白", "sections": []},
+            "active_flow": None, "topic_id": "new_topic_001",
+            "turn_relation": "new",
+            "thread_id": "online:test_tenant:agent_123:dingtalk:ding_user_001",
+        }
+
+        with patch(
+            "sales_agent.integrations.dingtalk.processor.resolve_dingtalk_agent_id",
+            new_callable=AsyncMock, return_value="agent_123",
+        ):
+            with patch(
+                "sales_agent.integrations.dingtalk.processor.invoke_online_turn",
+                new_callable=AsyncMock, return_value=chat_result,
+            ) as mock_invoke:
+                with patch(
+                    "sales_agent.integrations.dingtalk.processor.DingTalkMessageRenderer",
+                ) as mock_renderer_cls:
+                    renderer_instance = MagicMock()
+                    renderer_instance.render.return_value = "Rendered opening"
+                    mock_renderer_cls.return_value = renderer_instance
+
+                    with patch(
+                        "sales_agent.integrations.dingtalk.command_parser.DingTalkCommandParser",
+                    ) as mock_parser_cls:
+                        parser_instance = MagicMock()
+                        parser_instance.parse.return_value = SimpleNamespace(
+                            is_reset=True, is_help=False,
+                            remaining_message="帮我写开场白",
+                        )
+                        mock_parser_cls.return_value = parser_instance
+
+                        with patch(
+                            "sales_agent.integrations.dingtalk.user_mapper.DingTalkUserMapper",
+                        ) as mock_user_mapper_cls:
+                            user_mapper_instance = AsyncMock()
+                            user_mapper_instance.get_or_create_user.return_value = "internal_user_001"
+                            mock_user_mapper_cls.return_value = user_mapper_instance
+
+                            with patch(
+                                "sales_agent.integrations.dingtalk.conversation_mapper.DingTalkConversationMapper",
+                            ) as mock_conv_mapper_cls:
+                                mock_conv_mapper_cls.generate_conversation_id.return_value = "conv_001"
+                                from sales_agent.integrations.dingtalk.processor import (
+                                    handle_dingtalk_event,
+                                )
+
+                                await handle_dingtalk_event(
+                                    db=mock_db, config=mock_config, settings=mock_settings,
+                                    runtime=mock_runtime, event_id="reset_ev_002",
+                                    corp_id="corp_001", sender_id="ding_user_001",
+                                    sender_name="Test User", message_type="text",
+                                    text="重新开始，帮我写开场白",
+                                    dingtalk_conversation_id="conv_001",
+                                    reply_fn=reply_fn,
+                                )
+
+        call_kwargs = mock_invoke.call_args[1]
+        assert call_kwargs["reset_requested"] is True
+        assert call_kwargs["message"] == "帮我写开场白"
+        assert call_kwargs["conversation_id"] == "conv_001"
+
+    @pytest.mark.asyncio
+    async def test_reset_failure_reraises_after_error_reply(self):
+        """On Graph/persistence failure the processor sends a best-effort error
+        reply AND re-raises so the worker rolls back."""
+        reply_fn = AsyncMock()
+        mock_db = AsyncMock()
+        mock_settings = MagicMock()
+        mock_settings.conversation.reset_commands = ["重新开始"]
+        mock_runtime = MagicMock()
+        mock_runtime.tenant_id = "test_tenant"
+        mock_config = MagicMock()
+
+        with patch(
+            "sales_agent.integrations.dingtalk.processor.resolve_dingtalk_agent_id",
+            new_callable=AsyncMock, return_value="agent_123",
+        ):
+            with patch(
+                "sales_agent.integrations.dingtalk.processor.invoke_online_turn",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("graph blew up"),
             ):
                 with patch(
-                    "sales_agent.integrations.dingtalk.graph_stream.get_online_graph",
-                    return_value=mock_graph,
-                ):
-                    from sales_agent.integrations.dingtalk.graph_stream import (
-                        handle_dingtalk_stream_via_graph,
-                    )
+                    "sales_agent.integrations.dingtalk.processor.DingTalkMessageRenderer",
+                ) as mock_renderer_cls:
+                    renderer_instance = MagicMock()
+                    renderer_instance.render_error.return_value = "Service error"
+                    mock_renderer_cls.return_value = renderer_instance
 
-                    await handle_dingtalk_stream_via_graph(
-                        tenant_id="test_tenant",
-                        user_id="internal_user_001",
-                        dingtalk_user_id="ding_user_001",
-                        message="Test",
-                        conversation_id="conv_001",
-                        agent_id="agent_123",
-                        event_id="event_001",
-                        reply_fn=reply_fn,
-                        card_sender=mock_card_sender,
-                        db=MagicMock(),
-                        chat_model=MagicMock(),
-                    )
+                    with patch(
+                        "sales_agent.integrations.dingtalk.command_parser.DingTalkCommandParser",
+                    ) as mock_parser_cls:
+                        parser_instance = MagicMock()
+                        parser_instance.parse.return_value = SimpleNamespace(
+                            is_reset=False, is_help=False, remaining_message="hello",
+                        )
+                        mock_parser_cls.return_value = parser_instance
 
-        assert captured_state.get("session_user_id") == "ding_user_001"
-        assert captured_state.get("event_id") == "event_001"
-        assert captured_state.get("guided_flows_enabled") is True
-        # Should NOT include skip_generation (removed from online state)
-        assert "skip_generation" not in captured_state
-        # The channel should be "dingtalk"
-        assert captured_state.get("channel") == "dingtalk"
-        assert captured_state.get("agent_id") == "agent_123"
+                        with patch(
+                            "sales_agent.integrations.dingtalk.user_mapper.DingTalkUserMapper",
+                        ) as mock_user_mapper_cls:
+                            user_mapper_instance = AsyncMock()
+                            user_mapper_instance.get_or_create_user.return_value = "internal_user_001"
+                            mock_user_mapper_cls.return_value = user_mapper_instance
+
+                            with patch(
+                                "sales_agent.integrations.dingtalk.conversation_mapper.DingTalkConversationMapper",
+                            ) as mock_conv_mapper_cls:
+                                conv_instance = MagicMock()
+                                conv_instance.generate_conversation_id.return_value = "conv_001"
+                                mock_conv_mapper_cls.return_value = conv_instance
+
+                                from sales_agent.integrations.dingtalk.processor import (
+                                    handle_dingtalk_event,
+                                )
+
+                                with pytest.raises(RuntimeError, match="graph blew up"):
+                                    await handle_dingtalk_event(
+                                        db=mock_db, config=mock_config,
+                                        settings=mock_settings, runtime=mock_runtime,
+                                        event_id="fail_ev", corp_id="corp_001",
+                                        sender_id="ding_user_001", sender_name="Test",
+                                        message_type="text", text="hello",
+                                        dingtalk_conversation_id="conv_001",
+                                        reply_fn=reply_fn,
+                                    )
+
+        reply_fn.assert_awaited()
 
 
 # ====================================================================

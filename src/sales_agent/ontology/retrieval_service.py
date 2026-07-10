@@ -3,10 +3,14 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from sales_agent.llm.base import ChatModel, EmbeddingModel
+from sales_agent.llm.call_params import get_call_params
 from sales_agent.ontology.schemas import GraphEvidence
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +37,18 @@ class OntologyRetrievalService:
         embedding_model: EmbeddingModel,
         chat_model: ChatModel | None = None,
         limit: int = 200,
+        *,
+        db: AsyncSession | None = None,
+        tenant_id: str | None = None,
+        agent_id: str | None = None,
     ):
         self.repository = repository
         self.embedding_model = embedding_model
         self.chat_model = chat_model
         self.limit = limit
+        self.db = db
+        self.tenant_id = tenant_id
+        self.agent_id = agent_id
 
     async def _extract_search_terms(self, question: str) -> list[str]:
         """用 LLM 从问句中提取实体名/关键词，失败时用原始问题兜底。"""
@@ -45,14 +56,24 @@ class OntologyRetrievalService:
             logger.info("Ontology entity extraction: no chat_model, using raw question as search term")
             return [question]
 
+        from sales_agent.services.prompt_resolver_helper import resolve_knowledge_prompt
+        prompt = await resolve_knowledge_prompt(
+            self.db,
+            "ontology_term_extractor",
+            self.tenant_id,
+            self.agent_id,
+            default=_ENTITY_EXTRACTION_PROMPT,
+            question=question,
+        )
         try:
+            p = get_call_params("ontology_retrieval")
             raw = await self.chat_model.generate(
                 messages=[{
                     "role": "user",
-                    "content": _ENTITY_EXTRACTION_PROMPT.format(question=question),
+                    "content": prompt,
                 }],
-                temperature=0,
-                max_tokens=100,
+                temperature=p.temperature,
+                max_tokens=p.max_tokens,
                 response_format={"type": "json_object"},
             )
             parsed = json.loads(raw)

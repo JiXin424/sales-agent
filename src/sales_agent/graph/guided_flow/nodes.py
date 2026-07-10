@@ -119,7 +119,7 @@ async def advance_flow_node(
         return {
             "active_flow": None,
             "flow_stage": None,
-            "flow_payload": None,
+            "flow_payload": {},
             "completed_flow": flow_id,
             "answer_dict": {"summary": result.reply, "sections": []},
             "response_kind": "flow_completed",
@@ -142,7 +142,7 @@ def cancel_flow_node(state: GuidedFlowState, config: RunnableConfig) -> dict[str
     return {
         "active_flow": None,
         "flow_stage": None,
-        "flow_payload": None,
+        "flow_payload": {},
         "completed_flow": None,
         "response_kind": "flow_cancelled",
         "answer_dict": {

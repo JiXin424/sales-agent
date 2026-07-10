@@ -8,7 +8,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sales_agent.models.conversation import Conversation, ConversationMessage, RetrievalLog
+from sales_agent.models.conversation import Conversation, ConversationMessage
 from sales_agent.models.base import generate_id
 
 logger = logging.getLogger(__name__)
@@ -165,25 +165,3 @@ async def log_message(
     )
     db.add(msg)
     return msg
-
-
-async def log_retrieval(
-    db: AsyncSession,
-    *,
-    conversation_id: str,
-    tenant_id: str,
-    query: str,
-    sources: list[dict],
-    agent_id: str | None = None,
-) -> RetrievalLog:
-    """记录检索日志。"""
-    log = RetrievalLog(
-        id=generate_id(),
-        conversation_id=conversation_id,
-        tenant_id=tenant_id,
-        agent_id=agent_id,
-        query=query,
-        sources_json=json.dumps(sources, ensure_ascii=False),
-    )
-    db.add(log)
-    return log

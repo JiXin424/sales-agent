@@ -146,7 +146,7 @@ async def test_cancel_clears_flow_state():
     )
     assert cancelled["active_flow"] is None
     assert cancelled["flow_stage"] is None
-    assert cancelled["flow_payload"] is None
+    assert cancelled["flow_payload"] == {}
     assert cancelled["completed_flow"] is None
     assert "已退出" in cancelled["answer_dict"]["summary"]
 
@@ -228,4 +228,4 @@ async def test_completed_clears_flow_state():
     assert final["completed_flow"] == "visit_preparation"
     assert final["active_flow"] is None
     assert final["flow_stage"] is None
-    assert final["flow_payload"] is None
+    assert final["flow_payload"] == {}

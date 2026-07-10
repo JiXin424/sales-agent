@@ -38,7 +38,9 @@ import AgentAlertsPage from './pages/Agents/AgentAlertsPage';
 import AgentReportsPage from './pages/Agents/AgentReportsPage';
 import AgentEvalRunsPage from './pages/Agents/AgentEvalRunsPage';
 import AgentReviewQueuePage from './pages/Agents/AgentReviewQueuePage';
+import AgentSalesActionsPage from './pages/Agents/AgentSalesActionsPage';
 import GraphDebugPage from './pages/Agents/GraphDebugPage';
+import ConversationHistoryPage from './pages/Agents/ConversationHistoryPage';
 import KnowledgeIterationPage from './pages/Agents/KnowledgeIterationPage';
 import { useInstanceAgent } from './hooks/useInstanceAgent';
 
@@ -80,9 +82,11 @@ export default function App() {
         <Route path="review" element={<AgentReviewQueuePage />} />
         <Route path="eval" element={<AgentEvalRunsPage />} />
         <Route path="alerts" element={<AgentAlertsPage />} />
+        <Route path="sales-actions" element={<AgentSalesActionsPage />} />
         <Route path="reports" element={<AgentReportsPage />} />
         <Route path="traces/:runId" element={<TracePage />} />
         <Route path="graph-debug" element={<GraphDebugPage />} />
+        <Route path="history" element={<ConversationHistoryPage />} />
         <Route path="optimization" element={<KnowledgeIterationPage />} />
         <Route path="coach" element={<CoachDashboardPage />} />
         <Route path="coach/users" element={<CoachUsersPage />} />

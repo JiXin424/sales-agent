@@ -1,6 +1,6 @@
 """钉钉集成 API 请求/响应模型。"""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class DingTalkEventAccepted(BaseModel):
@@ -32,23 +32,4 @@ class DingTalkSendTestResponse(BaseModel):
 
     status: str
     message_id: str | None = None
-    error: str | None = None
-
-
-# --- 快捷入口（Quick Entry）---
-
-
-class DingTalkQuickEntryRequest(BaseModel):
-    """钉钉快捷入口请求 — JSAPI requestAuthCode 流程。"""
-
-    auth_code: str = Field(..., description="JSAPI requestAuthCode 返回的 authCode")
-    action: str = Field(..., description="pre_visit_prepare | post_visit_review")
-    tenant_id: str = Field(..., description="租户 ID")
-
-
-class DingTalkQuickEntryResponse(BaseModel):
-    """钉钉快捷入口响应。"""
-
-    status: str
-    message: str | None = None
     error: str | None = None

@@ -1,15 +1,14 @@
-"""Tests for the retrieval router node and ontology subgraph."""
+"""Tests for the retrieval router node and ontology step functions."""
+from types import SimpleNamespace
+
 import pytest
 from langgraph.runtime import Runtime
-from sales_agent.graph.nodes.retrieval import retrieve_node
-from sales_agent.graph.state import ChatGraphState
-from sales_agent.graph.retrieval.ontology_graph import (
-    build_ontology_retrieval_graph,
-    should_vector_fallback,
-    compact_evidence_node,
-)
+from langgraph.types import Send
+from sales_agent.graph.chat.nodes.retrieval import retrieve_node
+from sales_agent.graph.chat.state import ChatGraphState
+from sales_agent.graph.retrieval.ontology_graph import compact_evidence_node
 from sales_agent.graph.retrieval.state import OntologyRetrievalState
-from sales_agent.graph.edges.path_conditions import select_retrieval_path
+from sales_agent.graph.chat.edges import select_retrieval_path
 
 
 @pytest.mark.asyncio
@@ -27,45 +26,101 @@ async def test_retrieve_node_skip_path():
     assert result["skip_generation"] is False
 
 
+def _make_settings(*, engine="legacy_rag", hybrid_retrieval=False,
+                   neo4j_uri=None, parallel_enabled=True):
+    """Build a minimal mock settings object exposing only the fields read by
+    select_retrieval_path."""
+    return SimpleNamespace(
+        ontology=SimpleNamespace(
+            knowledge_engine=engine,
+            hybrid_retrieval=hybrid_retrieval,
+        ),
+        neo4j=SimpleNamespace(uri=neo4j_uri),
+        retrieval=SimpleNamespace(parallel_enabled=parallel_enabled),
+    )
+
+
 class TestSelectRetrievalPath:
-    def test_skip_when_no_retrieval_needed(self):
-        state: ChatGraphState = {
-            "needs_retrieval": False, "tenant_id": "t1", "user_id": "u1",
-            "message": "", "conversation_id": "c1", "channel": "local",
+    """Matrix tests for select_retrieval_path config-driven routing.
+
+    Verifies that ``hybrid`` engine value and ``hybrid_retrieval`` flag —
+    previously dead config in the graph path — now trigger parallel
+    ontology+rag fan-out, while preserving legacy ontology_neo4j behavior.
+    """
+
+    def _state(self, **overrides):
+        base = {
+            "needs_retrieval": True,
+            "knowledge_policy": "required",
+            "tenant_id": "t1", "user_id": "u1",
+            "message": "test", "conversation_id": "c1", "channel": "local",
         }
-        assert select_retrieval_path(state) == "skip"
+        base.update(overrides)
+        return base
 
-    def test_rag_when_retrieval_needed_but_no_neo4j(self):
-        state: ChatGraphState = {
-            "needs_retrieval": True, "tenant_id": "t1", "user_id": "u1",
-            "message": "", "conversation_id": "c1", "channel": "local",
-        }
-        # Without Neo4j config, should default to rag
-        result = select_retrieval_path(state)
-        assert result in ("rag", "skip")
+    def _patch(self, monkeypatch, **kw):
+        monkeypatch.setattr(
+            "sales_agent.core.config.get_settings",
+            lambda: _make_settings(**kw),
+        )
+
+    def _assert_fanout(self, result):
+        """Assert result is a 2-element Send fan-out (ontology + rag)."""
+        assert isinstance(result, list) and len(result) == 2
+        assert all(isinstance(s, Send) and s.node == "retrieve" for s in result)
+        paths = sorted(s.arg["retrieval_path"] for s in result)
+        assert paths == ["ontology", "rag"]
+
+    def test_skip_when_no_retrieval_needed(self, monkeypatch):
+        self._patch(monkeypatch, engine="hybrid", neo4j_uri="bolt://x")
+        assert select_retrieval_path(self._state(needs_retrieval=False)) == "skip"
+
+    def test_skip_when_knowledge_policy_none(self, monkeypatch):
+        self._patch(monkeypatch, engine="hybrid", neo4j_uri="bolt://x")
+        assert select_retrieval_path(
+            self._state(knowledge_policy="none")) == "skip"
+
+    def test_hybrid_engine_triggers_fanout(self, monkeypatch):
+        """taishan 场景：hybrid engine + neo4j → 并行 fan-out（修前是死配置）。"""
+        self._patch(monkeypatch, engine="hybrid", neo4j_uri="bolt://neo4j:7687")
+        self._assert_fanout(select_retrieval_path(self._state()))
+
+    def test_hybrid_retrieval_flag_triggers_fanout(self, monkeypatch):
+        """hybrid_retrieval 标志（legacy 语义）+ neo4j → 并行 fan-out。"""
+        self._patch(monkeypatch, engine="legacy_rag",
+                    hybrid_retrieval=True, neo4j_uri="bolt://neo4j:7687")
+        self._assert_fanout(select_retrieval_path(self._state()))
+
+    def test_hybrid_engine_without_neo4j_degrades_to_rag(self, monkeypatch):
+        """hybrid engine 但 neo4j 未配置 → 安全降级到 rag。"""
+        self._patch(monkeypatch, engine="hybrid", neo4j_uri=None)
+        assert select_retrieval_path(self._state()) == "rag"
+
+    def test_hybrid_retrieval_without_neo4j_degrades_to_rag(self, monkeypatch):
+        self._patch(monkeypatch, engine="legacy_rag",
+                    hybrid_retrieval=True, neo4j_uri=None)
+        assert select_retrieval_path(self._state()) == "rag"
+
+    def test_ontology_neo4j_parallel_enabled_fanout(self, monkeypatch):
+        """原行为：ontology_neo4j + parallel_enabled → 并行。"""
+        self._patch(monkeypatch, engine="ontology_neo4j",
+                    neo4j_uri="bolt://neo4j:7687", parallel_enabled=True)
+        self._assert_fanout(select_retrieval_path(self._state()))
+
+    def test_ontology_neo4j_parallel_disabled_solo(self, monkeypatch):
+        """原行为：ontology_neo4j + parallel_enabled=False → ontology 独占。"""
+        self._patch(monkeypatch, engine="ontology_neo4j",
+                    neo4j_uri="bolt://neo4j:7687", parallel_enabled=False)
+        assert select_retrieval_path(self._state()) == "ontology"
+
+    def test_legacy_rag_returns_rag(self, monkeypatch):
+        """legacy_rag 即使配了 neo4j 也只走 rag。"""
+        self._patch(monkeypatch, engine="legacy_rag",
+                    neo4j_uri="bolt://neo4j:7687", parallel_enabled=True)
+        assert select_retrieval_path(self._state()) == "rag"
 
 
-class TestOntologySubgraph:
-    def test_graph_compiles(self):
-        builder = build_ontology_retrieval_graph()
-        assert builder is not None
-        graph = builder.compile()
-        assert graph is not None
-
-    def test_should_vector_fallback_with_rows(self):
-        state: OntologyRetrievalState = {
-            "graph_rows": [{"e": {"name": "test"}}],
-            "question": "test", "tenant_id": "t1",
-        }
-        assert should_vector_fallback(state) == "compact"
-
-    def test_should_vector_fallback_empty(self):
-        state: OntologyRetrievalState = {
-            "graph_rows": [],
-            "question": "test", "tenant_id": "t1",
-        }
-        assert should_vector_fallback(state) == "fallback"
-
+class TestCompactEvidence:
     def test_compact_evidence_sorts_by_relevance(self):
         state: OntologyRetrievalState = {
             "graph_rows": [
@@ -82,33 +137,3 @@ class TestOntologySubgraph:
         assert "compacted_evidence" in result
         assert len(result["compacted_evidence"]["entities"]) == 1
         assert len(result["compacted_evidence"]["facts"]) == 1
-
-
-class TestOntologySubgraphCache:
-    """The compiled ontology subgraph must be cached (lru_cache maxsize=1)."""
-
-    def test_cache_compiles_only_once(self):
-        from sales_agent.graph.nodes.retrieval import _get_ontology_subgraph
-
-        # Clear cache to start fresh
-        _get_ontology_subgraph.cache_clear()
-
-        info0 = _get_ontology_subgraph.cache_info()
-        assert info0.hits == 0
-        assert info0.misses == 0
-
-        # First call — cache miss
-        g1 = _get_ontology_subgraph()
-        info1 = _get_ontology_subgraph.cache_info()
-        assert info1.misses == 1
-        assert info1.hits == 0
-
-        # Second call — cache hit
-        g2 = _get_ontology_subgraph()
-        info2 = _get_ontology_subgraph.cache_info()
-        assert info2.misses == 1
-        assert info2.hits == 1
-        assert g1 is g2, "Same compiled graph should be returned"
-
-        # Clean up
-        _get_ontology_subgraph.cache_clear()

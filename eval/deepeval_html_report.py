@@ -13,6 +13,19 @@ from pathlib import Path
 from typing import Any
 
 
+def _load_marked_js() -> str:
+    """读取 vendor 下的 marked.min.js，内嵌进 HTML 报告以渲染 markdown。
+
+    报告保持自包含（浏览器离线打开即可渲染 markdown）。文件缺失时返回
+    空串，渲染回退为纯文本转义，不阻断报告生成。
+    """
+    p = Path(__file__).parent / "vendor" / "marked.min.js"
+    try:
+        return p.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
+
 def generate_html_report(
     results: list[dict],
     summaries: dict[str, dict],
@@ -28,6 +41,8 @@ def generate_html_report(
         output_path: 输出文件路径
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    marked_js = _load_marked_js()
 
     results_json = json.dumps(results, ensure_ascii=False)
     summaries_json = json.dumps(summaries, ensure_ascii=False)
@@ -119,6 +134,23 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
 .detail-item .v{{color:#1a1a2e;margin-top:2px;word-break:break-word}}
 .reason-box{{background:#fff;border:1px solid #e5e7eb;border-radius:6px;padding:10px 14px;font-size:12px;color:#555;white-space:pre-wrap;max-height:120px;overflow-y:auto;margin-top:8px}}
 
+/* ── Markdown 渲染（marked 输出）── */
+.v.md{{font-size:13px;line-height:1.6}}
+.v.md p{{margin:4px 0}}
+.v.md h1,.v.md h2,.v.md h3,.v.md h4,.v.md h5,.v.md h6{{margin:8px 0 4px;font-weight:600;line-height:1.3}}
+.v.md h1{{font-size:17px}}.v.md h2{{font-size:16px}}.v.md h3{{font-size:15px}}
+.v.md ul,.v.md ol{{margin:4px 0;padding-left:20px}}
+.v.md li{{margin:2px 0}}
+.v.md table{{border-collapse:collapse;margin:6px 0;font-size:12px;display:block;overflow-x:auto;max-width:100%}}
+.v.md th,.v.md td{{border:1px solid #e5e7eb;padding:4px 8px;text-align:left;white-space:normal}}
+.v.md th{{background:#f8fafc;font-weight:600}}
+.v.md code{{background:#f1f5f9;padding:1px 4px;border-radius:3px;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}}
+.v.md pre{{background:#f8fafc;border:1px solid #e5e7eb;border-radius:6px;padding:10px;overflow-x:auto;margin:6px 0}}
+.v.md pre code{{background:none;padding:0;font-size:12px}}
+.v.md blockquote{{border-left:3px solid #cbd5e1;margin:6px 0;padding:2px 10px;color:#64748b}}
+.v.md strong{{font-weight:600}}
+.v.md a{{color:#2563eb}}
+
 /* ── Responsive ── */
 @media (max-width:768px){{
     .header{{padding:20px}}
@@ -170,6 +202,20 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
 </div>
 
 <script>
+// ── marked (markdown→html, 内嵌, 离线可用) ──
+{marked_js}
+
+// ── markdown 渲染：先转义 & 和 < 防 XSS（保留 > 以识别 blockquote），再 marked.parse ──
+function mdToHtml(text, maxLen) {{
+    if (!text) return '';
+    let s = String(text);
+    if (maxLen && s.length > maxLen) s = s.substring(0, maxLen);
+    s = s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+    if (typeof marked === 'undefined') return s.replace(/\n/g,'<br>');
+    try {{ return marked.parse(s, {{gfm:true, breaks:true}}); }}
+    catch(e) {{ return s.replace(/\n/g,'<br>'); }}
+}}
+
 // ── Data ──
 const RESULTS = {results_json};
 const SUMMARIES = {summaries_json};
@@ -396,8 +442,8 @@ function renderTable() {{
         if (isExpanded) {{
             row += `<tr class="detail-row open"><td colspan="${{8 + METRIC_NAMES.length}}" class="detail-content">
                 <div class="detail-grid">
-                    <div class="detail-item"><div class="k">完整回答</div><div class="v">${{(r.answer||'(无)').replace(/</g,'&lt;').replace(/>/g,'&gt;').substring(0, 2000)}}</div></div>
-                    ${{r.reference ? `<div class="detail-item"><div class="k">参考答案</div><div class="v">${{r.reference.replace(/</g,'&lt;').replace(/>/g,'&gt;')}}</div></div>` : ''}}
+                    <div class="detail-item"><div class="k">完整回答</div><div class="v md">${{mdToHtml(r.rendered||r.answer||'(无)', 2000)}}</div></div>
+                    ${{r.reference ? `<div class="detail-item"><div class="k">参考答案</div><div class="v md">${{mdToHtml(r.reference)}}</div></div>` : ''}}
                     <div class="detail-item"><div class="k">性能指标</div><div class="v">延迟: ${{r.latency_ms||0}}ms | TTFT: ${{r.ttft_ms||0}}ms | Token: 入${{r.prompt_tokens||0}}/出${{r.completion_tokens||0}}/总${{r.total_tokens||0}}</div></div>
                     <div class="detail-item"><div class="k">指标详情</div><div class="v">
                         ${{METRIC_NAMES.map(m => {{

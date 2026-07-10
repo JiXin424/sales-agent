@@ -88,30 +88,10 @@ HUMAN_ONLY_ERROR = OptimizationAuthorizationError(
     "Approval, publish, and rollback require a human operator",
 )
 
-SCOPE_DENIED_ERROR = OptimizationAuthorizationError(
-    "scope_denied",
-    "This credential does not have the required scope",
-)
-
-
-def require_scope(principal: OptimizationPrincipal, scope: str) -> None:
-    """Raise SCOPE_DENIED_ERROR if *principal* lacks *scope*."""
-    if scope not in principal.scopes:
-        raise SCOPE_DENIED_ERROR
-
-
 def require_human_principal(principal: OptimizationPrincipal) -> None:
     """Raise HUMAN_ONLY_ERROR if *principal* is an MCP identity."""
     if not principal.is_operator:
         raise HUMAN_ONLY_ERROR
-
-
-def require_agent_ownership(
-    principal: OptimizationPrincipal, agent_id: str,
-) -> None:
-    """Raise 404 if *principal* cannot access *agent_id*."""
-    if not principal.is_operator and agent_id not in principal.agent_ids:
-        raise HTTPException(status_code=404, detail="Agent not found")
 
 
 # ── Bearer token authentication ──────────────────────────────────────────────

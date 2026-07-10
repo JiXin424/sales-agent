@@ -226,7 +226,7 @@ class EvalRunner:
         """Run a single eval case through the graph and store the result."""
         from langgraph.checkpoint.memory import InMemorySaver
         from langgraph.store.memory import InMemoryStore
-        from sales_agent.graph.chat_graph import build_chat_graph_compiled
+        from sales_agent.graph.chat.graph import build_chat_graph_compiled
 
         conversation_id = f"eval_{run_id}_{case.case_id}"
         t_start = time.monotonic()

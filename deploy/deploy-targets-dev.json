@@ -1,8 +1,7 @@
 {
-  "_comment": "dev 分支 CI fan-out 目标清单。仅开发/测试机，不含生产 prod3。",
+  "_comment": "dev 分支 CI fan-out 目标清单。仅开发机 prod2 —— dev push 只重建本机应用容器，不碰生产 prod3 和 test（test/prod3 只跟 main）。",
   "registry": "registry.internal:5000/sales-agent",
   "targets": [
-    { "name": "prod2(开发)",  "host": "172.25.186.209", "user": "root", "dir": "/root/code/sales-agent", "method": "deploy-release", "local": false },
-    { "name": "test", "host": "47.118.16.235", "user": "root", "dir": "/root/code/sales-agent", "method": "image-deploy", "env": "test" }
+    { "name": "prod2(开发)",  "host": "172.25.186.209", "user": "root", "dir": "/root/code/sales-agent", "method": "deploy-release", "local": false }
   ]
 }

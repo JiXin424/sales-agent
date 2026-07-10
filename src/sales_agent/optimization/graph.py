@@ -9,7 +9,6 @@ Thread ID format: ``kbopt:{tenant}:{iteration}:{candidate}:{run}``
 from __future__ import annotations
 
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.postgres import PostgresSaver
 
 from sales_agent.optimization.state import OptimizationState
 from sales_agent.optimization import nodes

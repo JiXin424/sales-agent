@@ -141,7 +141,7 @@ class KnowledgeIngestor:
         # 1b. MD optimization (LLM-enhanced preprocessing, optional)
         if optimize_md and self.chat_model is not None:
             try:
-                raw_content = await self._optimize_md(raw_content, file_path)
+                raw_content = await self._optimize_md(raw_content, file_path, tenant_id)
             except Exception as exc:
                 logger.warning(
                     "MD optimization failed for %s: %s, using original",
@@ -235,18 +235,34 @@ class KnowledgeIngestor:
         )
         return count
 
-    async def _optimize_md(self, raw_content: str, file_path: Path) -> str:
+    async def _optimize_md(
+        self,
+        raw_content: str,
+        file_path: Path,
+        tenant_id: str | None = None,
+    ) -> str:
         """Run LLM-based MD optimization before chunking.
 
         Injects improved frontmatter, search_keywords, and retrieval anchors.
         Requires ``self.chat_model`` to be set (passed via constructor).
         Returns the optimized content, or the original on failure.
+
+        Parameters
+        ----------
+        tenant_id :
+            当前入库的租户 ID。传入时由 ``MDOptimizer`` 走 ``PromptRegistry``
+            解析 ``md_optimize_system`` / ``md_optimize_user``，运营后台编辑生效。
         """
         from sales_agent.rag.markdown_parser import _infer_source_type
         hint = _infer_source_type(file_path)
 
         from sales_agent.services.md_optimizer import MDOptimizer
-        optimizer = MDOptimizer(self.chat_model)
+        optimizer = MDOptimizer(
+            self.chat_model,
+            db=self.db,
+            tenant_id=tenant_id,
+            agent_id=None,
+        )
         try:
             optimized = await optimizer.optimize(raw_content, source_type_hint=hint)
             logger.info("MD optimized for %s", file_path.name)

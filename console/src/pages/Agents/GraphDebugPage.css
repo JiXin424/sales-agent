@@ -1,14 +1,18 @@
 .gd-container {
   display: flex;
-  height: calc(100vh - 64px - 48px);
+  flex-direction: column;
+  /* 保留侧边栏 + Header：可用高度 = 100vh - 64px(顶部 Header)。
+     graph-debug 路由 Content 已去 margin/padding，宽度=侧边栏右侧全部。 */
+  height: calc(100vh - 64px);
   gap: 0;
 }
 
 .gd-left {
   flex: 1;
-  border-right: 1px solid #f0f0f0;
+  border-bottom: 1px solid #f0f0f0;
   display: flex;
   flex-direction: column;
+  min-height: 0;
   min-width: 0;
 }
 
@@ -25,37 +29,139 @@
 
 .gd-left-body {
   flex: 1;
-  overflow-y: auto;
+  overflow: hidden;
   padding: 8px;
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 
-.gd-mermaid-wrap {
-  max-height: 55vh;
-  overflow: auto;
+/* antd Tabs 撑满图区：Tabs 自身 flex:1，内容区随父级撑开 */
+.gd-left-body > .ant-tabs {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.gd-left-body > .ant-tabs > .ant-tabs-content-holder {
+  flex: 1;
+  min-height: 0;
+}
+
+.gd-left-body > .ant-tabs > .ant-tabs-content-holder > .ant-tabs-content {
+  height: 100%;
+}
+
+/* tabpane 成为 flex 容器：NodeLegend / gd-flow-wrap / Collapse 纵向排列，
+   gd-flow-wrap 用 flex:1 撑满剩余，图不再被兄弟元素挤出/裁切。 */
+.gd-left-body > .ant-tabs > .ant-tabs-content-holder > .ant-tabs-content > .ant-tabs-tabpane {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.gd-flow-wrap {
+  flex: 1;
+  min-height: 0;
+  position: relative;
   border: 1px solid #f0f0f0;
   border-radius: 6px;
-  padding: 12px;
-  background: #fff;
+  overflow: hidden;
+  background: #f7f9fc;
 }
 
-.gd-mermaid svg {
-  max-width: 100%;
-  height: auto;
+/* reactflow 自定义节点不需要额外 CSS（样式全在 GraphNode.tsx 内联），
+   此 class 仅用于 devtools 定位。 */
+.gd-flow-node {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* 对照表高亮行：黄色背景 + 2 秒淡出。 */
+.gd-prompt-row-highlight {
+  background: #fffbe6;
+  animation: gd-row-fade 2s ease-out forwards;
+}
+
+@keyframes gd-row-fade {
+  from { background: #fff7b3; }
+  to { background: transparent; }
+}
+
+/* ── 节点类型图例 + 对照表 ──
+   reactflow 节点徽配色（子图橙 / LLM 蓝）在 GraphNode.tsx 内联；
+   此处 CSS 仅作图例色块复用。 */
+.gd-legend {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 6px 0 10px;
+  font-size: 12px;
+  color: #595959;
+}
+
+.gd-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.gd-legend-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid #d9d9d9;
+}
+
+.gd-legend-swatch.fn { background: #f5f5f5; }
+.gd-legend-swatch.llm { background: #e6f4ff; border-color: #1677ff; }
+.gd-legend-swatch.sub { background: #fff3e0; border-color: #ff9800; }
+
+/* 节点-Prompt 对照表（reactflow 图下方） */
+.gd-node-prompt-table {
+  margin-top: 8px;
+}
+
+.gd-node-prompt-table .ant-table {
+  font-size: 12px;
+}
+
+.gd-node-prompt-table .llm-tag {
+  margin-right: 4px;
 }
 
 .gd-input-row {
+  flex: 0 0 auto;
   margin-top: 12px;
   padding: 8px 0;
   border-top: 1px solid #f0f0f0;
 }
 
 .gd-right {
-  flex: 1.2;
+  flex: 0 0 32vh;
   display: flex;
   flex-direction: column;
-  min-width: 0;
+  min-height: 0;
+}
+
+/* 折叠执行轨迹：图区占满整个屏幕（header 以下全部空间）。 */
+.gd-right-collapsed {
+  display: none;
+}
+
+/* gd-left-header 里的折叠/展开按钮：推到标题栏右侧。 */
+.gd-trace-toggle {
+  margin-left: auto;
+  font-weight: 400;
+  font-size: 13px;
+}
+
+/* 「图结构」标题：左侧主标题，折叠按钮靠右（gd-trace-toggle margin-left:auto 推开）。 */
+.gd-left-header .gd-title {
+  font-size: 15px;
+  font-weight: 600;
 }
 
 .gd-right-body {

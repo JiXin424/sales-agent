@@ -1,19 +1,13 @@
-# Task 9: Cache Ontology, clean Graph Debug, and retire legacy session code
+# Multi-tenant/instance config & feature toggle research (READ-ONLY)
 
-## Steps
+Goal: understand per-tenant/per-instance config so a feature can be toggled ON on one
+agent instance and OFF on another, then migrated to another instance via CI/CD.
 
-- [x] Step 1: Read all relevant source files and understand current state
-- [ ] Step 2: Write failing registry and compile-cache tests
-- [ ] Step 3: Run tests to verify they fail
-- [ ] Step 4: Cache the compiled Ontology subgraph in retrieval.py
-- [ ] Step 5: Create graph/registry.py
-- [ ] Step 6: Remove registry from chat_graph.py
-- [ ] Step 7: Update graph_debug.py imports
-- [ ] Step 8: Update graph/__init__.py exports
-- [ ] Step 9: Delete legacy files
-- [ ] Step 10: Run all tests to verify
-- [ ] Step 11: Run grep to verify no references remain
-- [ ] Step 12: Commit
+- [ ] Identify tenant/instance ID mechanism (tenant_id, agent_id, instance config)
+- [ ] Map configuration loading (files, settings, per-instance vs per-tenant)
+- [ ] Find feature flag/toggle mechanism
+- [ ] Trace deployment story (deploy-remote.sh, compose, Dockerfile, CI/CD, <tenant>-stream)
+- [ ] Document DB/ORM/Alembic tenant-scoped data model
+- [ ] Synthesize: how to toggle a feature ON for instance A / OFF for instance B and ship via CI/CD
 
-## Review
-
+## Research delegated to 5 parallel subagents (read-only, no worktree needed).

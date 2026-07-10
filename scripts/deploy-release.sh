@@ -805,6 +805,16 @@ fi
 echo "Starting services with $COMPOSE_FILE"
 docker compose -f "$COMPOSE_FILE" "${ENV_FILE_ARGS[@]}" up -d
 
+# FORCE_RECREATE_APP=1（CI main/dev push 设）时强制重建应用容器（api/stream/worker/frontend），
+# 不触碰 postgres/neo4j 基础设施。即使镜像 digest 未变也重建，确保最新代码一定生效。
+# config --services 黑名单过滤 infra，自动覆盖 frontend 及未来新增角色。
+if [ "${FORCE_RECREATE_APP:-0}" = "1" ]; then
+  APP_SERVICES=$(docker compose -f "$COMPOSE_FILE" "${ENV_FILE_ARGS[@]}" config --services \
+    | grep -vE '^(postgres|neo4j)$')
+  echo "Force-recreating app services (FORCE_RECREATE_APP=1): $APP_SERVICES"
+  docker compose -f "$COMPOSE_FILE" "${ENV_FILE_ARGS[@]}" up -d --force-recreate --no-deps $APP_SERVICES
+fi
+
 # ──────────────────────────────────────────────
 # 10. Auto-create tenant DB records
 # ──────────────────────────────────────────────
@@ -836,6 +846,16 @@ PY
 # ──────────────────────────────────────────────
 echo "Running tenant checks"
 scripts/check-all-tenants.sh "$FILTERED_INVENTORY"
+
+# ──────────────────────────────────────────────
+# 11b. DB schema 一致性校验
+# ──────────────────────────────────────────────
+# 捕获 init_db stamp-head 兜底导致的幽灵漂移（alembic_version=head 但列未落地，
+# 典型 prod3 的 conversation_messages.topic_id）。校验脚本在 app 镜像内，
+# 经 docker exec <tenant>-api 跑，从容器 env 读 DATABASE_URL。
+# image-deploy 链路（deploy-remote.sh）自带同款校验；本机部署链路在此补上。
+echo "Validating DB schema consistency"
+scripts/post-deploy-schema-check.sh "$COMPOSE_FILE"
 
 # ──────────────────────────────────────────────
 # 12. Register DingTalk quick entries

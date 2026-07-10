@@ -75,6 +75,10 @@ class SourceDisplayConfig(BaseModel):
 
 class RiskConfig(BaseModel):
     tenant_custom_rules_enabled: bool = False
+    # 是否在图节点 check_risk 中启用 LLM 风控（规则 full_check 之后的增强层）。
+    # 默认关闭：LLM 风控失败兜底为 allow，需配合 _merge_risk_results + try/except
+    # 回退规则结果，避免静默放行。灰度时按租户/配置打开。
+    enable_llm_risk_check: bool = False
     default_price_commitment_action: str = "warn"
     default_delivery_commitment_action: str = "block"
     default_unsupported_claim_action: str = "rewrite"
@@ -99,6 +103,10 @@ class PathRouterConfig(BaseModel):
     """路径路由配置。"""
     enable_fast_path: bool = True
     enable_slow_path_notice: bool = True
+    # 是否在图节点 route_task 中启用 LLM 路由兜底（规则置信度不足时调 LLM 分类）。
+    # 默认关闭：每轮多一次 LLM 调用增加延迟，且 LLM 路由失败需回退规则。
+    # 灰度时打开；关闭时节点走 route_task_rules_only，行为与现状一致。
+    enable_llm_router: bool = False
     llm_router_confidence_threshold: float = 0.75
     clarify_confidence_threshold: float = 0.45
 
@@ -131,9 +139,10 @@ class OntologyConfig(BaseModel):
 class WebSearchConfig(BaseModel):
     """联网搜索兜底配置（Bocha API）。"""
 
-    enabled: bool = False
+    enabled: bool = True
     api_key: str = ""
     top_n: int = 5
+    max_gap_entities: int = 2  # 部分命中时，每轮最多 web 补全的未命中实体数
 
 
 class Neo4jConfig(BaseModel):
@@ -188,6 +197,56 @@ class GuidedFlowsConfig(BaseModel):
     timezone: str = "Asia/Shanghai"
 
 
+class UserProfileMemoryConfig(BaseModel):
+    """Evidence-backed user profile projection and bounded recall."""
+
+    enabled: bool = False
+    recall_enabled: bool = True
+    transparency_enabled: bool = True
+    worker_enabled: bool = True
+    worker_poll_interval_seconds: float = 2.0
+    rebuild_batch_size: int = 20
+    rebuild_max_attempts: int = 5
+    max_recall_items: int = 5
+    max_recall_chars: int = 1200
+    retrieval_timeout_ms: int = 120
+
+
+class LongTermMemoryConfig(BaseModel):
+    """Governed long-term atomic memory."""
+
+    enabled: bool = False
+    candidate_extraction_enabled: bool = True
+    outbox_worker_enabled: bool = True
+    outbox_poll_interval_seconds: float = 2.0
+    outbox_batch_size: int = 20
+    outbox_max_attempts: int = 5
+    explicit_confirmation_required_for_broad_forget: bool = True
+
+
+class ScenarioCoachConfig(BaseModel):
+    """场景教练：识别预设销售场景问题，命中即返回预设答案。默认关闭。"""
+
+    enabled: bool = False
+    confidence_threshold: float = 0.8
+
+
+class SalesActionsConfig(BaseModel):
+    """Sales action cards and proactive reminders."""
+
+    enabled: bool = False
+    scheduler_enabled: bool = True
+    scan_interval_seconds: float = 30.0
+    batch_size: int = 50
+    max_attempts: int = 5
+    default_timezone: str = "Asia/Shanghai"
+    morning_digest_time: str = "09:00"
+    evening_digest_time: str = "18:30"
+    default_snooze_minutes: int = 30
+    expire_after_days: int = 7
+    llm_confidence_threshold: float = 0.75
+
+
 class Settings(BaseModel):
     """顶层设置，聚合所有子配置。"""
 
@@ -206,6 +265,13 @@ class Settings(BaseModel):
     web_search: WebSearchConfig = WebSearchConfig()
     topic_routing: TopicRoutingConfig = TopicRoutingConfig()
     guided_flows: GuidedFlowsConfig = GuidedFlowsConfig()
+    scenario_coach: ScenarioCoachConfig = ScenarioCoachConfig()
+    long_term_memory: LongTermMemoryConfig = LongTermMemoryConfig()
+    user_profile_memory: UserProfileMemoryConfig = UserProfileMemoryConfig()
+    sales_actions: SalesActionsConfig = SalesActionsConfig()
+
+    # LLM 调用参数（temperature/max_tokens）默认值文件路径，开发者维护、git 管版本
+    llm_call_defaults_path: str = "config/llm_call_defaults.yaml"
 
     # 延迟导入避免循环依赖
     @property
@@ -349,6 +415,9 @@ class Settings(BaseModel):
         web_search_top_n = os.getenv("BOCHA_TOP_N", "")
         if web_search_top_n:
             raw.setdefault("web_search", {})["top_n"] = int(web_search_top_n)
+        web_search_max_gap = os.getenv("BOCHA_MAX_GAP_ENTITIES", "")
+        if web_search_max_gap:
+            raw.setdefault("web_search", {})["max_gap_entities"] = int(web_search_max_gap)
 
         # 环境变量覆盖 guided_flows 配置
         guided_flows_enabled = os.getenv("GUIDED_FLOWS_ENABLED")
@@ -362,6 +431,33 @@ class Settings(BaseModel):
         if topic_routing_enabled is not None:
             raw.setdefault("topic_routing", {})["enabled"] = (
                 topic_routing_enabled.strip().lower() in {"1", "true", "yes", "on"}
+            )
+
+        # 环境变量覆盖 scenario_coach 配置
+        scenario_coach_enabled = os.getenv("SCENARIO_COACH_ENABLED")
+        if scenario_coach_enabled is not None:
+            raw.setdefault("scenario_coach", {})["enabled"] = (
+                scenario_coach_enabled.strip().lower() in {"1", "true", "yes", "on"}
+            )
+        scenario_coach_threshold = os.getenv("SCENARIO_COACH_CONFIDENCE_THRESHOLD")
+        if scenario_coach_threshold is not None:
+            try:
+                raw.setdefault("scenario_coach", {})["confidence_threshold"] = float(
+                    scenario_coach_threshold
+                )
+            except ValueError:
+                pass
+
+        # 环境变量覆盖 LLM 路由/风控开关（图节点 route_task / check_risk 灰度用）
+        llm_router_enabled = os.getenv("PATH_ROUTER_ENABLE_LLM_ROUTER")
+        if llm_router_enabled is not None:
+            raw.setdefault("path_router", {})["enable_llm_router"] = (
+                llm_router_enabled.strip().lower() in {"1", "true", "yes", "on"}
+            )
+        llm_risk_enabled = os.getenv("RISK_ENABLE_LLM_RISK_CHECK")
+        if llm_risk_enabled is not None:
+            raw.setdefault("risk", {})["enable_llm_risk_check"] = (
+                llm_risk_enabled.strip().lower() in {"1", "true", "yes", "on"}
             )
 
         instance = cls(**raw)
@@ -381,15 +477,4 @@ def get_settings() -> Settings:
     if _settings is None:
         config_path = Path(__file__).resolve().parents[3] / "config" / "default.yaml"
         _settings = Settings.from_yaml(config_path)
-    return _settings
-
-
-def reload_settings(path: str | Path | None = None) -> Settings:
-    """重新加载配置。"""
-    global _settings
-    if path is None:
-        config_path = Path(__file__).resolve().parents[3] / "config" / "default.yaml"
-    else:
-        config_path = Path(path)
-    _settings = Settings.from_yaml(config_path)
     return _settings

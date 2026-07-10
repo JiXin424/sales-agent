@@ -60,7 +60,6 @@ def cluster_by_shared_symptoms(
                 assigned.add(j)
 
         clusters.append(cluster)
-        assigned.add(i)
 
     # Filter clusters below min size
     return [c for c in clusters if len(c["cases"]) >= min_cluster_size]

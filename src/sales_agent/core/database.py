@@ -62,13 +62,22 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 async def _run_auto_migrations(engine) -> None:
     """启动时自动把 DB schema 升级到 alembic head。
 
-    注意：``init_db`` 先调了 ``Base.metadata.create_all``（幂等 IF NOT EXISTS），
-    所以物理 schema 已经是最新的模型定义。alembic 迁移只需追上版本号，
-    不应再跑已执行的 DDL（否则会 DuplicateTableError）。
+    顺序契约：本函数在 ``init_db`` 里于 ``Base.metadata.create_all`` **之前**调用。
+    - 老库（有 alembic_version）：upgrade head 时 create_all 尚未预建任何表，migration
+      里的 create_table 不会撞 DuplicateTableError，add_column 也能正常执行；随后 init_db
+      末尾的 create_all 再幂等补建 model-only 表。
+    - 新库（无 alembic_version）：stamp head（不跑 upgrade），随后 create_all 基于最新
+      model 一次性建好全部表。
 
-    流程：
-    - 无 alembic_version 表 → 新库，直接 stamp head
-    - 有 alembic_version 表 → 先尝试 upgrade head；若因建表冲突失败则 stamp head
+    历史 bug：旧版本 create_all 在 upgrade 之前跑，会抢建 migration 里的新表（model 已有），
+    导致 upgrade 撞 DuplicateTableError → 兜底 stamp head → 跳过同 migration 的 add_column，
+    形成「alembic_version 标到 head、列却没加上」的幽灵漂移。被这种漂移污染过的库需用
+    backfill migration（如 0012_backfill_skipped_columns）补回缺失列。
+
+    局限：若某张表在「历史上」已被 create_all 预建（model 早于其 create_table migration
+    引入），upgrade 重跑该 migration 仍会撞 → 走兜底 stamp。彻底防范有赖于「新 model 表
+    随即配 create_table migration」的规范，以及 CI 的 schema 一致性校验。
+
     失败不阻断启动（仅警告），保证运维接口可用。
     """
     import asyncio
@@ -113,10 +122,16 @@ async def _run_auto_migrations(engine) -> None:
         try:
             await asyncio.to_thread(command.upgrade, cfg, "head")
             log.info("Auto alembic upgrade to head completed")
-        except Exception:
+        except Exception as upgrade_exc:
+            # upgrade 失败时 alembic_version 停在最后一个成功 revision；为让后续 revision
+            # 仍能推进而 stamp head。但 stamp head 会掩盖「失败 revision 里的 add_column 未
+            # 执行」——必须用 backfill migration 补齐，否则会再现 prod3 式的幽灵漂移
+            # （alembic_version=head 但列缺失）。这里把异常打全，便于在日志里发现漂移。
             log.warning(
-                "Auto alembic upgrade failed (likely tables already created by "
-                "create_all), stamping head as fallback"
+                "Auto alembic upgrade failed (%s); stamping head as fallback so later "
+                "revisions can proceed. WARNING: any add_column in the failing revision "
+                "was SKIPPED — backfill it with a dedicated migration or columns will drift",
+                upgrade_exc,
             )
             await asyncio.to_thread(command.stamp, cfg, "head")
             log.info("Auto alembic stamp head completed (fallback)")
@@ -131,12 +146,16 @@ async def init_db() -> None:
     import sales_agent.models  # noqa: F401
     sales_agent.models._import_dingtalk_models()
 
+    # 先跑 alembic 自动迁移，再 create_all 补建 model-only 表。顺序不能反：
+    # 若 create_all 先跑，会抢建「同时出现在某个 migration create_table 里」的表（model
+    # 已有该表），导致随后的 alembic upgrade 撞 DuplicateTableError、触发 stamp head 兜底、
+    # 跳过同一 migration 里的 add_column —— 老表的新列永远加不上。曾因此导致 prod3 的
+    # conversation_messages.topic_id 缺失、钉钉 stream 事务持续 aborted。详见
+    # _run_auto_migrations 与 changelog/2026-07-06.md。
+    await _run_auto_migrations(engine)
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-
-    # 启动时自动把已有表的 schema 升级到 alembic head（部署自带 migration，
-    # 无需手动 stamp/upgrade）。详见 _run_auto_migrations。
-    await _run_auto_migrations(engine)
 
     # 为每个 tenant 创建默认 Agent 并回填既有数据（向后兼容）。
     # 失败不阻断启动（仅记录），保证运维接口可用。

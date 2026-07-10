@@ -1,0 +1,76 @@
+# LLM 调用参数默认值（开发者维护，走 git；版本/回滚由 git 负责）
+# 改这里 = commit + push + 重建容器。值变更需跑 eval/deepeval_run.sh 回归。
+# 仅 temperature + max_tokens 两个标量；response_format 等结构性参数留代码。
+
+evidence_router:        # services/evidence_router.py
+  temperature: 0.0
+  max_tokens: 500
+task_router:            # services/task_router.py
+  temperature: 0.1
+  max_tokens: 200
+agent_executor:         # services/agent_executor.py
+  temperature: 0.3
+  max_tokens: 2000
+context_resolver:       # services/context_resolver.py
+  temperature: 0.0
+  max_tokens: 500
+topic_manager:          # services/topic_manager.py
+  temperature: 0.0
+  max_tokens: 500
+topic_restore:          # services/topic_restore.py
+  temperature: 0.0
+  max_tokens: 500
+risk_checker:           # services/risk_checker.py
+  temperature: 0.1
+  max_tokens: 300
+memory_extractor:       # services/memory/extractor.py
+  temperature: 0.0
+  max_tokens: 700
+md_optimizer:           # services/md_optimizer.py
+  temperature: 0.3
+  max_tokens: 4096
+ontology_retrieval:     # ontology/retrieval_service.py
+  temperature: 0.0
+  max_tokens: 100
+ontology_answer:        # ontology/answer_service.py
+  temperature: 0.2
+  max_tokens: 1600
+ontology_entity_extraction:  # ontology/extractor.py（经 _generate_with_retry）
+  temperature: 0.1
+  max_tokens: 5000
+ontology_fact_extraction:    # ontology/extractor.py（经 _generate_with_retry）
+  temperature: 0.1
+  max_tokens: 6000
+ontology_graph:         # graph/retrieval/ontology_graph.py
+  temperature: 0.0
+  max_tokens: 100
+web_fallback:           # graph/retrieval/web_fallback.py
+  temperature: 0.2
+  max_tokens: 800
+scenario_matcher:       # scenarios/matcher.py
+  temperature: 0.0
+  max_tokens: 200
+coach_small_win:        # graph/guided_flow/handlers/coach_flows.py（经 _llm_generate）
+  temperature: 0.4
+  max_tokens: 600
+coach_block_split:      # graph/guided_flow/handlers/coach_flows.py（经 _llm_generate）
+  temperature: 0.2
+  max_tokens: 400
+coach_reframe:          # graph/guided_flow/handlers/coach_flows.py（经 _llm_generate）
+  temperature: 0.4
+  max_tokens: 900
+daily_evaluator:        # coach/daily_evaluator.py（另带 response_format，留代码）
+  temperature: 0.1
+  max_tokens: 2000
+prompt_preview:         # api/routes/prompts.py
+  temperature: 0.3
+  max_tokens: 2000
+health_ping:            # api/routes/health.py（原不传温度，显式补 0.3）
+  temperature: 0.3
+  max_tokens: 10
+media_vision:           # integrations/dingtalk/media_adapter.py（走原生 SDK create）
+  temperature: 0.1
+  max_tokens: 800
+media_audio:            # integrations/dingtalk/media_adapter.py（走原生 SDK create）
+  temperature: 0.0
+  max_tokens: 800

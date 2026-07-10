@@ -1,30 +1,28 @@
-"""Checkpointer & Store factory for LangGraph graphs.
+"""Checkpointer factory for LangGraph graphs.
 
 Provides:
-- ``get_checkpointer_sync()`` — InMemorySaver singleton for unit tests
-- ``get_checkpointer()`` — AsyncPostgresSaver for production (await required)
-- ``get_store_sync()`` — InMemoryStore singleton for unit tests (P1)
-- ``get_store()`` — AsyncPostgresStore for production (P1)
+- ``get_checkpointer_sync()`` - InMemorySaver singleton for unit tests
+- ``get_checkpointer()`` - Strict AsyncPostgresSaver for production (await required)
+- ``initialize_production_checkpointer()`` - Initialize PostgreSQL runtime
+- ``get_production_checkpointer()`` - Get production checkpointer
+- ``close_production_checkpointer()`` - Shutdown production runtime
+- ``production_checkpoint_ready()`` - Check if production runtime is ready
 """
 
 from __future__ import annotations
 
-import logging
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-from langgraph.store.memory import InMemoryStore
 
-logger = logging.getLogger(__name__)
+from sales_agent.graph.checkpoint_runtime import (
+    CheckpointUnavailableError,
+    initialize_production_checkpointer,
+    get_production_checkpointer,
+    close_production_checkpointer,
+    production_checkpoint_ready,
+)
 
 _in_memory_saver: InMemorySaver | None = None
-_async_pg_saver: AsyncPostgresSaver | None = None
-
-# ── Online graph checkpointer (process-level singleton) ───────────────
-_online_in_memory_saver: InMemorySaver | None = None
-
-# ── Store singletons (P1: cross-session memory) ──────────────────────
-_in_memory_store: InMemoryStore | None = None
-_async_pg_store = None  # AsyncPostgresStore | None
 
 
 def get_checkpointer_sync() -> InMemorySaver:
@@ -35,104 +33,21 @@ def get_checkpointer_sync() -> InMemorySaver:
     return _in_memory_saver
 
 
-def get_online_checkpointer_sync() -> InMemorySaver:
-    """Return a process-level InMemorySaver for the Online Graph.
+async def get_checkpointer() -> AsyncPostgresSaver:
+    """Return the production checkpointer (strict).
 
-    This checkpointer is shared across all production conversation turns
-    and **must not** be created per request.  Tests should pass their
-    own :class:`InMemorySaver` to ``build_online_graph().compile()``
-    instead of using this singleton.
+    Requires that ``initialize_production_checkpointer()`` has been called first.
+    Raises CheckpointUnavailableError if the runtime is not ready.
     """
-    global _online_in_memory_saver
-    if _online_in_memory_saver is None:
-        _online_in_memory_saver = InMemorySaver()
-    return _online_in_memory_saver
+    return get_production_checkpointer()
 
 
-async def get_checkpointer() -> AsyncPostgresSaver | InMemorySaver:
-    """Return the production checkpointer.
-
-    If DATABASE_URL is set and asyncpg is available, returns AsyncPostgresSaver.
-    Otherwise falls back to InMemorySaver.
-
-    The first call runs ``setup()`` to create checkpoint tables.
-    """
-    global _async_pg_saver, _in_memory_saver
-
-    if _async_pg_saver is not None:
-        return _async_pg_saver
-
-    from sales_agent.core.config import get_settings
-
-    try:
-        settings = get_settings()
-        db_url = settings.database.url
-
-        # Convert sqlalchemy URL to psycopg connection string
-        conn_string = db_url.replace("+asyncpg", "")
-
-        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-        from psycopg_pool import AsyncConnectionPool
-
-        pool = AsyncConnectionPool(conn_string, min_size=1, max_size=5, open=True)
-        saver = AsyncPostgresSaver(conn=pool)
-        await saver.setup()
-        _async_pg_saver = saver  # only cache after successful setup
-        logger.info("AsyncPostgresSaver initialized with PostgreSQL pool")
-        return _async_pg_saver
-
-    except Exception as e:
-        logger.warning(
-            "Failed to create AsyncPostgresSaver (%s), falling back to InMemorySaver", e
-        )
-        return get_checkpointer_sync()
-
-
-# ── P1: Store (cross-session / cross-thread persistent memory) ────────
-
-def get_store_sync() -> InMemoryStore:
-    """Return a shared InMemoryStore for unit tests and local dev.
-
-    The Store is a generalized key-value store that can persist
-    across different conversation threads, enabling features like
-    user profiles, knowledge gaps, and cross-session memory.
-    """
-    global _in_memory_store
-    if _in_memory_store is None:
-        _in_memory_store = InMemoryStore()
-    return _in_memory_store
-
-
-async def get_store():
-    """Return the production Store (Postgres-backed).
-
-    Uses AsyncPostgresStore when DATABASE_URL is configured.
-    Falls back to InMemoryStore otherwise.
-    """
-    global _async_pg_store, _in_memory_store
-
-    if _async_pg_store is not None:
-        return _async_pg_store
-
-    from sales_agent.core.config import get_settings
-
-    try:
-        settings = get_settings()
-        db_url = settings.database.url
-        conn_string = db_url.replace("+asyncpg", "")
-
-        from langgraph.store.postgres.aio import AsyncPostgresStore
-        from psycopg_pool import AsyncConnectionPool
-
-        pool = AsyncConnectionPool(conn_string, min_size=1, max_size=5, open=True)
-        store = AsyncPostgresStore(conn=pool)
-        await store.setup()
-        _async_pg_store = store  # only cache after successful setup
-        logger.info("AsyncPostgresStore initialized for cross-session memory")
-        return _async_pg_store
-
-    except Exception as e:
-        logger.warning(
-            "Failed to create AsyncPostgresStore (%s), falling back to InMemoryStore", e
-        )
-        return get_store_sync()
+__all__ = [
+    "CheckpointUnavailableError",
+    "get_checkpointer",
+    "get_checkpointer_sync",
+    "initialize_production_checkpointer",
+    "get_production_checkpointer",
+    "close_production_checkpointer",
+    "production_checkpoint_ready",
+]

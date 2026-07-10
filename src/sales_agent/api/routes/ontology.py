@@ -303,6 +303,9 @@ async def _build_explorer_services(agent, db: DbSession):
     """构建探索器检索/回答服务。Neo4j 未启用或不可达时抛 503。
 
     返回 (client, retrieval_service, answer_service)。调用方负责 `await client.close()`。
+
+    retrieval/answer service 都注入 db/tenant_id/agent_id，让内部 prompt 走
+    ``PromptRegistry`` 三级回退（运营后台编辑 ``knowledge/*`` 生效）。
     """
     settings = get_settings()
     client = Neo4jClient(settings.neo4j)
@@ -324,15 +327,36 @@ async def _build_explorer_services(agent, db: DbSession):
         raise HTTPException(status_code=403, detail=getattr(exc, "user_message", str(exc)))
 
     repository = OntologyRepository(client)
-    retrieval = OntologyRetrievalService(repository, provider.embedding)
-    answer_service = OntologyAnswerService(retrieval, provider.chat)
+    retrieval = OntologyRetrievalService(
+        repository,
+        provider.embedding,
+        provider.chat,
+        db=db,
+        tenant_id=agent.tenant_id,
+        agent_id=agent.id,
+    )
+    answer_service = OntologyAnswerService(
+        retrieval,
+        provider.chat,
+        db=db,
+        tenant_id=agent.tenant_id,
+        agent_id=agent.id,
+    )
     return client, retrieval, answer_service
 
 
-def _build_full_context(evidence, query: str) -> dict[str, Any]:
-    """组装右栏「完整上下文」：渲染后的 system prompt + 用户问题 + GraphEvidence。"""
+def _build_full_context(evidence, query: str, *, prompt_text: str | None = None) -> dict[str, Any]:
+    """组装右栏「完整上下文」：渲染后的 system prompt + 用户问题 + GraphEvidence。
+
+    Parameters
+    ----------
+    prompt_text :
+        调用方经 ``PromptRegistry`` 解析后的 ``ontology_response`` 模板（含
+        ``{graph_json}`` / ``{question}`` / ``{task_type}`` 占位符）；为 None 时
+        回退到内置 ``ONTOLOGY_RESPONSE_PROMPT`` 常量。
+    """
     return {
-        "system_prompt": render_response_prompt(evidence, query, EXPLORER_TASK_TYPE),
+        "system_prompt": render_response_prompt(evidence, query, EXPLORER_TASK_TYPE, prompt_text=prompt_text),
         "user_query": query,
         **evidence.to_dict(),
     }
@@ -378,11 +402,22 @@ async def ontology_query(agent_id: str, req: OntologyQueryRequest, db: DbSession
     agent = await _load_agent_or_404(agent_id, db)
     client, retrieval, answer_service = await _build_explorer_services(agent, db)
     try:
+        # 预解析 ontology_response 模板（generate_answer / _build_full_context 共用）
+        from sales_agent.ontology.answer_service import ONTOLOGY_RESPONSE_PROMPT
+        from sales_agent.services.prompt_resolver_helper import resolve_knowledge_prompt
+        response_template = await resolve_knowledge_prompt(
+            db,
+            "ontology_response",
+            agent.tenant_id,
+            agent.id,
+            default=ONTOLOGY_RESPONSE_PROMPT,
+        )
         evidence = await retrieval.retrieve(
             tenant_id=agent.tenant_id, agent_id=agent.id, question=req.query
         )
         result = await answer_service.generate_answer(
-            graph_evidence=evidence, message=req.query, task_type=EXPLORER_TASK_TYPE
+            graph_evidence=evidence, message=req.query,
+            task_type=EXPLORER_TASK_TYPE, prompt_text=response_template,
         )
     finally:
         await client.close()
@@ -391,7 +426,7 @@ async def ontology_query(agent_id: str, req: OntologyQueryRequest, db: DbSession
         "answer": result.answer,
         "sources": result.sources,
         "search_process": _build_search_process(evidence, req.query),
-        "full_context": _build_full_context(evidence, req.query),
+        "full_context": _build_full_context(evidence, req.query, prompt_text=response_template),
     }
 
 
@@ -413,6 +448,16 @@ async def ontology_query_stream(agent_id: str, req: OntologyQueryRequest, db: Db
 
     async def _stream():
         try:
+            # 预解析 ontology_response 模板（generate_answer / _build_full_context 共用）
+            from sales_agent.ontology.answer_service import ONTOLOGY_RESPONSE_PROMPT
+            from sales_agent.services.prompt_resolver_helper import resolve_knowledge_prompt
+            response_template = await resolve_knowledge_prompt(
+                db,
+                "ontology_response",
+                agent.tenant_id,
+                agent.id,
+                default=ONTOLOGY_RESPONSE_PROMPT,
+            )
             yield _step(1, "检索知识图谱…", "processing")
             evidence = await retrieval.retrieve(
                 tenant_id=agent.tenant_id, agent_id=agent.id, question=req.query
@@ -422,12 +467,13 @@ async def ontology_query_stream(agent_id: str, req: OntologyQueryRequest, db: Db
             yield _step(2, f"命中 {len(evidence.matched_entities)} 个实体{fallback_note}", "success")
             yield _step(3, "生成回答…", "processing")
             result = await answer_service.generate_answer(
-                graph_evidence=evidence, message=req.query, task_type=EXPLORER_TASK_TYPE
+                graph_evidence=evidence, message=req.query,
+                task_type=EXPLORER_TASK_TYPE, prompt_text=response_template,
             )
             yield _sse({
                 "type": "result",
                 "answer": result.answer,
-                "full_context": _build_full_context(evidence, req.query),
+                "full_context": _build_full_context(evidence, req.query, prompt_text=response_template),
             })
             yield _step(4, "AI 回答生成完成", "success")
         except Exception as exc:

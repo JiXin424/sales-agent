@@ -1,6 +1,6 @@
-/** Graph Debug Page — Mermaid visualization + test-run for LangGraph graphs.
+/** Graph Debug Page — reactflow graph visualization + test-run for LangGraph graphs.
 
-Left panel: Tab-switched Mermaid diagrams + input box + Send.
+Left panel: Tab-switched reactflow diagrams + input box + Send.
 Right panel: Two tabs:
   - 「实时 trace」: per-node execution trace (SSE live updates) + token output.
   - 「Checkpoint 时间轴」: read-only node-boundary state snapshots for the
@@ -10,7 +10,8 @@ Right panel: Two tabs:
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Input, Button, Collapse, Tag, Spin, Alert, Tabs, Empty, Select, Modal } from 'antd';
+import { Input, Button, Collapse, Tag, Spin, Alert, Tabs, Empty, Select, Modal, Table } from 'antd';
+import type { TableColumnsType } from 'antd';
 import {
   SendOutlined,
   ApiOutlined,
@@ -18,8 +19,9 @@ import {
   ThunderboltOutlined,
   EditOutlined,
   PlayCircleOutlined,
+  DownOutlined,
+  UpOutlined,
 } from '@ant-design/icons';
-import mermaid from 'mermaid';
 import {
   getGraphDebugGraphs,
   runGraphDebug,
@@ -38,13 +40,12 @@ import type {
   CheckpointStateResponse,
   UpdateStateRequest,
   RecentDebugRun,
+  PromptMapping,
 } from '@/api/types';
 import JsonNode from './JsonNode';
+import GraphFlow from './GraphFlow';
 import CheckpointDAG from './CheckpointDAG';
 import './GraphDebugPage.css';
-
-// Initialize mermaid
-mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose' });
 
 const RECENT_RUNS_KEY = 'graph-debug:runs';
 const MAX_RECENT_RUNS = 20;
@@ -56,6 +57,84 @@ interface TraceEntry {
   duration_ms?: number;
   input?: unknown;
   output?: Record<string, unknown>;
+}
+
+/** 节点类型图例：纯函数(灰) / LLM 节点(蓝) / 子图节点(橙)。 */
+function NodeLegend() {
+  return (
+    <div className="gd-legend">
+      <span className="gd-legend-item">
+        <span className="gd-legend-swatch fn" /> 纯函数节点
+      </span>
+      <span className="gd-legend-item">
+        <span className="gd-legend-swatch llm" /> LLM 节点（调 prompt）
+      </span>
+      <span className="gd-legend-item">
+        <span className="gd-legend-swatch sub" /> 子图节点
+      </span>
+    </div>
+  );
+}
+
+/** 节点 ↔ Prompt 对照表：每个 prompt 一行，无 prompt 的纯函数节点标「—」。
+ *  highlightedNode 命中时该行加 gd-prompt-row-highlight class（黄色闪烁）。 */
+function NodePromptTable({
+  rows,
+  highlightedNode,
+}: {
+  rows: PromptMapping[];
+  highlightedNode: string | null;
+}) {
+  const columns: TableColumnsType<PromptMapping> = [
+    {
+      title: '节点',
+      dataIndex: 'node',
+      key: 'node',
+      width: 160,
+      render: (node: string, row) => (
+        <span>
+          {row.calls_llm ? (
+            <Tag color="blue" className="llm-tag">LLM</Tag>
+          ) : null}
+          {node}
+        </span>
+      ),
+    },
+    {
+      title: '对应 Prompt',
+      dataIndex: 'prompt_name',
+      key: 'prompt_name',
+      render: (name: string, row) =>
+        name === '—' ? (
+          <span style={{ color: '#8c8c8c' }}>—（纯函数，无 prompt）</span>
+        ) : (
+          <span>
+            <code>{name}</code>
+            {row.note ? <span style={{ color: '#8c8c8c', marginLeft: 6 }}>({row.note})</span> : null}
+          </span>
+        ),
+    },
+    {
+      title: '来源',
+      dataIndex: 'prompt_source',
+      key: 'prompt_source',
+      width: 260,
+      render: (src: string) =>
+        src ? <code style={{ fontSize: 11, color: '#8c8c8c' }}>{src}</code> : null,
+    },
+  ];
+  return (
+    <div className="gd-node-prompt-table">
+      <Table
+        size="small"
+        pagination={false}
+        columns={columns}
+        dataSource={rows}
+        rowKey={(r, i) => `${r.node}-${r.prompt_name}-${i}`}
+        rowClassName={(row) => (row.node === highlightedNode ? 'gd-prompt-row-highlight' : '')}
+      />
+    </div>
+  );
 }
 
 /** Load the recent-debug-runs list from localStorage (best-effort, never throws). */
@@ -106,7 +185,6 @@ export default function GraphDebugPage() {
   const [tokens, setTokens] = useState('');
   const [doneInfo, setDoneInfo] = useState<GraphDebugDone | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [mermaidSvg, setMermaidSvg] = useState<Record<string, string>>({});
   const abortRef = useRef<AbortController | null>(null);
 
   // ── Time-travel state ──
@@ -118,6 +196,20 @@ export default function GraphDebugPage() {
   const [checkpointError, setCheckpointError] = useState<string | null>(null);
   const [rightTab, setRightTab] = useState<'trace' | 'timeline'>('trace');
   const [recentRuns, setRecentRuns] = useState<RecentDebugRun[]>(() => loadRunsFromStorage());
+  // 执行轨迹面板折叠：默认折叠（图区优先占满），折叠后图区占满 header 以下全部空间
+  const [traceCollapsed, setTraceCollapsed] = useState(true);
+
+  // 点 GraphFlow 节点 → 展开对照表 + 高亮对应行 2 秒。
+  const [highlightedNode, setHighlightedNode] = useState<string | null>(null);
+  const handleSelectNode = useCallback((nodeId: string) => {
+    if (!nodeId) {
+      setHighlightedNode(null);
+      return;
+    }
+    setHighlightedNode(nodeId);
+    // 2 秒后清除高亮（保留滚动位置）。
+    window.setTimeout(() => setHighlightedNode(null), 2000);
+  }, []);
 
   // ── Fork (A2) state ──
   // When editing, draftValues holds the user-edited copy of checkpointState.values;
@@ -136,26 +228,6 @@ export default function GraphDebugPage() {
   });
 
   const graphs: GraphInfo[] = graphsQuery.data?.graphs ?? [];
-
-  // ── Render Mermaid for active graph ──
-  useEffect(() => {
-    if (!graphs.length) return;
-    const g = graphs.find(g => g.id === activeGraphId);
-    if (!g || !g.mermaid) return;
-    if (mermaidSvg[activeGraphId]) return; // already rendered
-
-    // Remove Mermaid YAML front-matter block (v11 doesn't parse it)
-    const cleanMermaid = g.mermaid.replace(/^---\n[\s\S]*?\n---\n/, '');
-
-    (async () => {
-      try {
-        const { svg } = await mermaid.render(`mermaid-${activeGraphId}`, cleanMermaid);
-        setMermaidSvg(prev => ({ ...prev, [activeGraphId]: svg }));
-      } catch {
-        setMermaidSvg(prev => ({ ...prev, [activeGraphId]: `<pre>${cleanMermaid}</pre>` }));
-      }
-    })();
-  }, [graphs, activeGraphId, mermaidSvg]);
 
   // ── Fetch checkpoint list for a thread (used by both run-done and history select) ──
   const fetchCheckpoints = useCallback(
@@ -462,7 +534,18 @@ export default function GraphDebugPage() {
     <div className="gd-container">
       {/* Left panel */}
       <div className="gd-left">
-        <div className="gd-left-header">图结构</div>
+        <div className="gd-left-header">
+          <span className="gd-title">图结构</span>
+          <Button
+            type="text"
+            size="small"
+            className="gd-trace-toggle"
+            icon={traceCollapsed ? <UpOutlined /> : <DownOutlined />}
+            onClick={() => setTraceCollapsed(c => !c)}
+          >
+            {traceCollapsed ? '展开执行轨迹' : '折叠执行轨迹'}
+          </Button>
+        </div>
         <div className="gd-left-body">
           {graphsQuery.isLoading ? (
             <Spin tip="加载图列表..." />
@@ -472,6 +555,7 @@ export default function GraphDebugPage() {
             <Tabs
               activeKey={activeGraphId}
               onChange={setActiveGraphId}
+              destroyOnHidden
               items={graphs.map(g => ({
                 key: g.id,
                 label: (
@@ -482,16 +566,27 @@ export default function GraphDebugPage() {
                   </span>
                 ),
                 children: (
-                  <div className="gd-mermaid-wrap">
-                    {mermaidSvg[g.id] ? (
-                      <div
-                        className="gd-mermaid"
-                        dangerouslySetInnerHTML={{ __html: mermaidSvg[g.id] }}
-                      />
-                    ) : (
-                      <Spin tip="渲染图中..." />
-                    )}
-                  </div>
+                  <>
+                    <NodeLegend />
+                    <div className="gd-flow-wrap">
+                      <GraphFlow graph={g} onSelect={handleSelectNode} />
+                    </div>
+                    <Collapse
+                      size="small"
+                      activeKey={highlightedNode ? ['prompt-map'] : []}
+                      style={{ marginTop: 8 }}
+                      items={[{
+                        key: 'prompt-map',
+                        label: `节点 ↔ Prompt 对照（${g.prompt_map?.length ?? 0} 行）`,
+                        children: (
+                          <NodePromptTable
+                            rows={g.prompt_map ?? []}
+                            highlightedNode={highlightedNode}
+                          />
+                        ),
+                      }]}
+                    />
+                  </>
                 ),
               }))}
             />
@@ -520,7 +615,7 @@ export default function GraphDebugPage() {
       </div>
 
       {/* Right panel */}
-      <div className="gd-right">
+      <div className={traceCollapsed ? 'gd-right gd-right-collapsed' : 'gd-right'}>
         <div className="gd-right-header">
           执行轨迹
           {doneInfo && (

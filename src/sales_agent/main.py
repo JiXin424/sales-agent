@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from sales_agent.api.routes import agent, conversations, documents, feedback, health, tenants, prompts, uploads, admin, pilot, agents, coach, ontology, instance, graph_debug, optimization
+from sales_agent.api.routes import agent, conversations, documents, feedback, health, tenants, prompts, uploads, admin, pilot, agents, coach, ontology, instance, graph_debug, conversation_history, optimization, sales_actions
 from sales_agent.core.config import get_settings
 from sales_agent.core.exceptions import TenantMismatchError, DingTalkTenantMismatchError
 
@@ -30,6 +30,10 @@ async def lifespan(app: FastAPI):
 
     from sales_agent.core.database import init_db
     from sales_agent.core.tenant_runtime import get_tenant_runtime
+    from sales_agent.services.online_conversation import (
+        initialize_online_runtime,
+        close_online_runtime,
+    )
 
     # 解析当前角色
     role = _settings.app.get_process_role()
@@ -37,6 +41,9 @@ async def lifespan(app: FastAPI):
 
     # 初始化数据库
     await init_db()
+
+    # 初始化 Online Graph runtime
+    await initialize_online_runtime()
 
     # Bootstrap Neo4j ontology schema (constraints + vector index) when enabled.
     # 仅在启用 ontology_neo4j 引擎且配置了 Neo4j 时执行；失败仅告警，不阻断启动。
@@ -139,7 +146,10 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning("Failed to stop DingTalk http worker: %s", e)
 
+    from sales_agent.services.online_conversation import close_online_runtime
     from sales_agent.core.database import close_db
+
+    await close_online_runtime()
     await close_db()
 
 
@@ -206,7 +216,9 @@ app.include_router(coach.router)
 app.include_router(ontology.router)
 app.include_router(instance.router)
 app.include_router(graph_debug.router)
+app.include_router(conversation_history.router)
 app.include_router(optimization.router)
+app.include_router(sales_actions.router)
 
 # 注册钉钉集成路由
 from sales_agent.integrations.dingtalk.routes import router as dingtalk_router
@@ -215,6 +227,10 @@ app.include_router(dingtalk_router)
 # 注册钉钉快捷入口路由（独立模块，可单独移除）
 from sales_agent.integrations.dingtalk.quick_entry import router as dingtalk_quick_entry_router
 app.include_router(dingtalk_quick_entry_router)
+
+# 注册钉钉销售动作卡片按钮回调路由
+from sales_agent.integrations.dingtalk.sales_action_callbacks import router as sales_action_callback_router
+app.include_router(sales_action_callback_router)
 
 
 # --- 全局异常处理 ---

@@ -24,6 +24,10 @@ async def run() -> None:
     from sales_agent.core.config import get_settings
     from sales_agent.core.database import init_db, close_db
     from sales_agent.core.tenant_runtime import get_tenant_runtime
+    from sales_agent.services.online_conversation import (
+        initialize_online_runtime,
+        close_online_runtime,
+    )
 
     settings = get_settings()
     config = settings.dingtalk
@@ -31,6 +35,10 @@ async def run() -> None:
     # 初始化数据库
     await init_db()
     logger.info("Database initialized (worker runner)")
+
+    # 初始化 Online Graph runtime
+    await initialize_online_runtime()
+    logger.info("Online runtime initialized (worker runner)")
 
     # 加载 TenantRuntime
     runtime = get_tenant_runtime()
@@ -76,6 +84,99 @@ async def run() -> None:
     except Exception as e:
         logger.warning("Coach scheduler init skipped: %s", e)
 
+    # 用户画像投影 Worker
+    profile_task = None
+    if settings.user_profile_memory.enabled and settings.user_profile_memory.worker_enabled:
+        try:
+            from sales_agent.services.memory.profile_worker import profile_rebuild_loop
+            profile_task = asyncio.create_task(
+                profile_rebuild_loop(
+                    poll_interval_seconds=settings.user_profile_memory.worker_poll_interval_seconds,
+                    batch_size=settings.user_profile_memory.rebuild_batch_size,
+                    max_attempts=settings.user_profile_memory.rebuild_max_attempts,
+                )
+            )
+            logger.info(
+                "Profile rebuild worker started (poll=%ss, batch=%d, max_attempts=%d)",
+                settings.user_profile_memory.worker_poll_interval_seconds,
+                settings.user_profile_memory.rebuild_batch_size,
+                settings.user_profile_memory.rebuild_max_attempts,
+            )
+        except Exception as e:
+            logger.warning("Profile rebuild worker init skipped: %s", e)
+
+    # 销售动作提醒调度器
+    sales_action_task = None
+    if settings.sales_actions.enabled and settings.sales_actions.scheduler_enabled:
+        try:
+            from sales_agent.core.database import get_session_factory as _get_sf
+            from sales_agent.integrations.dingtalk.card_sender import DingTalkCardSender
+            from sales_agent.services.sales_actions.scheduler import (
+                sales_action_scheduler_loop,
+            )
+
+            _sa_factory = _get_sf()
+
+            def _make_sender() -> DingTalkCardSender:
+                return DingTalkCardSender(settings.dingtalk)
+
+            sales_action_task = asyncio.create_task(
+                sales_action_scheduler_loop(
+                    _sa_factory,
+                    _make_sender,
+                    settings.sales_actions.scan_interval_seconds,
+                    max_attempts=settings.sales_actions.max_attempts,
+                )
+            )
+            logger.info(
+                "Sales action scheduler started (scan=%ss, max_attempts=%d)",
+                settings.sales_actions.scan_interval_seconds,
+                settings.sales_actions.max_attempts,
+            )
+        except Exception as e:
+            logger.warning("Sales action scheduler init skipped: %s", e)
+
+    # 长期记忆出箱 Worker
+    memory_task = None
+    if settings.long_term_memory.enabled and settings.long_term_memory.outbox_worker_enabled:
+        try:
+            from sqlalchemy import select
+            from sales_agent.services.memory.outbox_worker import memory_outbox_loop
+            from sales_agent.services.tenant_resolver import TenantResolver
+            from sales_agent.core.database import get_session_factory
+            from sales_agent.models.tenant import Tenant
+
+            factory = get_session_factory()
+            async with factory() as db:
+                tenant = (
+                    await db.execute(
+                        select(Tenant)
+                        .where(Tenant.status == "active")
+                        .order_by(Tenant.created_at.asc())
+                        .limit(1)
+                    )
+                ).scalar_one()
+                tenant_resolver = TenantResolver(db)
+                tenant_info = await tenant_resolver.resolve(tenant.id)
+                provider = tenant_resolver.get_model_provider(tenant_info)
+                memory_task = asyncio.create_task(
+                    memory_outbox_loop(
+                        chat_model=provider.chat,
+                        poll_interval_seconds=settings.long_term_memory.outbox_poll_interval_seconds,
+                        batch_size=settings.long_term_memory.outbox_batch_size,
+                        max_attempts=settings.long_term_memory.outbox_max_attempts,
+                    )
+                )
+                logger.info(
+                    "Memory outbox worker started (tenant=%s, poll=%ss, batch=%d, max_attempts=%d)",
+                    tenant.id,
+                    settings.long_term_memory.outbox_poll_interval_seconds,
+                    settings.long_term_memory.outbox_batch_size,
+                    settings.long_term_memory.outbox_max_attempts,
+                )
+        except Exception as e:
+            logger.warning("Memory outbox worker init skipped: %s", e)
+
     logger.info("Worker runner entering keepalive loop")
 
     # 保活循环：等待取消信号
@@ -91,6 +192,28 @@ async def run() -> None:
                 await stop_dingtalk_worker()
             except Exception as e:
                 logger.warning("Failed to stop DingTalk HTTP worker: %s", e)
+        if profile_task is not None:
+            profile_task.cancel()
+            try:
+                await profile_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("Profile rebuild worker stopped")
+        if sales_action_task is not None:
+            sales_action_task.cancel()
+            try:
+                await sales_action_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("Sales action scheduler stopped")
+        if memory_task is not None:
+            memory_task.cancel()
+            try:
+                await memory_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("Memory outbox worker stopped")
+        await close_online_runtime()
         await close_db()
         logger.info("Worker runner stopped cleanly")
 

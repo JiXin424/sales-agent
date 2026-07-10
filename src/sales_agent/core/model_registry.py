@@ -113,7 +113,3 @@ class ModelRegistry:
         if model_name is None:
             model_name = self.default_model
         return self.entries.get(model_name)
-
-    def list_models(self) -> list[str]:
-        """返回所有模型名列表。"""
-        return list(self.entries.keys())

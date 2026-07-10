@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Sales Agent DeepEval 评估脚本 —— 直接走 ChatPipeline（模拟钉钉用户流式链路）+ LLM-as-a-Judge 自动评分。
+Sales Agent DeepEval 评估脚本 —— 直接走 Online Graph（模拟钉钉用户生产链路）+ LLM-as-a-Judge 自动评分。
 
-不再通过 HTTP API 调 Agent，而是与钉钉用户走完全相同的 ChatPipeline 代码路径。
+与钉钉用户走完全相同的 invoke_online_turn 代码路径。
 
 功能:
   1. 从 questions.md + ground_truth_30q.json 加载问题
-  2. 直接调用 ChatPipeline.execute()（channel=dingtalk_single），获取回答
+  2. 直接调用 invoke_online_turn（channel=dingtalk），获取回答
   3. DingTalkMessageRenderer 渲染 → 评估"用户实际看到的内容"
   4. DeepEval 指标自动评分 + Arena 盲测
   5. 每 5 题写 checkpoint, 支持 --resume 恢复
@@ -119,6 +119,13 @@ def _load_checkpoint(path):
 # ── 主评估 ──
 async def run_eval(tenant_id, kb_label, questions, model=None, agent_id=None,
                    concurrency=3, checkpoint_path=None, resume_from=None):
+    # eval 作为独立进程运行，必须自行触发生产启动钩子初始化 Online Graph
+    # （连接 checkpoint DB + 编译图），否则 invoke_online_turn 会抛
+    # CheckpointUnavailableError。生产里这一步在 app lifespan 中完成。
+    # 幂等，且与后续 invoke 处于同一事件循环，checkpointer 连接池不会跨 loop 失效。
+    from sales_agent.services.online_conversation import initialize_online_runtime
+    await initialize_online_runtime()
+
     skip_ids = resume_from or set()
     semaphore = asyncio.Semaphore(concurrency)
     results = []
@@ -275,7 +282,7 @@ def write_markdown_report(results, summaries, questions, meta, path):
                 tok = f"tok={item.prompt_tokens}/{item.completion_tokens}/{item.total_tokens}" if item.total_tokens else ""
                 L.append(f"**{item.kb_label}** — task={item.task_type}, sources={item.sources_count}, "
                          f"latency={item.latency_ms}ms {t}{tok}, scores=[{scores_str}]\n")
-                if item.answer: L.append(f"{item.answer[:2000]}\n")
+                if item.rendered: L.append(f"{item.rendered[:2000]}\n")
         L.append("")
     errs = [r for r in results if r.error]
     if errs:
@@ -308,7 +315,7 @@ def _parse_models(m):
 
 # ── CLI ──
 def main():
-    p = argparse.ArgumentParser(description="Sales Agent DeepEval 评估（直接走 ChatPipeline 链路）")
+    p = argparse.ArgumentParser(description="Sales Agent DeepEval 评估（直接走 Online Graph 链路）")
     # 租户配置
     p.add_argument("--tenant-id", default="taishan", help="主租户 ID（默认 taishan）")
     p.add_argument("--label", default=None, help="主租户标签（默认用 tenant-id）")

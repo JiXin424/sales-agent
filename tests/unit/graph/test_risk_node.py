@@ -1,11 +1,21 @@
 """Tests for risk checking node."""
 import pytest
-from sales_agent.graph.nodes.risk_check import risk_check_node
-from sales_agent.graph.edges.risk_conditions import check_risk_result
-from sales_agent.graph.state import ChatGraphState
+from unittest.mock import MagicMock
+from sales_agent.graph.chat.nodes.risk_check import risk_check_node
+from sales_agent.graph.chat.edges import check_risk_result
+from sales_agent.graph.chat.state import ChatGraphState
 
 
-def test_risk_node_clean_answer():
+@pytest.fixture
+def mock_runtime():
+    """Runtime with no chat_model — LLM risk layer disabled (flag off)."""
+    runtime = MagicMock()
+    runtime.context = {"chat_model": None, "db": None}
+    return runtime
+
+
+@pytest.mark.asyncio
+async def test_risk_node_clean_answer(mock_runtime):
     """Clean answer passes risk check."""
     state: ChatGraphState = {
         "tenant_id": "t1", "user_id": "u1",
@@ -13,12 +23,13 @@ def test_risk_node_clean_answer():
         "answer_dict": {"summary": "这是一个正常的回答", "sections": []},
         "sources": [],
     }
-    result = risk_check_node(state)
+    result = await risk_check_node(state, mock_runtime)
     assert result["risk_action"] == "allow"
     assert result["input_risk_level"] == "none"
 
 
-def test_risk_node_blocks_price_guarantee():
+@pytest.mark.asyncio
+async def test_risk_node_blocks_price_guarantee(mock_runtime):
     """Answer with price guarantee triggers block."""
     state: ChatGraphState = {
         "tenant_id": "t1", "user_id": "u1",
@@ -29,7 +40,7 @@ def test_risk_node_blocks_price_guarantee():
         },
         "sources": [],
     }
-    result = risk_check_node(state)
+    result = await risk_check_node(state, mock_runtime)
     # Risk check should flag the answer
     assert result["risk_action"] in ("block", "warn", "rewrite")
     assert result["risk_result"] is not None

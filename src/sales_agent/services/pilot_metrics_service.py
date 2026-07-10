@@ -62,12 +62,6 @@ class PilotMetricsService:
         unique_users = row.unique_users or 0
 
         # DAU: 按天分组计算每天独立用户数，取平均
-        dau_stmt = select(
-            func.avg(func.count(func.distinct(Conversation.user_id)))
-        ).where(date_filter).group_by(
-            func.date(Conversation.created_at)
-        )
-        # 使用子查询方式计算
         daily_users_stmt = select(
             func.count(func.distinct(Conversation.user_id)).label("daily_users"),
         ).where(date_filter).group_by(

@@ -263,9 +263,3 @@ def get_tenant_runtime() -> TenantRuntime:
     if _runtime is None:
         _runtime = TenantRuntime.from_current_env()
     return _runtime
-
-
-def reset_runtime() -> None:
-    """重置运行时单例（测试用）。"""
-    global _runtime
-    _runtime = None

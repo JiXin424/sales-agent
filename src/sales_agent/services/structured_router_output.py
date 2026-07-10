@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from typing import Literal, Optional, TypeVar
 
 from json_repair import repair_json
@@ -100,7 +101,7 @@ class EvidenceDecision(BaseModel):
 
     intent: str
     response_mode: Literal["direct", "retrieve"]
-    knowledge_policy: Literal["none", "optional", "required"]
+    knowledge_policy: Literal["none", "optional", "required", "web"]
     knowledge_scope: list[str] = Field(default_factory=list)
     retrieval_query: Optional[str] = None
     confidence: float = Field(ge=0, le=1)
@@ -108,9 +109,9 @@ class EvidenceDecision(BaseModel):
 
     @model_validator(mode="after")
     def _require_retrieval_query_when_required(self) -> EvidenceDecision:
-        if self.knowledge_policy == "required" and self.retrieval_query is None:
+        if self.knowledge_policy in ("required", "web") and self.retrieval_query is None:
             raise ValueError(
-                "retrieval_query must be provided when knowledge_policy is 'required'"
+                "retrieval_query must be provided when knowledge_policy is 'required' or 'web'"
             )
         return self
 
@@ -134,3 +135,55 @@ class ClarificationDecision(BaseModel):
     supplemental_message: str | None = None
     replacement_text: str | None = None
     confidence: float = Field(ge=0, le=1)
+
+
+class TopicRestoreDecision(BaseModel):
+    """Decision made by the Topic Restore Resolver.
+
+    A *separate* vocabulary from :class:`ContextDecision.turn_relation`:
+    the restore resolver decides among closed candidate topics, then the
+    resulting turn carries its own ``turn_relation``.
+
+    Attributes
+    ----------
+    resolution :
+        ``restore`` (pick a candidate), ``new`` (drop candidates and start
+        fresh), or ``ambiguous`` (cannot uniquely determine).
+    selected_topic_id :
+        Required when ``resolution == "restore"``; must be one of the
+        candidate IDs supplied to the resolver.
+    supplemental_message :
+        Optional task text to execute after restoring (e.g. the suffix of
+        ``"继续，帮我查价格"`` → ``"帮我查价格"``).
+    confidence :
+        Confidence in the decision (0-1).
+    reason_code :
+        Machine-readable reason for the decision.
+    """
+
+    resolution: Literal["restore", "new", "ambiguous"]
+    selected_topic_id: str | None = None
+    supplemental_message: str | None = None
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason_code: str = ""
+
+    @model_validator(mode="after")
+    def _require_selection_for_restore(self) -> TopicRestoreDecision:
+        if self.resolution == "restore" and not self.selected_topic_id:
+            raise ValueError("resolution='restore' requires selected_topic_id")
+        return self
+
+
+@dataclass(frozen=True)
+class TopicScope:
+    """The (tenant, agent, user, channel) scope of a conversation topic.
+
+    Mirrors the columns of the partial unique active-Topic index
+    ``uq_conversation_topic_active_scope``, which guarantees at most one
+    active topic per scope.
+    """
+
+    tenant_id: str
+    agent_id: str
+    user_id: str
+    channel: str

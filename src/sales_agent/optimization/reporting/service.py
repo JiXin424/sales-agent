@@ -365,14 +365,19 @@ class IterationReportService:
 
         Returns a dict of gate_name → passed (True = no violation).
         """
-        gates: dict[str, bool] = {
+        # 自动安全闸门尚未实现：当前 case 数据（CaseEffect）只含任务级
+        # pass/fail/regression，不含租户泄露 / 事实错误 / 不安全 / 幻觉等安全
+        # 信号，无法从这里自动判定。默认全 pass（不阻断发布），调用方可通过
+        # compute_effect(hard_gates=...) 显式覆盖。接入安全评估后在此补实现。
+        logger.warning(
+            "Hard-gate auto-evaluation is NOT implemented (tenant=%s); "
+            "defaulting all gates to pass. Pass hard_gates=... to compute_effect "
+            "to enforce gates explicitly.",
+            tenant_id,
+        )
+        return {
             "tenant_leakage": True,
             "critical_fact_error": True,
             "unsafe_response": True,
             "increased_fabrication": True,
         }
-        # Placeholder: in a real implementation this would check actual evaluation
-        # results for tenant leakage, critical fact errors, etc.
-        # For now, all gates pass by default — the caller can override via
-        # hard_gates parameter on compute_effect.
-        return gates

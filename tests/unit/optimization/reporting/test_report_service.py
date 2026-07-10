@@ -2,6 +2,7 @@
 
 import json
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sales_agent.models.optimization import OptimizationIteration
@@ -73,15 +74,14 @@ class TestReportServiceAsync:
                 ))
         await db_session.flush()
 
-        # Add case results
-        for run_id, passed in [(baseline_run.id, True), (candidate_run.id, True)]:
+        # Add case results (passed 列是 Text "true"/"false"，不是 bool)
+        for run_id in (baseline_run.id, candidate_run.id):
             db_session.add(EvalRunResult(
                 id=generate_id(),
                 tenant_id=sample_tenant,
                 eval_run_id=run_id,
-                case_id="case1",
-                passed=passed,
-                score=0.7 if run_id == baseline_run.id else 0.8,
+                eval_case_id="case1",
+                passed="true",
             ))
         await db_session.flush()
 

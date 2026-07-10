@@ -11,6 +11,8 @@ import logging
 
 from fastapi import APIRouter
 
+from sales_agent.llm.call_params import get_call_params
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["health"])
@@ -24,11 +26,16 @@ async def health_check():
 
 @router.get("/ready")
 async def readiness_check():
-    """就绪检查：模型配置、向量库、数据目录。"""
+    """就绪检查：模型配置、向量库、数据目录、checkpoint DB."""
     from sales_agent.core.tenant_runtime import get_tenant_runtime
+    from sales_agent.graph.checkpoint_runtime import production_checkpoint_ready
 
     runtime = get_tenant_runtime()
     errors = runtime.validate_startup()
+
+    # Check checkpoint readiness
+    if not production_checkpoint_ready():
+        errors.append("PostgreSQL checkpoint runtime is not ready")
 
     if errors:
         return {
@@ -43,6 +50,10 @@ async def readiness_check():
         "tenant_id": runtime.tenant_id,
         "deployment_mode": runtime.deployment_mode,
         "debug": runtime.get_debug_info(),
+        "checkpoint": {
+            "backend": "postgresql",
+            "ready": production_checkpoint_ready(),
+        },
     }
 
     # 仅在启用 ontology_neo4j 知识引擎时附加 ontology 就绪信息。
@@ -92,9 +103,11 @@ async def model_diagnostics():
     chat_result = {"status": "unknown", "latency_ms": None, "error": None}
     try:
         start = time.time()
+        p = get_call_params("health_ping")
         response = await runtime.model_provider.chat.generate(
             messages=[{"role": "user", "content": "ping"}],
-            max_tokens=10,
+            temperature=p.temperature,
+            max_tokens=p.max_tokens,
         )
         chat_result["status"] = "ok"
         chat_result["latency_ms"] = int((time.time() - start) * 1000)

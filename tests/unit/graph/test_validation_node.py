@@ -1,9 +1,9 @@
 """Tests for fast_commands and validation nodes."""
 import pytest
-from sales_agent.graph.nodes.fast_commands import HELP_TEXT, RESET_TEXT, fast_command_node
-from sales_agent.graph.nodes.validation import validate_node
-from sales_agent.graph.edges.path_conditions import is_fast_command
-from sales_agent.graph.state import ChatGraphState
+from sales_agent.graph.chat.nodes.fast_commands import HELP_TEXT, RESET_TEXT, fast_command_node
+from sales_agent.graph.chat.nodes.validation import validate_node
+from sales_agent.graph.chat.edges import is_fast_command
+from sales_agent.graph.chat.state import ChatGraphState
 
 
 def test_is_fast_command_help_chinese():

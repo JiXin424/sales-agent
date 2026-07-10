@@ -61,6 +61,9 @@ retrieval:
 
 risk:
   tenant_custom_rules_enabled: false
+  # 图节点 check_risk 的 LLM 风控增强层（规则 full_check 之后）。
+  # 默认 false；灰度时设 true 或用环境变量 RISK_ENABLE_LLM_RISK_CHECK=true。
+  enable_llm_risk_check: false
   default_price_commitment_action: "warn"
   default_delivery_commitment_action: "block"
   default_unsupported_claim_action: "rewrite"
@@ -88,6 +91,9 @@ latency:
 path_router:
   enable_fast_path: true
   enable_slow_path_notice: true
+  # 图节点 route_task 的 LLM 路由兜底（规则置信度不足时调 LLM 分类）。
+  # 默认 false；灰度时设 true 或用环境变量 PATH_ROUTER_ENABLE_LLM_ROUTER=true。
+  enable_llm_router: false
   llm_router_confidence_threshold: 0.75
   clarify_confidence_threshold: 0.45
 
@@ -143,6 +149,12 @@ topic_routing:
   idle_minutes: 30           # 话题活跃超时（分钟）
   restore_hours: 24          # 关闭话题恢复窗口（小时）
   max_clarification_attempts: 2  # 最大模糊回答澄清尝试次数
+
+# --- 场景教练（预设销售场景问答，默认关闭）---
+# 设为 true 开启：用户问题与预设场景高度重合时返回预设答案（含手册来源）。
+scenario_coach:
+  enabled: false
+  confidence_threshold: 0.8
 
 neo4j:
   uri: ""

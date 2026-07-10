@@ -1,8 +1,8 @@
 """
-测试用例构建器 —— 加载问题，直接调用 ChatPipeline（模拟钉钉用户路径），构建 DeepEval LLMTestCase。
+测试用例构建器 —— 加载问题，直接调用 Online Graph（模拟钉钉用户路径），构建 DeepEval LLMTestCase。
 
-不再通过 HTTP API 调 Agent，而是走与钉钉用户完
-全相同的 FastAPI 流式链路：ChatPipeline.execute() → DingTalkMessageRenderer 渲染。
+走与钉钉用户完全相同的生产链路：invoke_online_turn() → Online Graph →
+Chat Graph → DingTalkMessageRenderer 渲染。
 
 数据来源：
 1. eval/questions.md —— 126 题（80 题有参考答案 + 46 题纯问题）
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 def init_eval_db() -> None:
     """初始化数据库引擎和 session factory（幂等）。
 
-    必须在任何 ChatPipeline 调用前执行一次。
+    必须在任何 invoke_online_turn 调用前执行一次。
     复用 Agent 自身的 database.py 模块，不需要单独配置。
     """
     from sales_agent.core.database import get_engine, get_session_factory
@@ -59,7 +59,7 @@ class QuestionItem:
 
 @dataclass
 class AgentResponse:
-    """Agent 执行结果（从 ChatPipeline 提取的评估所需字段）。"""
+    """Agent 执行结果（从 invoke_online_turn 返回值提取的评估所需字段）。"""
 
     answer_text: str = ""
     rendered_output: str = ""        # 钉钉用户实际看到的渲染文本
@@ -374,64 +374,37 @@ def _extract_sources(sources: list[dict] | None) -> list[str]:
     return texts
 
 
-# ── 核心：直接调用 ChatPipeline（模拟钉钉用户） ────────────────────
+# ── 核心：直接调用 Online Graph（模拟钉钉用户） ────────────────────
 
 _MAX_ACTUAL_OUTPUT_CHARS = 2500
 _MAX_SOURCE_CHARS = 1500
 
 
-def _is_ontology_engine() -> bool:
-    """检查当前租户是否使用 ontology 相关的知识引擎（ontology_neo4j 或 hybrid）。"""
-    from sales_agent.core.config import get_settings
-    settings = get_settings()
-    return settings.ontology.knowledge_engine in ("ontology_neo4j", "hybrid")
+def _resolve_chat_model_override(model: str | None):
+    """按 models.json 中的模型名构建 ChatModel 实例，用于 eval 多模型对比。
 
-
-async def _fetch_ontology_sources(
-    tenant_id: str,
-    agent_id: str | None,
-    message: str,
-    db,
-) -> list[str]:
-    """当 pipeline sources 为空时，直接查询 ontology 获取事实作为 source 文本。"""
-    try:
-        from sales_agent.ontology.retrieval_service import OntologyRetrievalService
-        from sales_agent.ontology.repository import OntologyRepository
-        from sales_agent.ontology.neo4j_client import Neo4jClient
-        from sales_agent.core.config import get_settings
-        from sales_agent.llm.openai_compatible import OpenAICompatibleEmbedding
-        import os as _os
-
-        settings = get_settings()
-        neo4j_client = Neo4jClient(settings.neo4j)
-        repo = OntologyRepository(neo4j_client)
-
-        # 用 app 原生 embedding model（支持 DashScope text-embedding-v3）
-        embedder = OpenAICompatibleEmbedding(
-            model=_os.getenv("EMBEDDING_MODEL", "text-embedding-v3"),
-            api_key=_os.getenv("EMBEDDING_API_KEY", ""),
-            base_url=_os.getenv("EMBEDDING_BASE_URL", ""),
-        )
-        # chat_model=None → 跳过 LLM 实体提取，用原始问题直接检索
-        retriever = OntologyRetrievalService(repo, embedder, chat_model=None)
-        result = await retriever.retrieve(
-            tenant_id=tenant_id,
-            agent_id=agent_id,
-            question=message,
-        )
-        raw_docs = result.source_documents if result.source_documents else result.facts_used
-        texts = []
-        for doc in raw_docs[:5]:
-            text = (
-                doc.get("content") or doc.get("text") or doc.get("value")
-                or doc.get("snippet") or doc.get("title") or doc.get("name", "")
-            )
-            if text:
-                texts.append(str(text)[:_MAX_SOURCE_CHARS])
-        return texts
-    except Exception as e:
-        logger.warning("Failed to fetch ontology sources for eval: %s", e)
-        return []
+    model=None 时返回 None，由 invoke_online_turn 内部自动 resolve 租户默认模型。
+    """
+    if not model:
+        return None
+    from sales_agent.core.model_registry import ModelRegistry
+    registry = ModelRegistry.load()
+    if not registry:
+        logger.warning("ModelRegistry not loaded, cannot override model %r", model)
+        return None
+    entry = registry.get(model)
+    if not entry or not entry.api_key:
+        logger.warning("Model override %r not found or missing API key, using default", model)
+        return None
+    from sales_agent.llm.openai_compatible import OpenAICompatibleChat
+    return OpenAICompatibleChat(
+        api_key=entry.api_key,
+        base_url=entry.base_url,
+        model=entry.chat_model,
+        temperature=entry.temperature,
+        timeout_seconds=entry.timeout_seconds,
+        max_retries=entry.max_retries,
+    )
 
 
 async def call_agent_pipeline(
@@ -440,10 +413,11 @@ async def call_agent_pipeline(
     model: str | None = None,
     agent_id: str | None = None,
 ) -> AgentResponse:
-    """直接调用 ChatPipeline.execute()，模拟钉钉用户的消息处理路径。
+    """直接调用 invoke_online_turn，模拟钉钉用户的消息处理路径。
 
     与 handle_dingtalk_event() 走完全相同的代码路径：
-    ChatPipeline → routing → retrieval → generation → risk check →
+    Online Graph → context_resolution → evidence_routing → Chat Graph
+    → routing → retrieval → generation → risk check →
     DingTalkMessageRenderer 渲染输出。
 
     Args:
@@ -460,15 +434,12 @@ async def call_agent_pipeline(
     from sales_agent.integrations.dingtalk.config import DingTalkConfig
     from sales_agent.integrations.dingtalk.message_renderer import DingTalkMessageRenderer
     from sales_agent.models.base import generate_id
-    from sales_agent.services.chat_pipeline import ChatPipeline
+    from sales_agent.services.online_conversation import invoke_online_turn
 
     settings = get_settings()
     renderer = DingTalkMessageRenderer(DingTalkConfig(max_reply_chars=20000))
 
-    # 捕获 reply_fn 调用（"处理中"提示、错误等）
-    captured_replies: list[str] = []
-    async def reply_fn(text: str) -> None:
-        captured_replies.append(text)
+    chat_model_override = _resolve_chat_model_override(model)
 
     t_start = time.monotonic()
     response = AgentResponse()
@@ -476,28 +447,31 @@ async def call_agent_pipeline(
     try:
         factory = get_session_factory()
         async with factory() as db:
-            pipeline = ChatPipeline(db, settings)
-            result = await pipeline.execute(
+            result = await invoke_online_turn(
+                db=db,
                 tenant_id=tenant_id,
-                user_id="deepeval_eval",
-                message=question.text,
-                conversation_id=f"eval_{generate_id()}",
-                context=None,
-                channel="dingtalk_single",
-                reply_fn=reply_fn,
                 agent_id=agent_id,
-                model=model,
+                user_id="deepeval_eval",
+                # 每题唯一 session_user_id → 唯一 thread_id，上下文不串
+                session_user_id=f"deepeval_eval_{question.id}",
+                channel="dingtalk",
+                conversation_id=f"eval_{generate_id()}",
+                message=question.text,
+                event_id=f"eval_{generate_id()}",
+                chat_model=chat_model_override,
             )
 
-            response.latency_ms = int(result.timings.total_ms)
+            response.latency_ms = int((time.monotonic() - t_start) * 1000)
 
-            if result.fast_reply:
-                # 快速命令（帮助/reset）直接返回
-                response.answer_text = result.fast_reply
-                response.rendered_output = result.fast_reply
-                response.task_type = "fast_command"
+            answer_dict = result.get("answer_dict") or {}
+            response_kind = result.get("response_kind", "chat")
+
+            # 快速命令（帮助/reset）：answer_dict.summary 直接是回复文本
+            if response_kind == "fast" or response_kind == "duplicate":
+                response.answer_text = answer_dict.get("summary", "")
+                response.rendered_output = response.answer_text
+                response.task_type = response_kind
             else:
-                answer_dict = result.answer_dict
                 if isinstance(answer_dict, dict):
                     response.answer_text = _extract_answer_text(answer_dict)
                     response.summary = answer_dict.get("summary", "")
@@ -505,57 +479,38 @@ async def call_agent_pipeline(
                 else:
                     response.answer_text = str(answer_dict)
 
-                response.task_type = (
-                    result.route_result.task_type if result.route_result else ""
-                )
+                response.task_type = result.get("task_type", "") or ""
 
                 # 用 DingTalkMessageRenderer 渲染（模拟钉钉用户看到的文本）
                 render_answer = answer_dict if isinstance(answer_dict, dict) else {
                     "summary": str(answer_dict), "sections": [],
                 }
+                sources = result.get("sources", [])
+                risk_result = result.get("risk_result", {})
                 response.rendered_output = renderer.render(
                     render_answer,
-                    result.sources or [],
-                    result.risk_result,
+                    sources,
+                    risk_result,
                 )
 
-                # 检索来源
-                response.sources = _extract_sources(result.sources or [])
+                # 检索来源（graph retrieve_node 已在 sources 里携带 text 字段）
+                response.sources = _extract_sources(sources)
 
-                # ontology_neo4j 兜底：路由未触发检索时直接查图谱获取事实做 retrieval_context
-                if not response.sources and _is_ontology_engine():
-                    response.sources = await _fetch_ontology_sources(
-                        tenant_id, agent_id, question.text, db,
-                    )
-
-                # 风险
-                response.risk_level = result.risk_result.level
-                response.risk_flags = result.risk_result.flags
+                # 风险（risk_result 是 dict：level/flags/action/notice/rewrite_summary）
+                response.risk_level = risk_result.get("level", "")
+                response.risk_flags = risk_result.get("flags", [])
 
                 # Token 用量
-                response.prompt_tokens = result.usage.get("prompt_tokens", 0)
-                response.completion_tokens = result.usage.get("completion_tokens", 0)
-                response.total_tokens = result.usage.get("total_tokens", 0)
+                usage = result.get("usage", {})
+                response.prompt_tokens = usage.get("prompt_tokens", 0)
+                response.completion_tokens = usage.get("completion_tokens", 0)
+                response.total_tokens = usage.get("total_tokens", 0)
 
-                # TTFT 近似：generation 之前的各阶段耗时之和
-                stages = result.timings.stages
-                response.ttft_ms = int(
-                    stages.get("validation", 0)
-                    + stages.get("tenant_resolve", 0)
-                    + stages.get("context_load", 0)
-                    + stages.get("routing", 0)
-                    + stages.get("retrieval", 0)
-                    + stages.get("ontology_answer", 0)
-                )
-
-            # 如果 reply_fn 被调用了（处理中提示），记录
-            if captured_replies:
-                logger.debug("Pipeline sent %d reply_fn calls: %s",
-                             len(captured_replies),
-                             [r[:80] for r in captured_replies])
+            # TTFT：graph 无逐阶段计时，弃用（报告显示 "—"）
+            response.ttft_ms = 0
 
     except Exception as e:
-        logger.error("ChatPipeline failed for %s: %s", question.id, e)
+        logger.error("invoke_online_turn failed for %s: %s", question.id, e)
         response.error = f"{type(e).__name__}: {e}"
         response.latency_ms = int((time.monotonic() - t_start) * 1000)
 
@@ -573,7 +528,7 @@ def build_llm_test_case(
 
     Args:
         question: 问题对象（含 reference 等元信息）
-        agent_response: 从 ChatPipeline 获取的响应
+        agent_response: 从 invoke_online_turn 获取的响应
 
     Returns:
         LLMTestCase：可直接传给 DeepEval 的 evaluate() 或 assert_test()

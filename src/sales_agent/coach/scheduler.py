@@ -45,18 +45,6 @@ async def start_coach_scheduler() -> None:
     logger.info("Coach scheduler started (checks every %ds)", _CHECK_INTERVAL_SECONDS)
 
 
-async def stop_coach_scheduler() -> None:
-    """停止调度器（优雅关闭用）。"""
-    global _task
-    if _task is not None and not _task.done():
-        _task.cancel()
-        try:
-            await _task
-        except asyncio.CancelledError:
-            pass
-    _task = None
-
-
 async def _scheduler_loop() -> None:
     """调度主循环：每分钟检查到点的 agent 并触发评估。"""
     fired: set[tuple[str, str]] = set()  # (local_date, agent_id)

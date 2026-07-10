@@ -1,11 +1,39 @@
 // --- Graph Debug ---
 
+/** 单个图节点的结构化元数据（取自后端 node_metadata 集中表）。 */
+export interface NodeInfo {
+  id: string;
+  name: string;
+  type: 'function' | 'subgraph';
+  calls_llm: boolean;
+  desc: string;
+  prompts: { name: string; source: string; note?: string }[];
+}
+
+/** 图的一条边（取自后端 compiled.get_graph().edges）。 */
+export interface EdgeInfo {
+  source: string;
+  target: string;
+}
+
+/** 节点 ↔ prompt 对应关系的一行。无 prompt 的纯函数节点 prompt_name 为「—」。 */
+export interface PromptMapping {
+  node: string;
+  calls_llm: boolean;
+  prompt_name: string;
+  prompt_source: string;
+  note: string;
+}
+
 export interface GraphInfo {
   id: string;
   name: string;
   mermaid: string;
   node_count: number;
   edge_count: number;
+  nodes: NodeInfo[];
+  edges: EdgeInfo[];
+  prompt_map: PromptMapping[];
 }
 
 export interface GraphListResponse {
@@ -308,7 +336,7 @@ export interface MessageCount {
 
 // --- Prompts ---
 
-export type PromptCategory = 'task' | 'system' | 'router' | 'risk' | 'coach';
+export type PromptCategory = 'task' | 'system' | 'router' | 'risk' | 'coach' | 'web' | 'knowledge';
 
 export interface PromptVersion {
   id: string;

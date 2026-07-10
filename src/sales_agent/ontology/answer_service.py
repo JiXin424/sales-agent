@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from sales_agent.llm.base import ChatModel
+from sales_agent.llm.call_params import get_call_params
 from sales_agent.ontology.schemas import GraphEvidence, OntologyAnswer
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def graph_evidence_to_sources(evidence: GraphEvidence) -> list[dict[str, Any]]:
@@ -80,13 +84,34 @@ class RetrievalProtocol(Protocol):
 
 ONTOLOGY_RESPONSE_PROMPT = """你是销售知识图谱回答器。基于图谱事实回答用户问题，不要编造。
 
-图谱证据：
+## 严格规则
+
+1. 只提取与用户问题直接相关的信息，不要堆砌。
+2. 每条引用必须标注具体来源（图谱事实的 source_documents），禁止模糊表述。
+3. 从图谱事实中识别约束性表述（含"必须""不能""禁止""前提是"等词），作为回答底线。
+4. 多个事实矛盾时，指出矛盾并给出判断。
+5. 无相关事实时坦诚说明，不要编造。
+6. 不要重复图谱事实中已包含的完整表述，提炼要点即可。
+7. 🚫 图谱中没有的具体数字（笔数、百分比、时长、金额、服务费率等），一律不得写入回答。
+8. 🚫 禁止跨文档推测：某文档中的产品名/卡种/规则不能自动套用到另一产品/场景。
+9. 🚫 禁止编造具体人名、联系方式、内部文档名。
+10. 🚫 图谱中没有明确记载的信息，即使在其他上下文中看似合理，也绝对禁止写入。宁缺毋滥。
+11. **专有名词精确性**：品牌名、平台名、产品名、公司名必须原样引用，不得替换为同类竞品或近义词。
+12. **竞品防火墙**：来源含"竞对""对比""竞品"等字样的事实，仅用于描述竞争对手，禁止用于描述福多多自身。
+13. **跨品类防火墙**：同一竞品不同品类价格政策可能不同，严禁跨品类套用。
+
+## 图谱证据
+
 {graph_json}
 
-用户问题：{question}
+## 用户问题
+
+{question}
+
 任务类型：{task_type}
 
-输出 JSON：
+## 输出 JSON
+
 {{"answer":"自然语言回答","evidence":["使用的事实或来源"],"confidence":0.8}}
 """
 
@@ -180,9 +205,20 @@ def render_response_prompt(
 
 
 class OntologyAnswerService:
-    def __init__(self, retrieval: RetrievalProtocol, chat_model: ChatModel):
+    def __init__(
+        self,
+        retrieval: RetrievalProtocol,
+        chat_model: ChatModel,
+        *,
+        db: AsyncSession | None = None,
+        tenant_id: str | None = None,
+        agent_id: str | None = None,
+    ):
         self.retrieval = retrieval
         self.chat_model = chat_model
+        self.db = db
+        self.tenant_id = tenant_id
+        self.agent_id = agent_id
 
     async def answer_for_task(
         self,
@@ -220,16 +256,36 @@ class OntologyAnswerService:
 
         Args:
             prompt_text: 自定义 prompt 模板（含 {graph_json}/{question}/{task_type}
-                占位符）。为 None 时使用内置 ONTOLOGY_RESPONSE_PROMPT。
+                占位符）。为 None 时通过 ``PromptRegistry`` 解析
+                ``knowledge/ontology_response``（db/tenant_id 在 ``__init__`` 注入时
+                生效）；DB 未配置时回退到内置 :data:`ONTOLOGY_RESPONSE_PROMPT`。
         """
-        rendered_prompt = render_response_prompt(
-            graph_evidence, message, task_type,
-            prompt_text=prompt_text,
-        )
+        if prompt_text is None:
+            from sales_agent.services.prompt_resolver_helper import resolve_knowledge_prompt
+            prompt_text = await resolve_knowledge_prompt(
+                self.db,
+                "ontology_response",
+                self.tenant_id,
+                self.agent_id,
+                default=ONTOLOGY_RESPONSE_PROMPT,
+                graph_json=json.dumps(
+                    _compact_evidence(graph_evidence, question=message),
+                    ensure_ascii=False,
+                ),
+                question=message,
+                task_type=task_type,
+            )
+            rendered_prompt = prompt_text
+        else:
+            rendered_prompt = render_response_prompt(
+                graph_evidence, message, task_type,
+                prompt_text=prompt_text,
+            )
+        p = get_call_params("ontology_answer")
         raw = await self.chat_model.generate(
             messages=[{"role": "user", "content": rendered_prompt}],
-            temperature=0.2,
-            max_tokens=1600,
+            temperature=p.temperature,
+            max_tokens=p.max_tokens,
         )
         try:
             parsed = _parse_json(raw)

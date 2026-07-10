@@ -1,7 +1,6 @@
 """Agent Chat 路由 — 使用 LangGraph StateGraph 执行。
 
 统一使用 Graph 路径（与钉钉 Stream 同一管线）。
-ChatPipeline 已废弃删除。
 """
 
 from __future__ import annotations
@@ -103,7 +102,7 @@ async def _execute_via_graph(
         "usage": result.get("usage") or {},
         "conversation_id": result.get("conversation_id", conversation_id) or generate_id(),
         "response_kind": response_kind,
-        "route_confidence": result.get("route_confidence", 1.0),
+        "route_confidence": result.get("route_confidence") or 1.0,
         "run_id": result.get("run_id"),
     }
 
@@ -151,7 +150,7 @@ async def chat(req: ChatRequest, db: DbSession) -> ChatResponse:
             risk=risk_result,
             debug=DebugInfo(
                 retrieval_query="",
-                route_confidence=result.get("route_confidence", 1.0),
+                route_confidence=result.get("route_confidence") or 1.0,
                 prompt_version="v0",
                 run_id=result.get("run_id") or generate_id(),
                 model=runtime.chat_model or "default",
@@ -196,6 +195,12 @@ async def eval_streaming_chat(
     req: ChatRequest,
     db: DbSession = None,
 ) -> dict[str, Any]:
+    """Eval 用的同步 chat 端点（名义 "streaming"，实际非流式）。
+
+    走 Online Graph 完整执行后一次性返回 ChatResponse——并不产生真实流式
+    chunk。因此 ``debug.retrieval_info`` 里 ``ttft_ms`` 等于总延迟（首字≈末字），
+    ``streaming_chunks`` 恒为空。eval 用它模拟「整段返回」的调用形态。
+    """
     _logger = logging.getLogger(__name__)
     start_time = time.time()
     try:
@@ -231,7 +236,7 @@ async def eval_streaming_chat(
             risk=risk_result,
             debug=DebugInfo(
                 retrieval_query="",
-                route_confidence=result.get("route_confidence", 1.0),
+                route_confidence=result.get("route_confidence") or 1.0,
                 prompt_version="v0",
                 run_id=generate_id(),
                 model=runtime.chat_model or "default",

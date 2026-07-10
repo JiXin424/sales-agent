@@ -1,24 +1,13 @@
-"""图片/扫描件 AI 视觉解读。
+"""图片格式识别与视觉解读 prompt 常量。
 
-调用视觉 LLM 将图片转为结构化文本描述，支持：
-- JPEG / PNG / WebP / BMP / GIF（静态帧）
-- 扫描件 PDF（需要先做页面级截图，外部预处理，此处只处理单张图片）
-- HEIC / HEIF（需 pillow-heif 可选依赖）
-
-设计要点：
-1. 复用项目已有的 OpenAI 兼容 chat 客户端
-2. 图片以 base64 data URL 形式传入
-3. Prompt 要求提取文字、数据、图表、布局描述
+历史 image_to_text（调用视觉 LLM 把图片转文本）已由 ingestion_service 的
+``_image_to_text_via_vision`` 取代；本模块仅保留格式识别工具与 prompt 常量，
+供 ingestion_service 复用。
 """
 
 from __future__ import annotations
 
-import base64
-import logging
 from pathlib import Path
-from typing import Any
-
-logger = logging.getLogger(__name__)
 
 # 支持的直接图片格式及其 MIME 类型
 SUPPORTED_IMAGE_EXTENSIONS = {
@@ -34,10 +23,6 @@ SUPPORTED_IMAGE_EXTENSIONS = {
 
 # 需要 pillow-heif 的格式（可选）
 _HEIF_EXTENSIONS = {".heic": "image/heic", ".heif": "image/heif"}
-
-# 最大图片大小（base64 前），超过则做压缩提醒
-_MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB
-
 
 # ── Prompt ──────────────────────────────────────────────────────────────
 
@@ -68,98 +53,3 @@ def get_image_mime_type(path: Path) -> str:
     if ext in _HEIF_EXTENSIONS:
         return _HEIF_EXTENSIONS[ext]
     raise ValueError(f"不支持的图片格式: {ext}")
-
-
-async def image_to_text(
-    path: Path,
-    chat_model: Any,
-    *,
-    vision_model: str = "",
-    prompt: str = "",
-    max_tokens: int = 2048,
-) -> str:
-    """将图片转为结构化文本描述。
-
-    Args:
-        path: 图片文件路径。
-        chat_model: LLM client，需支持 OpenAI 兼容的 vision API。
-            ```chat_model.chat.completions.create(model=..., messages=[...])```
-        vision_model: Vision model 名称（默认使用 chat_model 的默认模型）。
-        prompt: 自定义提示词（为空则使用内置销售知识库专用 prompt）。
-        max_tokens: 最大输出 token 数。
-
-    Returns:
-        图片的结构化文本描述。
-
-    Raises:
-        FileNotFoundError: 文件不存在。
-        ValueError: 文件格式不支持或文件过大。
-        RuntimeError: LLM 调用失败。
-    """
-    if not path.exists():
-        raise FileNotFoundError(f"图片文件不存在: {path}")
-
-    # 检查格式
-    ext = path.suffix.lower()
-    mime_type = SUPPORTED_IMAGE_EXTENSIONS.get(ext)
-    if not mime_type:
-        # 尝试 HEIF
-        mime_type = _HEIF_EXTENSIONS.get(ext)
-        if mime_type:
-            try:
-                from PIL import Image  # noqa: F401
-            except ImportError:
-                raise ValueError(
-                    f"HEIF 图片需要 pillow-heif 依赖: pip install pillow-heif"
-                )
-        else:
-            raise ValueError(f"不支持的图片格式: {ext}")
-
-    # 检查大小
-    file_size = path.stat().st_size
-    if file_size > _MAX_IMAGE_BYTES:
-        logger.warning(
-            "Image file %s exceeds %d MB, may be rejected by vision API",
-            path.name, _MAX_IMAGE_BYTES // (1024 * 1024),
-        )
-
-    # 读取并编码
-    with open(path, "rb") as f:
-        image_data = base64.b64encode(f.read()).decode("ascii")
-
-    data_url = f"data:{mime_type};base64,{image_data}"
-    user_prompt = prompt or IMAGE_INTERPRET_PROMPT
-
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": user_prompt},
-                {"type": "image_url", "image_url": {"url": data_url}},
-            ],
-        }
-    ]
-
-    model = vision_model or getattr(chat_model, "model_name", "qwen-vl-plus")
-
-    try:
-        response = await chat_model.chat(
-            messages=messages,
-            model=model,
-            temperature=0.1,
-            max_tokens=max_tokens,
-        )
-    except Exception as e:
-        logger.error("Vision API call failed for %s: %s", path.name, e)
-        raise RuntimeError(f"图片解读失败 ({path.name}): {e}") from e
-
-    # 提取文本
-    content = getattr(response, "content", None)
-    if not content:
-        if hasattr(response, "choices") and response.choices:
-            content = response.choices[0].message.content
-
-    if not content or not content.strip():
-        raise RuntimeError(f"Vision model 对 {path.name} 返回空结果")
-
-    return content.strip()

@@ -20,7 +20,9 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import importlib
+import inspect
 import json
 import logging
 import sys
@@ -121,6 +123,46 @@ class EvalReport:
     thresholds_met: bool
     failures: list[str] = field(default_factory=list)
     results: list[EvalResult] = field(default_factory=list)
+    populated_classes: list[str] = field(default_factory=list)
+    clarification_detection_rate: float = 0.0
+
+
+@dataclass(frozen=True)
+class ClarificationEvalCase:
+    """A paired clarification-resolution evaluation case.
+
+    The first turn is expected to be ``ambiguous``; this case encodes
+    the user's *next* answer and the expected resolution + query snippet.
+    """
+
+    id: str
+    pending_context: dict[str, Any]
+    resolving_input: str
+    expected_resolution: str
+    expected_query_contains: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ClarificationEvalReport:
+    """Report for clarification-resolution evaluation."""
+
+    total_cases: int
+    correct: int
+    completion_rate: float
+    results: list[EvalResult] = field(default_factory=list)
+
+
+@dataclass
+class RouterEvalDependencies:
+    """External dependencies needed by the async evaluators."""
+
+    chat_model: Any = None
+    db: Any = None
+    tenant_id: str | None = None
+    agent_id: str | None = None
+
+
+ClarificationResolverFn = Callable[..., Any]
 
 
 # ---------------------------------------------------------------------------
@@ -154,10 +196,10 @@ def load_cases(path: str) -> list[EvalCase]:
 # ---------------------------------------------------------------------------
 
 
-def _fixture_context_resolver(
-    message: str, context: dict[str, Any], **kwargs: Any
+async def _fixture_context_resolver(
+    *, message, topic, recent_messages, chat_model, db=None, tenant_id=None, agent_id=None, **kwargs
 ) -> dict[str, Any]:
-    """Stub context resolver for fixture mode — always returns continue."""
+    import copy
     return {
         "turn_relation": "continue",
         "standalone_query": message,
@@ -169,10 +211,9 @@ def _fixture_context_resolver(
     }
 
 
-def _fixture_evidence_router(
-    standalone_query: str, **kwargs: Any
+async def _fixture_evidence_router(
+    *, standalone_query, chat_model=None, **kwargs
 ) -> dict[str, Any]:
-    """Stub evidence router for fixture mode — always returns none/direct."""
     return {
         "intent": "general_sales_coaching",
         "response_mode": "direct",
@@ -184,15 +225,25 @@ def _fixture_evidence_router(
     }
 
 
+async def _fixture_clarification_resolver(
+    *, pending_context, resolving_input, chat_model=None, **kwargs
+) -> dict[str, Any]:
+    return {"resolution": "continue", "selected_topic_id": None, "supplemental_message": None, "confidence": 0.9, "reason_code": "fixture_mode"}
+
+
+async def _await_result(value):
+    return await value if inspect.isawaitable(value) else value
+
+
 # ---------------------------------------------------------------------------
 # Evaluation logic
 # ---------------------------------------------------------------------------
 
 
-def evaluate_turn_relation(
+async def evaluate_turn_relation(
     cases: list[EvalCase],
     resolver_fn: ContextResolverFn,
-    resolver_kwargs: dict[str, Any] | None = None,
+    dependencies: RouterEvalDependencies,
 ) -> EvalReport:
     """Evaluate turn-relation classification accuracy."""
     results: list[EvalResult] = []
@@ -203,11 +254,23 @@ def evaluate_turn_relation(
         error: str | None = None
         actual: dict[str, Any] = {}
         try:
-            actual = resolver_fn(
+            topic_ctx = case.context.get("topic", {}) or {}
+            raw = resolver_fn(
                 message=case.input,
-                context=case.context,
-                **(resolver_kwargs or {}),
+                topic=topic_ctx if hasattr(topic_ctx, "summary") else type("Topic", (), {"summary": topic_ctx.get("summary", ""), "current_goal": topic_ctx.get("current_goal", "")})(),
+                recent_messages=case.context.get("recent_messages", []),
+                chat_model=dependencies.chat_model,
+                db=dependencies.db,
+                tenant_id=dependencies.tenant_id,
+                agent_id=dependencies.agent_id,
             )
+            actual = await _await_result(raw)
+            if hasattr(actual, "model_dump"):
+                actual = actual.model_dump()
+            elif isinstance(actual, dict):
+                pass
+            else:
+                actual = {"turn_relation": "continue", "standalone_query": case.input, "retained_entities": [], "retracted_goals": [], "missing_references": [], "confidence": 0.0, "reason_code": "unknown"}
         except Exception as e:
             error = str(e)
         elapsed = (time.perf_counter() - start) * 1000
@@ -250,10 +313,10 @@ def _build_turn_relation_report(
     correct = sum(1 for r in results if r.correct)
     accuracy = correct / total if total > 0 else 0.0
 
-    per_class_names = sorted(per_class.keys())
+    populated = [cn for cn in per_class if per_class[cn].total > 0]
     macro_accuracy = (
-        sum(per_class[cn].accuracy for cn in per_class_names) / len(per_class_names)
-        if per_class_names
+        sum(per_class[cn].accuracy for cn in populated) / len(populated)
+        if populated
         else 0.0
     )
 
@@ -311,6 +374,7 @@ def _build_turn_relation_report(
     )
 
     # Latencies
+    clarification_detection_rate = clarification_completion_rate
     latencies = sorted(r.latency_ms for r in results)
     p50 = latencies[len(latencies) // 2] if latencies else 0.0
     p95_idx = int(len(latencies) * 0.95)
@@ -352,6 +416,8 @@ def _build_turn_relation_report(
         unnecessary_retrieval_rate=unnecessary_retrieval_rate,
         topic_leakage_rate=topic_leakage_rate,
         clarification_completion_rate=clarification_completion_rate,
+        populated_classes=populated,
+        clarification_detection_rate=clarification_detection_rate,
         p50_latency_ms=p50,
         p95_latency_ms=p95,
         thresholds_met=thresholds_met,
@@ -360,10 +426,10 @@ def _build_turn_relation_report(
     )
 
 
-def evaluate_evidence_policy(
+async def evaluate_evidence_policy(
     cases: list[EvalCase],
     resolver_fn: EvidenceRouterFn,
-    resolver_kwargs: dict[str, Any] | None = None,
+    dependencies: RouterEvalDependencies,
 ) -> EvalReport:
     """Evaluate evidence policy routing accuracy."""
     results: list[EvalResult] = []
@@ -374,10 +440,13 @@ def evaluate_evidence_policy(
         error: str | None = None
         actual: dict[str, Any] = {}
         try:
-            actual = resolver_fn(
+            raw = resolver_fn(
                 standalone_query=case.context.get("standalone_query", case.input),
-                **(resolver_kwargs or {}),
+                chat_model=dependencies.chat_model,
             )
+            actual = await _await_result(raw)
+            if hasattr(actual, "model_dump"):
+                actual = actual.model_dump()
         except Exception as e:
             error = str(e)
         elapsed = (time.perf_counter() - start) * 1000
@@ -418,10 +487,10 @@ def _build_evidence_report(
     correct = sum(1 for r in results if r.correct)
     accuracy = correct / total if total > 0 else 0.0
 
-    per_class_names = sorted(per_class.keys())
+    populated = [cn for cn in per_class if per_class[cn].total > 0]
     macro_accuracy = (
-        sum(per_class[cn].accuracy for cn in per_class_names) / len(per_class_names)
-        if per_class_names
+        sum(per_class[cn].accuracy for cn in populated) / len(populated)
+        if populated
         else 0.0
     )
 
@@ -455,6 +524,7 @@ def _build_evidence_report(
     # Set to 0 / 1.0 as sentinels
     topic_leakage_rate = 0.0
     clarification_completion_rate = 1.0
+    clarification_detection_rate = 1.0
 
     latencies = sorted(r.latency_ms for r in results)
     p50 = latencies[len(latencies) // 2] if latencies else 0.0
@@ -482,12 +552,75 @@ def _build_evidence_report(
         unnecessary_retrieval_rate=unnecessary_retrieval_rate,
         topic_leakage_rate=topic_leakage_rate,
         clarification_completion_rate=clarification_completion_rate,
+        populated_classes=populated,
+        clarification_detection_rate=clarification_detection_rate,
         p50_latency_ms=p50,
         p95_latency_ms=p95,
         thresholds_met=thresholds_met,
         failures=failures,
         results=results,
     )
+
+
+async def evaluate_clarification_resolution(
+    cases: list[ClarificationEvalCase],
+    resolver_fn: ClarificationResolverFn,
+    dependencies: RouterEvalDependencies,
+) -> ClarificationEvalReport:
+    results: list[EvalResult] = []
+    correct = 0
+    for case in cases:
+        start = time.perf_counter()
+        error = None
+        actual: dict[str, Any] = {}
+        try:
+            raw = resolver_fn(
+                pending_context=case.pending_context,
+                resolving_input=case.resolving_input,
+                chat_model=dependencies.chat_model,
+                db=dependencies.db,
+                tenant_id=dependencies.tenant_id,
+                agent_id=dependencies.agent_id,
+            )
+            actual = await _await_result(raw)
+            if hasattr(actual, "model_dump"):
+                actual = actual.model_dump()
+        except Exception as e:
+            error = str(e)
+        elapsed = round((time.perf_counter() - start) * 1000, 1)
+        actual_res = actual.get("resolution", "") if isinstance(actual, dict) else ""
+        is_correct = (actual_res == case.expected_resolution) and error is None
+        if is_correct:
+            correct += 1
+        results.append(EvalResult(
+            id=case.id, input=case.resolving_input,
+            expected={"resolution": case.expected_resolution},
+            actual=actual, correct=is_correct,
+            latency_ms=elapsed, error=error,
+        ))
+    return ClarificationEvalReport(
+        total_cases=len(cases), correct=correct,
+        completion_rate=(correct / len(cases)) if cases else 0.0,
+        results=results,
+    )
+
+
+def load_clarification_cases(path: str) -> list[ClarificationEvalCase]:
+    cases = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            obj = json.loads(line)
+            cases.append(ClarificationEvalCase(
+                id=obj["id"],
+                pending_context=obj.get("pending_context", {}),
+                resolving_input=obj["resolving_input"],
+                expected_resolution=obj["expected_resolution"],
+                expected_query_contains=obj.get("expected_query_contains", []),
+            ))
+    return cases
 
 
 def _count_required_fn(results: list[EvalResult]) -> int:
@@ -631,6 +764,15 @@ def write_markdown_report(
         f.write("\n".join(lines))
 
 
+def write_clar_report(report: ClarificationEvalReport, out_dir: str) -> None:
+    data = {"total_cases": report.total_cases, "correct": report.correct, "completion_rate": round(report.completion_rate, 4)}
+    with open(f"{out_dir}/clarification_resolution_report.json", "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    md = [f"# Clarification Resolution Report", "", f"**Total:** {report.total_cases}", f"**Correct:** {report.correct}", f"**Completion rate:** {report.completion_rate:.1%}"]
+    with open(f"{out_dir}/clarification_resolution_report.md", "w", encoding="utf-8") as f:
+        f.write("\n".join(md))
+
+
 def _get_expected_key(expected: dict[str, Any]) -> str:
     for key in ("turn_relation", "knowledge_policy"):
         if key in expected:
@@ -685,41 +827,71 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Dotted path to evidence router function",
     )
+    parser.add_argument(
+        "--clarification-cases",
+        default=None,
+        help="Path to clarification-resolution cases JSONL",
+    )
+    parser.add_argument(
+        "--clarification-resolver-fn",
+        default=None,
+        help="Dotted path to clarification resolver function",
+    )
+    parser.add_argument(
+        "--tenant-id",
+        default=None,
+        help="Tenant ID for model-backed evaluation",
+    )
+    parser.add_argument(
+        "--agent-id",
+        default=None,
+        help="Agent ID for model-backed evaluation",
+    )
     return parser.parse_args(argv)
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Run evaluation and return exit code."""
-    args = parse_args(argv)
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-    )
-
+async def main_async(args) -> int:
     fixture_mode = args.fixture_mode
+    deps = RouterEvalDependencies()
+    clarification_resolver = None
 
     # Set up resolver functions
     if fixture_mode:
         context_resolver = _fixture_context_resolver
         evidence_router = _fixture_evidence_router
+        clarification_resolver = _fixture_clarification_resolver
         logger.info("Running in FIXTURE mode — using stub resolvers")
     else:
-        if args.context_resolver_fn:
-            context_resolver = _import_fn(args.context_resolver_fn)
-            logger.info("Using custom context resolver: %s", args.context_resolver_fn)
-        else:
-            from sales_agent.services.context_resolver import resolve_context
-            context_resolver = resolve_context
-            logger.info("Using production context resolver")
-
-        if args.evidence_router_fn:
-            evidence_router = _import_fn(args.evidence_router_fn)
-            logger.info("Using custom evidence router: %s", args.evidence_router_fn)
-        else:
-            from sales_agent.services.evidence_router import route_intent_evidence
-            evidence_router = route_intent_evidence
-            logger.info("Using production evidence router")
+        from sales_agent.core.database import init_db
+        from sales_agent.services.tenant_resolver import TenantResolver
+        await init_db()
+        try:
+            if args.context_resolver_fn:
+                context_resolver = _import_fn(args.context_resolver_fn)
+            else:
+                from sales_agent.services.context_resolver import resolve_context
+                context_resolver = resolve_context
+            if args.evidence_router_fn:
+                evidence_router = _import_fn(args.evidence_router_fn)
+            else:
+                from sales_agent.services.evidence_router import route_intent_evidence
+                evidence_router = route_intent_evidence
+            if args.clarification_resolver_fn:
+                clarification_resolver = _import_fn(args.clarification_resolver_fn)
+            else:
+                from sales_agent.services.topic_manager import resolve_clarification
+                clarification_resolver = resolve_clarification
+            import os
+            tenant_id = args.tenant_id or os.environ.get("EVAL_TENANT_ID", "")
+            resolver = TenantResolver(None)
+            await resolver.resolve(tenant_id)
+            deps = RouterEvalDependencies(
+                chat_model=None, db=None,
+                tenant_id=tenant_id, agent_id=args.agent_id,
+            )
+        finally:
+            from sales_agent.core.database import close_db
+            await close_db()
 
     # Load cases
     turn_cases = load_cases(args.turn_relation_cases)
@@ -733,7 +905,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Evaluate turn relation
     logger.info("Evaluating turn-relation classification...")
-    tr_report = evaluate_turn_relation(turn_cases, context_resolver)
+    tr_report = await evaluate_turn_relation(turn_cases, context_resolver, deps)
     logger.info(
         "Turn-relation accuracy: %.1f%% (%d/%d)",
         tr_report.accuracy * 100,
@@ -743,7 +915,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Evaluate evidence policy
     logger.info("Evaluating evidence-policy routing...")
-    ev_report = evaluate_evidence_policy(ev_cases, evidence_router)
+    ev_report = await evaluate_evidence_policy(ev_cases, evidence_router, deps)
     logger.info(
         "Evidence-policy accuracy: %.1f%% (%d/%d)",
         ev_report.accuracy * 100,
@@ -774,10 +946,19 @@ def main(argv: list[str] | None = None) -> int:
             "Evidence-Policy Routing Report",
         )
 
-        logger.info("Reports written to %s", out_dir)
+
+    # Evaluate clarification resolution
+    clar_cases = load_clarification_cases(args.clarification_cases) if args.clarification_cases else []
+    clar_report = None
+    if clar_cases:
+        logger.info("Evaluating clarification-resolution...")
+        clar_report = await evaluate_clarification_resolution(clar_cases, clarification_resolver, deps)
+        logger.info("Clarification completion: %.1f%%", clar_report.completion_rate * 100)
 
     # Summary
     all_met = tr_report.thresholds_met and ev_report.thresholds_met
+    if clar_report:
+        all_met = all_met and clar_report.completion_rate >= 0.90
 
     print()
     print("=" * 60)
@@ -818,6 +999,11 @@ def _import_fn(dotted: str) -> Any:
     module = importlib.import_module(module_path)
     return getattr(module, fn_name)
 
+
+def main(argv=None):
+    args = parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    return asyncio.run(main_async(args))
 
 if __name__ == "__main__":
     sys.exit(main())

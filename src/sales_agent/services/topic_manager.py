@@ -24,13 +24,17 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sales_agent.llm.call_params import get_call_params
+from sales_agent.models.conversation import ConversationMessage
 from sales_agent.models.conversation_topic import ConversationTopic
 from sales_agent.prompts.clarification_resolver_prompt import (
     CLARIFICATION_RESOLVER_PROMPT,
 )
+from sales_agent.services.prompt_resolver_helper import resolve_router_prompt
 from sales_agent.services.structured_router_output import (
     ClarificationDecision,
     ContextDecision,
+    TopicScope,
     parse_model_json,
 )
 
@@ -131,6 +135,37 @@ class TopicManager:
         )
         return list(result.all())
 
+    async def load_recent_topic_messages(
+        self,
+        session: AsyncSession,
+        *,
+        scope: TopicScope,
+        conversation_id: str,
+        topic_id: str,
+        limit: int = 6,
+    ) -> list[dict[str, str]]:
+        """Return the latest ``limit`` user/assistant messages for a topic.
+
+        Filters by *(tenant, agent, user, channel, conversation_id, topic_id)*
+        and role, orders newest-first to apply the limit, then reverses to
+        chronological (oldest-first) order. Messages from any other topic —
+        including a closed non-selected one — are never loaded.
+        """
+        result = await session.execute(
+            select(ConversationMessage.role, ConversationMessage.content)
+            .where(
+                ConversationMessage.tenant_id == scope.tenant_id,
+                ConversationMessage.conversation_id == conversation_id,
+                ConversationMessage.topic_id == topic_id,
+                ConversationMessage.role.in_(("user", "assistant")),
+            )
+            .order_by(ConversationMessage.created_at.desc())
+            .limit(limit)
+        )
+        rows = list(result.all())
+        rows.reverse()  # chronological order (oldest first)
+        return [{"role": role, "content": content} for role, content in rows]
+
     # ------------------------------------------------------------------
     # Lifecycle mutations
     # ------------------------------------------------------------------
@@ -209,6 +244,58 @@ class TopicManager:
         )
         session.add(topic)
         return topic
+
+    async def create_restore_anchor(
+        self,
+        session: AsyncSession,
+        *,
+        scope: TopicScope,
+        conversation_id: str,
+        event_id: str,
+        original_message: str,
+        candidates: list[ConversationTopic],
+        now: datetime | None = None,
+    ) -> ConversationTopic:
+        """Create an *active* anchor topic holding a pending restore request.
+
+        When 2+ candidates are restorable and the user cannot pick one, we
+        create a fresh active topic whose ``pending_clarification_json``
+        carries a ``kind: "topic_restore"`` payload (the candidate IDs and
+        summaries). The anchor has **no** retained entities or prior goal.
+
+        Because the partial unique active-Topic index allows only ONE active
+        topic per scope, the caller must **close and flush** this anchor
+        before restoring a candidate — otherwise the index would be
+        violated. The anchor is the single active topic for its scope while
+        it exists.
+        """
+        now = now or datetime.now(timezone.utc)
+        anchor = ConversationTopic(
+            tenant_id=scope.tenant_id,
+            agent_id=scope.agent_id,
+            user_id=scope.user_id,
+            channel=scope.channel,
+            conversation_id=conversation_id,
+            status="active",
+            summary="",
+            current_goal="",
+            key_entities_json="[]",
+            pending_clarification_json=json.dumps(
+                {
+                    "kind": "topic_restore",
+                    "event_id": event_id,
+                    "original_message": original_message,
+                    "candidate_topic_ids": [c.id for c in candidates],
+                    "candidate_summaries": [c.summary for c in candidates],
+                    "created_at": now.isoformat(),
+                },
+                ensure_ascii=False,
+            ),
+            last_active_at=now,
+            expires_at=now + TOPIC_IDLE_TIMEOUT,
+        )
+        session.add(anchor)
+        return anchor
 
     # ------------------------------------------------------------------
     # Apply ContextDecision
@@ -410,6 +497,10 @@ async def resolve_clarification(
     message: str,
     chat_model: Any,
     attempt_count: int = 0,
+    *,
+    db: AsyncSession | None = None,
+    tenant_id: str | None = None,
+    agent_id: str | None = None,
 ) -> ClarificationDecision:
     """Resolve a clarification need based on the user's *message*.
 
@@ -427,6 +518,14 @@ async def resolve_clarification(
     :data:`CLARIFICATION_RESOLVER_PROMPT`. When *attempt_count* reaches
     :data:`MAX_CLARIFICATION_ATTEMPTS` the function defaults to ``new``
     without calling the model.
+
+    Parameters
+    ----------
+    db :
+        数据库会话；非空且 *tenant_id* 有值时走 PromptRegistry 三级回退
+        （运营后台编辑生效），否则回退到模块常量。
+    tenant_id, agent_id :
+        租户 / Agent 标识，用于 PromptRegistry 解析。
     """
     trimmed = message.strip()
 
@@ -458,14 +557,23 @@ async def resolve_clarification(
     # -- LLM-based resolution ----------------------------------------------
     if chat_model is not None:
         try:
+            # 命中 LLM 段才解析 prompt，避免无谓 DB 往返（短路命令不调 LLM）
+            system_prompt = await resolve_router_prompt(
+                db,
+                "clarification_resolver",
+                tenant_id,
+                agent_id,
+                default=CLARIFICATION_RESOLVER_PROMPT,
+            )
             messages = [
-                {"role": "system", "content": CLARIFICATION_RESOLVER_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": trimmed},
             ]
+            p = get_call_params("topic_manager")
             response = await chat_model.generate(
                 messages=messages,
-                temperature=0.0,
-                max_tokens=500,
+                temperature=p.temperature,
+                max_tokens=p.max_tokens,
             )
             return parse_model_json(response, ClarificationDecision)
         except (json.JSONDecodeError, ValueError) as exc:

@@ -10,7 +10,11 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from sales_agent.llm.call_params import get_call_params
 from sales_agent.prompts.risk_check_prompt import RISK_CHECK_PROMPT
+# 复用 task_router 的平衡括号 JSON 提取器：``re.search(r"\{[^}]+\}")`` 在嵌套
+# JSON 上会截断（risk prompt 同样可能返回嵌套结构），此处与 task_router 保持一致。
+from sales_agent.services.task_router import _extract_first_json
 
 # 默认风险检查 prompt（已外移到 prompts/risk_check_prompt.py，便于 DB 版本管理）。
 _DEFAULT_RISK_PROMPT = RISK_CHECK_PROMPT
@@ -108,6 +112,39 @@ def _check_rules(text: str, rules: list[tuple[str, str, str, str]]) -> list[tupl
         if re.search(pattern, text):
             hits.append((risk_type, level, action))
     return hits
+
+
+def merge_risk_results(rule: RiskCheckResult, llm: RiskCheckResult) -> RiskCheckResult:
+    """合并规则和 LLM 风险结果，取更高的风险等级。
+
+    规则检查（``full_check``）与 LLM 检查（``check_llm_risk``）结果同构，
+    合并策略：取更高 level 的 action/notice/rewrite_summary，flags 取并集。
+    LLM 风控失败时应由调用方 try/except 回退到规则结果（避免静默放行）。
+    """
+    level_priority = {LEVEL_NONE: 0, LEVEL_LOW: 1, LEVEL_MEDIUM: 2, LEVEL_HIGH: 3}
+
+    rule_level = level_priority.get(rule.level, 0)
+    llm_level = level_priority.get(llm.level, 0)
+
+    # 取更高的
+    if llm_level > rule_level:
+        merged = RiskCheckResult(
+            level=llm.level,
+            flags=list(set(rule.flags + llm.flags)),
+            action=llm.action,
+            notice=llm.notice or rule.notice,
+            rewrite_summary=llm.rewrite_summary or rule.rewrite_summary,
+        )
+    else:
+        merged = RiskCheckResult(
+            level=rule.level,
+            flags=list(set(rule.flags + llm.flags)),
+            action=rule.action,
+            notice=rule.notice,
+            rewrite_summary=rule.rewrite_summary,
+        )
+
+    return merged
 
 
 class RiskChecker:
@@ -242,15 +279,16 @@ class RiskChecker:
             prompt = (risk_prompt or _DEFAULT_RISK_PROMPT).format(
                 message=message, answer=answer_text[:1000]
             )
+            p = get_call_params("risk_checker")
             response = await chat_model.generate(
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=300,
+                temperature=p.temperature,
+                max_tokens=p.max_tokens,
             )
-            import json as _json
-            json_match = re.search(r"\{[^}]+\}", response, re.DOTALL)
-            if json_match:
-                data = _json.loads(json_match.group())
+            # 用平衡花括号提取完整 JSON（支持嵌套），与 task_router 一致；
+            # 旧 ``re.search(r"\{[^}]+\}")`` 在嵌套 JSON 上会截断出非法 JSON。
+            data = _extract_first_json(response)
+            if data:
                 level = data.get("level", LEVEL_NONE)
                 action = data.get("action", ACTION_ALLOW)
                 # 安全校验：确保值合法

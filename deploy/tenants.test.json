@@ -24,6 +24,7 @@
       "env_file": "secrets/fuduoduo.env",
       "data_dir": "./data/fuduoduo",
       "logs_dir": "./logs/fuduoduo",
+      "knowledge_engine": "ontology_neo4j",
       "roles": ["api", "stream", "worker"]
     }
   ]

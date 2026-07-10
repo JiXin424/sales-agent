@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from sales_agent.llm.call_params import get_call_params
 from sales_agent.prompts.task_router_prompt import TASK_ROUTER_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -106,7 +107,7 @@ _FACT_SIGNAL_PATTERNS: list[re.Pattern] = [
     re.compile(r"(价格|多少钱|怎么收费|报价|费用|成本|预算)"),
     re.compile(r"(政策|制度|规定|流程|售后|保障)"),
     re.compile(r"(案例|成功故事|客户见证|效果)"),
-    re.compile(r"(竞品|竞争对手|对比|区别|vs)"),
+    re.compile(r"(竞品|竞争对手|对比|区别)"),
     re.compile(r"(合同|合约|协议|签约|条款)"),
     re.compile(r"(交付|实施|上线|部署|售后|服务)"),
 ]
@@ -159,10 +160,10 @@ def apply_evidence_policy_guard(
         response_mode = "retrieve"
         reason_code = "policy_guard_upgraded_to_required"
 
-    # 检测非事实信号 — 降级策略（但已 required 的不降级）
+    # 检测非事实信号 — 降级策略（但已 required/web 的不降级；web 是离域联网决策，粘性）
     has_non_fact_signal = any(p.search(query) for p in _NON_FACT_SIGNAL_PATTERNS)
 
-    if has_non_fact_signal and knowledge_policy != "required":
+    if has_non_fact_signal and knowledge_policy not in ("required", "web"):
         knowledge_policy = "none"
         response_mode = "direct"
         if reason_code == "policy_guard_upgraded_to_required":
@@ -341,6 +342,76 @@ def _resolve_priority(hits: list[tuple[str, float]], message: str) -> RouteResul
 _DEFAULT_ROUTER_PROMPT = TASK_ROUTER_PROMPT
 
 
+class _KeepMissingDict(dict):
+    """``str.format_map`` 安全映射：未知占位符原样保留为 ``{key}``。
+
+    task_router 的 DB 版 prompt 含三类花括号：
+    1. ``{message}`` —— 真占位符，需替换为用户输入；
+    2. ``{{...}}`` —— JSON 示例的 escape，format 会还原为 ``{...}``；
+    3. ``{群聊/私聊}`` ``{发送者姓名}`` 等 —— 作者漏 escape 的字面花括号。
+
+    普通 ``.format(message=...)`` 把第 3 类当未知占位符抛 ``KeyError``，
+    导致 LLM 路由每次必崩、回退规则路由。本映射让未知 key 原样保留，
+    三类花括号都能正确处理，无需改动 DB prompt 数据。
+    """
+
+    def __missing__(self, key: str) -> str:  # noqa: D401
+        return "{" + key + "}"
+
+
+# DB 版 task_router prompt 输出 intent schema（chat/deep/follow_up/emotion/creative），
+# 映射到内部 task_type。deep = 需检索的深度问题 → knowledge_qa；emotion → emotional_support；
+# creative = 写话术/方案 → script_generation；chat/follow_up 无需检索 → 通用兜底。
+_INTENT_TO_TASK: dict[str, str] = {
+    "chat": GENERAL_COACHING,
+    "deep": KNOWLEDGE_QA,
+    "follow_up": GENERAL_COACHING,
+    "emotion": EMOTIONAL_SUPPORT,
+    "creative": SCRIPT_GENERATION,
+}
+
+
+def _extract_first_json(text: str) -> dict | None:
+    """从文本中提取第一个完整 JSON 对象（支持嵌套花括号与字符串内的花括号）。
+
+    ``re.search(r"\\{[^}]+\\}", ...)`` 在嵌套 JSON（如 prompt 要求的
+    ``channel_queries`` 结构）上会截断出非法 JSON。本函数按花括号深度配对
+    扫描，并在字符串字面量内跳过花括号，确保提取完整对象。
+    """
+    if not isinstance(text, str):
+        return None
+    start = text.find("{")
+    if start == -1:
+        return None
+    import json
+
+    depth = 0
+    in_str = False
+    escape = False
+    for i in range(start, len(text)):
+        c = text[i]
+        if in_str:
+            if escape:
+                escape = False
+            elif c == "\\":
+                escape = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[start : i + 1])
+                except json.JSONDecodeError:
+                    return None
+    return None
+
+
 async def _llm_route(
     message: str,
     chat_model: Any,
@@ -353,31 +424,34 @@ async def _llm_route(
             为 None 时回退到内置默认。
     """
     try:
-        prompt = (router_prompt or _DEFAULT_ROUTER_PROMPT).format(message=message)
+        prompt = (router_prompt or _DEFAULT_ROUTER_PROMPT).format_map(
+            _KeepMissingDict(message=message)
+        )
+        p = get_call_params("task_router")
         response = await chat_model.generate(
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
-            max_tokens=200,
+            temperature=p.temperature,
+            max_tokens=p.max_tokens,
         )
-        # 解析 JSON 响应
-        import json
-
-        # 尝试提取 JSON
-        json_match = re.search(r"\{[^}]+\}", response)
-        if json_match:
-            data = json.loads(json_match.group())
-            task_type = data.get("task_type", GENERAL_COACHING)
-            if task_type not in ALL_TASK_TYPES:
-                task_type = GENERAL_COACHING
-            confidence = float(data.get("confidence", 0.5))
-            # 兼容旧版 response：优先使用 knowledge_policy，否则从 needs_retrieval 推导
-            knowledge_policy = data.get("knowledge_policy", None)
-            if knowledge_policy is None:
-                needs_retrieval_old = bool(data.get("needs_retrieval", False))
-                knowledge_policy = "required" if needs_retrieval_old else "none"
-            # 如果 knowledge_policy 无效，使用默认值
+        # 解析 JSON 响应：DB 版 prompt 输出 intent schema（含嵌套 channel_queries），
+        # 用平衡花括号提取完整 JSON，再映射 intent → task_type；兼容旧 task_type schema。
+        data = _extract_first_json(response)
+        if data:
+            task_type = GENERAL_COACHING
+            if data.get("task_type") in ALL_TASK_TYPES:
+                task_type = data["task_type"]
+            else:
+                intent = str(data.get("intent", "")).strip().lower()
+                task_type = _INTENT_TO_TASK.get(intent, GENERAL_COACHING)
+            confidence = float(data.get("confidence", 0.65))
+            # knowledge_policy：优先用 prompt 显式给的，否则按 task_type 默认推导
+            knowledge_policy = data.get("knowledge_policy")
             if knowledge_policy not in ("none", "optional", "required"):
-                knowledge_policy = "none"
+                if knowledge_policy is None:
+                    needs_retrieval = TASK_DEFAULT_RETRIEVAL.get(task_type, False)
+                else:
+                    needs_retrieval = bool(data.get("needs_retrieval", False))
+                knowledge_policy = "required" if needs_retrieval else "none"
             return RouteResult(
                 task_type=task_type,
                 confidence=confidence,

@@ -13,20 +13,119 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 
 import dingtalk_stream
+
+# --- websockets ping 兼容补丁 ---
+# websockets 15.x 默认 ping_interval=20s + ping_timeout=20s，与钉钉 wss 网关
+# 不兼容：网关对高频 ping 响应慢，20s 内无 pong 即抛 ConnectionClosedError，
+# 导致 dingtalk_stream SDK [start] network exception 反复重连，连接抖动期间
+# 钉钉推的消息送不进来（文字/图片/知识库查询全失效）。SDK 调
+# websockets.connect(uri) 未覆盖 ping 参数，且自带 60s keepalive，故禁用
+# websockets 自带 ping，只用 SDK keepalive。
+# 仅当调用方未显式传 ping_interval/ping_timeout 时生效，不影响其他调用方。
+import websockets
+
+if getattr(websockets.connect.__init__, "_sales_agent_ping_patched", False) is False:
+    _orig_connect_init = websockets.connect.__init__
+
+    def _patched_connect_init(self, *args, **kwargs):
+        if "ping_interval" not in kwargs:
+            kwargs["ping_interval"] = None
+        if "ping_timeout" not in kwargs:
+            kwargs["ping_timeout"] = None
+        return _orig_connect_init(self, *args, **kwargs)
+
+    _patched_connect_init._sales_agent_ping_patched = True  # type: ignore[attr-defined]
+    websockets.connect.__init__ = _patched_connect_init
 
 from sales_agent.core.config import get_settings
 from sales_agent.core.database import get_session_factory
 from sales_agent.core.tenant_runtime import get_tenant_runtime
 from sales_agent.integrations.dingtalk.config import DingTalkConfig
 from sales_agent.integrations.dingtalk.processor import handle_dingtalk_event
-from sales_agent.integrations.dingtalk.media_adapter import extract_download_codes, supported_media_type
+from sales_agent.integrations.dingtalk.media_adapter import (
+    DingTalkMediaAdapter,
+    extract_download_codes,
+    supported_media_type,
+)
 
 logger = logging.getLogger(__name__)
 
 # 快速命令集合（不走流式卡片，直接回复）
 _FAST_COMMANDS = {"帮助", "help", "？", "?", "新话题", "清空上下文", "重新开始", "忘掉前面", "/reset", "/new"}
+
+
+def _should_stream(config: DingTalkConfig, message_type: str, text_content: str) -> bool:
+    """Decide whether a DingTalk message takes the streaming card path.
+
+    Text streams (unless it is a fast command). Supported media streams only
+    when ``media_enabled`` is on — so voice/image get the same streaming card
+    treatment as text. Everything else stays on the non-streaming path.
+    """
+    if not config.streaming_enabled:
+        return False
+    if message_type == "text":
+        return text_content.strip() not in _FAST_COMMANDS
+    if supported_media_type(message_type):
+        return config.media_enabled
+    return False
+
+
+async def _resolve_streaming_message(
+    config: DingTalkConfig,
+    settings,
+    *,
+    card_sender,
+    message_type: str,
+    text_content: str,
+    media_download_codes: list[str],
+    raw_event: dict,
+    dingtalk_user_id: str,
+    reply_fn: Callable[[str], Awaitable[None]] | None,
+) -> tuple[str | None, str | None]:
+    """Prepare the message text for the streaming path.
+
+    Text passes straight through and opens no card (returns ``(text, None)``).
+    Media opens a "正在识别…" recognition card immediately (so the user gets
+    feedback during the blocking ASR/vision step), runs media adaptation to
+    text, and returns ``(text, card_id)`` so the streaming graph reuses that
+    same card. On adaptation failure the card is finalized with a friendly
+    error and ``(None, card_id)`` is returned to signal the caller to stop.
+    """
+    if message_type == "text":
+        return text_content, None
+
+    card_id = await card_sender.send_markdown_card(
+        dingtalk_user_id=dingtalk_user_id,
+        title="正在识别...",
+        markdown_text="正在识别你的语音/图片…",
+    )
+    adapter = DingTalkMediaAdapter(config, settings)
+    try:
+        message_text = await adapter.to_agent_text(
+            message_type=message_type,
+            text=text_content,
+            download_codes=media_download_codes or [],
+            raw_event=raw_event or {},
+        )
+        return message_text, card_id
+    except Exception as e:
+        logger.warning(
+            "DingTalk streaming media adaptation failed: type=%s error=%s",
+            message_type, e,
+        )
+        error_text = "已收到你的图片或语音，但我暂时无法识别内容。请换成文字描述一下，我马上帮你处理。"
+        try:
+            await card_sender.streaming_finalize(card_id, error_text)
+        except Exception:
+            logger.error("Failed to finalize recognition card after media error")
+            if reply_fn is not None:
+                await reply_fn(error_text)
+        return None, card_id
+    finally:
+        await adapter.close()
 
 
 class SalesAgentChatbotHandler(dingtalk_stream.ChatbotHandler):
@@ -126,12 +225,8 @@ class SalesAgentChatbotHandler(dingtalk_stream.ChatbotHandler):
                 except Exception:
                     logger.error("Failed to reply via text fallback: %s", e)
 
-        # 6. 判断是否走流式卡片
-        use_streaming = (
-            self._config.streaming_enabled
-            and message_type == "text"
-            and text_content.strip() not in _FAST_COMMANDS
-        )
+        # 6. 判断是否走流式卡片（文字 + 受支持的语音/图片）
+        use_streaming = _should_stream(self._config, message_type, text_content)
 
         factory = get_session_factory()
         async with factory() as db:
@@ -145,6 +240,7 @@ class SalesAgentChatbotHandler(dingtalk_stream.ChatbotHandler):
                         corp_id=corp_id,
                         sender_id=sender_id,
                         sender_name=sender_name,
+                        message_type=message_type,
                         text_content=text_content,
                         media_download_codes=media_download_codes,
                         raw_event=raw_event,
@@ -190,6 +286,7 @@ class SalesAgentChatbotHandler(dingtalk_stream.ChatbotHandler):
         corp_id,
         sender_id,
         sender_name,
+        message_type,
         text_content,
         media_download_codes,
         raw_event,
@@ -220,7 +317,8 @@ class SalesAgentChatbotHandler(dingtalk_stream.ChatbotHandler):
 
         card_sender = self._get_card_sender()
         if card_sender is None:
-            # CardSender 初始化失败，降级
+            # CardSender 初始化失败，降级到非流式（透传真实消息类型与媒体字段，
+            # 由 handle_dingtalk_event 的媒体分支兜底，避免把媒体硬当 text 处理）
             logger.warning("CardSender not available, falling back to non-streaming")
             await handle_dingtalk_event(
                 db, self._config, settings, runtime,
@@ -228,14 +326,30 @@ class SalesAgentChatbotHandler(dingtalk_stream.ChatbotHandler):
                 corp_id=corp_id,
                 sender_id=sender_id,
                 sender_name=sender_name,
-                message_type="text",
+                message_type=message_type,
                 text=text_content,
-                media_download_codes=[],
-                raw_event={},
+                media_download_codes=media_download_codes,
+                raw_event=raw_event,
                 message_id=message_id,
                 dingtalk_conversation_id=dingtalk_conversation_id,
                 reply_fn=reply_fn,
             )
+            return
+
+        # 媒体消息：先开「正在识别…」过渡卡片并转写成文字；文字消息直接透传、不开卡。
+        message_text, preliminary_card_id = await _resolve_streaming_message(
+            self._config,
+            settings,
+            card_sender=card_sender,
+            message_type=message_type,
+            text_content=text_content,
+            media_download_codes=media_download_codes,
+            raw_event=raw_event,
+            dingtalk_user_id=sender_id,
+            reply_fn=reply_fn,
+        )
+        if message_text is None:
+            # 媒体识别失败：兜底已通过卡片/回复发出，不再进入 Graph。
             return
 
         # Resolve model provider for graph execution
@@ -251,7 +365,7 @@ class SalesAgentChatbotHandler(dingtalk_stream.ChatbotHandler):
             tenant_id=runtime.tenant_id,
             user_id=internal_user_id,
             dingtalk_user_id=sender_id,
-            message=text_content,
+            message=message_text,
             conversation_id=conversation_id,
             agent_id=agent_id,
             event_id=event_id,
@@ -260,6 +374,7 @@ class SalesAgentChatbotHandler(dingtalk_stream.ChatbotHandler):
             db=db,
             chat_model=model_provider.chat,
             embedding_model=model_provider.embedding,
+            card_id=preliminary_card_id,
         )
         logger.info("Graph-based streaming completed successfully")
         return

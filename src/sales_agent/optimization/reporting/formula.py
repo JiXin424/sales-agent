@@ -110,16 +110,6 @@ def get_formula(version: str) -> EffectFormula:
     return formula
 
 
-# ── Matching helpers ─────────────────────────────────────────────────────────
-
-def _find_metric(formula: EffectFormula, metric_name: str) -> MetricDefinition | None:
-    """Match a DeepEval metric name to a formula metric."""
-    for m in formula.metrics:
-        if m.name == metric_name or metric_name in m.aliases:
-            return m
-    return None
-
-
 # ── Normalised composite ─────────────────────────────────────────────────────
 
 def compute_effect(

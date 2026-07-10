@@ -14,6 +14,7 @@
 #   env             仅 image-deploy 使用,指定用哪份 compose-<env>.yml(如 test)
 set -euo pipefail
 IMAGE="${IMAGE:?需要 IMAGE 环境变量}"
+FAILED=0  # 任一目标部署失败置 1，循环末尾 exit 1（不让 || echo 吞 exit code）
 
 # 仓库根目录 = 本脚本所在目录的父目录
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -70,14 +71,15 @@ while IFS='|' read -r user host port dir method local name has_source compose_fi
         && docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
              -v /root/.docker:/root/.docker:ro -v "${dir}:/workspace" \
              -e APP_IMAGE="${IMAGE}" -e FRONTEND_IMAGE="${FRONTEND_IMAGE:-}" \
+             -e FORCE_RECREATE_APP="${FORCE_RECREATE_APP:-}" \
              "${DEPLOY_IMG}" "${env}" \
-        || echo "⚠️  [$name] local image-deploy 失败，继续下一台" >&2
+        || { echo "⚠️  [$name] local image-deploy 失败，继续下一台" >&2; FAILED=1; }
 
     elif [ "$has_source" = "True" ] && [ "$method" != "self-deploy" ]; then
       git -C "$REPO_DIR" stash 2>/dev/null
-      git -C "$REPO_DIR" fetch origin main && git -C "$REPO_DIR" reset --hard origin/main \
+      git -C "$REPO_DIR" fetch origin "${DEPLOY_BRANCH:-main}" && git -C "$REPO_DIR" reset --hard "origin/${DEPLOY_BRANCH:-main}" \
         && echo "[fanout] git synced to $(git -C "$REPO_DIR" rev-parse --short HEAD)"
-      REGISTRY_IMAGE="$IMAGE" FRONTEND_IMAGE="${FRONTEND_IMAGE:-}" bash "$script" $args || echo "⚠️  [$name] 部署失败，继续下一台" >&2
+      REGISTRY_IMAGE="$IMAGE" FRONTEND_IMAGE="${FRONTEND_IMAGE:-}" FORCE_RECREATE_APP="${FORCE_RECREATE_APP:-}" bash "$script" $args || { echo "⚠️  [$name] 部署失败，继续下一台" >&2; FAILED=1; }
     fi
 
   else
@@ -87,7 +89,7 @@ while IFS='|' read -r user host port dir method local name has_source compose_fi
       REG_HOST="${REGISTRY_HOST:-registry.internal:5000}"
       ssh -n -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p "$port" "${user}@${host}" \
         "echo '[self-deploy] pulling ${IMAGE}'; docker pull '${IMAGE}' && docker tag '${IMAGE}' sales-agent:latest && docker compose -f '${dir}/${compose_file}' up -d && echo '[self-deploy] done'" \
-        || echo "⚠️  [$name] self-deploy 失败，继续下一台" >&2
+        || { echo "⚠️  [$name] self-deploy 失败，继续下一台" >&2; FAILED=1; }
     elif [ "$method" = "image-deploy" ]; then
       # 无源码目标:docker run deploy 镜像(内含 compose + deploy-remote.sh)
       DEPLOY_IMG="${REGISTRY_HOST:-registry.internal:5000}/sales-agent-deploy:${IMAGE##*:}"
@@ -104,19 +106,23 @@ while IFS='|' read -r user host port dir method local name has_source compose_fi
         || echo "⚠️  [$name] 运维脚本同步失败，继续部署" >&2
 
       ssh -n -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p "$port" "${user}@${host}" \
-        "docker pull '${DEPLOY_IMG}' && docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v /root/.docker:/root/.docker:ro -v '${dir}:/workspace' -e APP_IMAGE='${IMAGE}' -e FRONTEND_IMAGE='${FRONTEND_IMAGE:-}' '${DEPLOY_IMG}' '${env}'" \
-        || echo "⚠️  [$name] image-deploy 失败，继续下一台" >&2
+        "docker pull '${DEPLOY_IMG}' && docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v /root/.docker:/root/.docker:ro -v '${dir}:/workspace' -e APP_IMAGE='${IMAGE}' -e FRONTEND_IMAGE='${FRONTEND_IMAGE:-}' -e FORCE_RECREATE_APP='${FORCE_RECREATE_APP:-}' '${DEPLOY_IMG}' '${env}'" \
+        || { echo "⚠️  [$name] image-deploy 失败，继续下一台" >&2; FAILED=1; }
     elif [ "$has_source" = "True" ]; then
       # 有源码目标:先 git sync 再执行部署脚本
       ssh -n -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p "$port" "${user}@${host}" \
-        "git -C '${dir}' stash 2>/dev/null; git -C '${dir}' fetch origin main && git -C '${dir}' reset --hard origin/main && echo '[fanout] git synced to' \$(git -C '${dir}' rev-parse --short HEAD); REGISTRY_IMAGE='${IMAGE}' FRONTEND_IMAGE='${FRONTEND_IMAGE:-}' bash '${script}' ${args}" \
-        || echo "⚠️  [$name] SSH 部署失败，继续下一台" >&2
+        "git -C '${dir}' stash 2>/dev/null; git -C '${dir}' fetch origin ${DEPLOY_BRANCH:-main} && git -C '${dir}' reset --hard origin/${DEPLOY_BRANCH:-main} && echo '[fanout] git synced to' \$(git -C '${dir}' rev-parse --short HEAD); REGISTRY_IMAGE='${IMAGE}' FRONTEND_IMAGE='${FRONTEND_IMAGE:-}' FORCE_RECREATE_APP='${FORCE_RECREATE_APP:-}' bash '${script}' ${args}" \
+        || { echo "⚠️  [$name] SSH 部署失败，继续下一台" >&2; FAILED=1; }
     else
       # 有部署脚本但无源码(罕见):直接跑脚本,不 git sync
       ssh -n -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p "$port" "${user}@${host}" \
-        "REGISTRY_IMAGE='${IMAGE}' FRONTEND_IMAGE='${FRONTEND_IMAGE:-}' bash '${script}' ${args}" \
-        || echo "⚠️  [$name] SSH 部署失败，继续下一台" >&2
+        "REGISTRY_IMAGE='${IMAGE}' FRONTEND_IMAGE='${FRONTEND_IMAGE:-}' FORCE_RECREATE_APP='${FORCE_RECREATE_APP:-}' bash '${script}' ${args}" \
+        || { echo "⚠️  [$name] SSH 部署失败，继续下一台" >&2; FAILED=1; }
     fi
   fi
 done < /tmp/ci-targets.txt
+if [ "$FAILED" = 1 ]; then
+  echo "❌ fan-out 有目标部署失败（见上 ⚠️），CI 标记失败" >&2
+  exit 1
+fi
 echo "fan-out 完成"

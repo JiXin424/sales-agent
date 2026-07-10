@@ -51,7 +51,7 @@ const ALL_PROMPT_KEYS: { category: string; key: string; label: string }[] = [
   ),
 ];
 
-const CATEGORIES = ['task', 'system', 'router', 'risk', 'coach'];
+const CATEGORIES = ['task', 'system', 'router', 'risk', 'coach', 'web', 'knowledge'];
 
 export default function AgentPromptsPage() {
   const { agentId } = useParams<{ agentId: string }>();
@@ -274,7 +274,7 @@ export default function AgentPromptsPage() {
     <div>
       <PageHeader
         title="Prompt 管理"
-        description={`作用域：Agent「${agent.name}」— 绑定/切换/编辑各层 prompt 版本（task / system / router / risk / coach）`}
+        description={`作用域：Agent「${agent.name}」— 绑定/切换/编辑各层 prompt 版本（task / system / router / risk / coach / web / knowledge）`}
         actions={
           <Button icon={<ReloadOutlined />} onClick={handleRefresh}>
             刷新

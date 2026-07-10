@@ -22,19 +22,19 @@ from sales_agent.optimization.types import (
 )
 
 # ── Ordered diagnosis rules ─────────────────────────────────────────────────
-# Each rule: (cause, condition_fn(trace) → bool, action)
+# Each rule: (cause, action)
 
-DIAGNOSIS_ORDER: list[tuple[CauseType, str, RecommendedAction]] = [
-    ("invalid_eval_case", "eval_case_invalid", "fix_eval_case"),
-    ("route_miss", "route_skipped_or_wrong", "update_router"),
-    ("document_missing", "fact_absent_from_corpus", "add_document"),
-    ("document_wrong", "fact_incorrect_in_corpus", "fix_document"),
-    ("document_conflict", "conflicting_facts_in_corpus", "resolve_conflict"),
-    ("retrieval_recall", "gold_not_in_top30", "update_retrieval_profile"),
-    ("retrieval_ranking", "gold_in_top30_not_in_final", "update_retrieval_profile"),
-    ("context_noise", "selected_context_noisy", "improve_chunking"),
-    ("chunking_or_structure", "chunk_truncated_or_non_contained", "improve_chunking"),
-    ("generation_issue", "evidence_unused_or_contradicted", "improve_generation"),
+DIAGNOSIS_ORDER: list[tuple[CauseType, RecommendedAction]] = [
+    ("invalid_eval_case", "fix_eval_case"),
+    ("route_miss", "update_router"),
+    ("document_missing", "add_document"),
+    ("document_wrong", "fix_document"),
+    ("document_conflict", "resolve_conflict"),
+    ("retrieval_recall", "update_retrieval_profile"),
+    ("retrieval_ranking", "update_retrieval_profile"),
+    ("context_noise", "improve_chunking"),
+    ("chunking_or_structure", "improve_chunking"),
+    ("generation_issue", "improve_generation"),
 ]
 
 
@@ -134,7 +134,7 @@ class FailureDiagnoser:
     ) -> FailureDiagnosis:
         """Build a diagnosis from the first-matching rule."""
         action: RecommendedAction = "human_review"
-        for ca, _, act in DIAGNOSIS_ORDER:
+        for ca, act in DIAGNOSIS_ORDER:
             if ca == cause:
                 action = act
                 break

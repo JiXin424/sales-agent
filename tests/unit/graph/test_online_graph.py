@@ -104,6 +104,7 @@ _BASE_INPUT = {
     "conversation_id": "c1",
     "guided_flows_enabled": True,
     "topic_routing_enabled": True,
+    "sales_actions_enabled": True,
 }
 
 _CONTEXT = {
@@ -871,8 +872,25 @@ def test_normalize_routes_explicit_sales_action_command():
         "event_id": "evt1",
         "last_event_id": None,
         "guided_flows_enabled": True,
+        "sales_actions_enabled": True,
     })
     assert update["flow_action"] == "sales_action"
+
+
+def test_sales_action_disabled_does_not_route():
+    """When sales_actions_enabled is False, an explicit action command must NOT
+    route to sales_action (runbook: enabled=false -> Online Graph 不路由销售动作).
+    """
+    from sales_agent.graph.online.nodes import normalize_turn_node
+
+    update = normalize_turn_node({
+        "message": "提醒我半小时后给张总回电话",
+        "event_id": "evt1",
+        "last_event_id": None,
+        "guided_flows_enabled": True,
+        "sales_actions_enabled": False,
+    })
+    assert update["flow_action"] != "sales_action"
 
 
 def test_normalize_ordinary_chat_does_not_route_to_sales_action():
@@ -897,6 +915,7 @@ def test_normalize_list_command_routes_to_sales_action():
         "event_id": "evt1",
         "last_event_id": None,
         "guided_flows_enabled": True,
+        "sales_actions_enabled": True,
     })
     assert update["flow_action"] == "sales_action"
 
@@ -910,6 +929,7 @@ def test_duplicate_still_wins_before_sales_action():
         "event_id": "evt1",
         "last_event_id": "evt1",  # duplicate
         "guided_flows_enabled": True,
+        "sales_actions_enabled": True,
     })
     assert update["flow_action"] == "duplicate"
 
@@ -923,6 +943,7 @@ def test_reset_still_wins_before_sales_action():
         "event_id": "evt1",
         "last_event_id": "evt0",
         "reset_requested": True,
+        "sales_actions_enabled": True,
     })
     assert update["flow_action"] == "reset"
 
@@ -939,6 +960,7 @@ def test_active_guided_flow_beats_sales_action():
         "last_event_id": None,
         "guided_flows_enabled": True,
         "active_flow": "small_win_appreciation",
+        "sales_actions_enabled": True,
     })
     assert update["flow_action"] == "advance"
 
@@ -954,6 +976,7 @@ def test_pending_sales_action_clarification_routes_to_sales_action():
         "event_id": "evt1",
         "last_event_id": None,
         "guided_flows_enabled": True,
+        "sales_actions_enabled": True,
         "sales_action_pending_clarification": "missing_time",
     })
     assert update["flow_action"] == "sales_action"

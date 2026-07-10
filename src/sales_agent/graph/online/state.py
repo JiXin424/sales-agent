@@ -96,6 +96,10 @@ class OnlineConversationState(TypedDict, total=False):
     profile_version: int | None
 
     # ── Sales Actions (Task 4) ────────────────────────────────────
+    # Per-turn input flag (mirrors long_term_memory_enabled): when False the
+    # graph does NOT route to sales-action nodes even on an explicit command
+    # (matches the runbook's "enabled=false -> Online Graph 不路由销售动作").
+    sales_actions_enabled: bool
     # Per-turn outputs (reset each turn via TURN_SCOPED_DEFAULTS).
     sales_action_operation: str | None  # create/complete/cancel/snooze/list/clarify/suggest/ignore
     sales_action_status: str | None  # created/done/cancelled/snoozed/clarify/empty/failed…

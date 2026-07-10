@@ -67,6 +67,15 @@ class FakeCreateChatModel:
 # ====================================================================
 
 
+@pytest.fixture(autouse=True)
+def _enable_sales_actions(monkeypatch):
+    """Sales actions ship disabled by default; enable for this suite so the
+    Online Graph routes explicit action commands to the sales-action node
+    (mirrors the runtime setting `sales_actions.enabled=true`)."""
+    from sales_agent.core.config import get_settings
+    monkeypatch.setattr(get_settings().sales_actions, "enabled", True)
+
+
 @pytest.mark.asyncio
 async def test_invoke_online_turn_creates_sales_action(
     db_session, sample_tenant, active_agent,

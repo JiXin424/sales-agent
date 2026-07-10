@@ -205,12 +205,14 @@ def normalize_turn_node(state: OnlineConversationState) -> dict[str, Any]:
         flow_action = "cancel"
     elif guided_enabled and state.get("active_flow"):
         flow_action = "advance"
-    elif state.get("sales_action_pending_clarification"):
+    elif state.get("sales_actions_enabled") and state.get("sales_action_pending_clarification"):
         # A prior sales-action turn asked for clarification (e.g. "几点？");
         # route the follow-up back to the sales-action node so the service can
         # complete/re-clarify/abandon it. (Guided flow is higher priority.)
+        # Gated on sales_actions_enabled: when the feature is off the graph must
+        # NOT route to sales-action nodes (runbook: enabled=false -> 不路由销售动作).
         flow_action = "sales_action"
-    elif detect_fast_action_intent(message) != "none":
+    elif state.get("sales_actions_enabled") and detect_fast_action_intent(message) != "none":
         # Explicit sales-action command (create/complete/cancel/snooze/list).
         flow_action = "sales_action"
     else:

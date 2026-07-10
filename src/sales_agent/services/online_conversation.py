@@ -104,6 +104,7 @@ def build_online_turn_input(
     reset_requested: bool = False,
     long_term_memory_enabled: bool = False,
     user_profile_memory_enabled: bool = False,
+    sales_actions_enabled: bool = False,
 ) -> OnlineConversationState:
     return {
         **copy.deepcopy(TURN_SCOPED_DEFAULTS),
@@ -122,6 +123,7 @@ def build_online_turn_input(
         "reset_requested": reset_requested,
         "long_term_memory_enabled": long_term_memory_enabled,
         "user_profile_memory_enabled": user_profile_memory_enabled,
+        "sales_actions_enabled": sales_actions_enabled,
     }
 
 
@@ -324,6 +326,7 @@ async def prepare_online_turn(
         reset_requested=reset_requested,
         long_term_memory_enabled=settings.long_term_memory.enabled,
         user_profile_memory_enabled=settings.user_profile_memory.enabled,
+        sales_actions_enabled=settings.sales_actions.enabled,
     )
     return PreparedOnlineTurn(
         graph=get_online_graph(checkpointer=checkpointer),

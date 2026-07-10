@@ -230,6 +230,22 @@ class ScenarioCoachConfig(BaseModel):
     confidence_threshold: float = 0.8
 
 
+class SalesActionsConfig(BaseModel):
+    """Sales action cards and proactive reminders."""
+
+    enabled: bool = False
+    scheduler_enabled: bool = True
+    scan_interval_seconds: float = 30.0
+    batch_size: int = 50
+    max_attempts: int = 5
+    default_timezone: str = "Asia/Shanghai"
+    morning_digest_time: str = "09:00"
+    evening_digest_time: str = "18:30"
+    default_snooze_minutes: int = 30
+    expire_after_days: int = 7
+    llm_confidence_threshold: float = 0.75
+
+
 class Settings(BaseModel):
     """顶层设置，聚合所有子配置。"""
 
@@ -251,6 +267,7 @@ class Settings(BaseModel):
     scenario_coach: ScenarioCoachConfig = ScenarioCoachConfig()
     long_term_memory: LongTermMemoryConfig = LongTermMemoryConfig()
     user_profile_memory: UserProfileMemoryConfig = UserProfileMemoryConfig()
+    sales_actions: SalesActionsConfig = SalesActionsConfig()
 
     # 延迟导入避免循环依赖
     @property

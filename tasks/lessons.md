@@ -68,3 +68,4 @@
 - #46 现象描述「X 没渲染/报错/慢」指代多个候选产物(钉钉端/eval HTML/MD·CSV/前端页)时先问清是哪个,别默认最大流量入口就派子代理  `[verify]`
 - #47 worktree 合回 main 遇 main 被并发推进:worktree 内 merge main 解冲突再 FF;主目录未跟踪文件挡 FF 先 diff 确认一致再删;CJK 块 Edit 失配用 Write/Python ASCII 锚点 splice;子代理 429 降级内联执行  `[verify]`
 - #48 大批积压提交 push 触发部署,别信 deploy-fanout 绿/红:它「任一台失败即红、且继续下一台」,容器 up 在新 SHA≠schema 通过(recreate 在 schema 校验前)。必逐台核对 check_schema_consistency.py+alembic heads。双 head(两迁移同 down_revision)致 upgrade 拒执行→线性化后半个链;线性化后 create_all 抢建新表致 upgrade 撞 DuplicateTable→stamp-head 兜底跳 add_column→幽灵漂移,补 backfill migration(仿 0012,ADD COLUMN IF NOT EXISTS 幂等)。stream 401 authFailed 查 env mtime+容器启动即报判定既有凭证问题非本次  `[verify]`
+- #49 「答应了但没发生」先判功能路径 vs 幻觉:核对出站文案是否命中该功能硬编码模板(如 `已创建提醒：…`),命中=走了功能路径、未命中=落普通 chat 模型幻觉承诺一个门控关/未接通的能力。根因常是 prompt 迁 YAML 落下+调用点缺 import+调用在 try 外击穿降级契约(#38 同类)。门控功能修复用暗启动(休眠代码全铺零行为变化)+金丝雀(单租户 env 开关先端到端验)  `[verify]`

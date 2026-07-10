@@ -41,6 +41,14 @@ _RECOGNITION_TEXT_KEYS = {
     "transcription",
 }
 
+# --- 模块级 prompt 常量（注册进 BUILTIN_PROMPTS，获得 DB 覆盖路径） ---
+MEDIA_VISION_SYSTEM_PROMPT = (
+    "你是销售陪跑助手的图片理解模块。请用中文简洁描述图片中的文字、场景、"
+    "客户意图和对销售回复有用的信息，不要编造看不到的内容。"
+)
+MEDIA_VISION_USER_PROMPT = "请理解这张钉钉用户发来的图片，输出可供销售 Agent 回答的上下文。"
+MEDIA_AUDIO_TRANSCRIBE_PROMPT = "请只转写这段语音的中文内容，不要添加解释。"
+
 
 class DingTalkMediaAdapter:
     """Convert DingTalk media messages into text for the Online Graph."""
@@ -159,12 +167,12 @@ class DingTalkMediaAdapter:
             messages=[
                 {
                     "role": "system",
-                    "content": "你是销售陪跑助手的图片理解模块。请用中文简洁描述图片中的文字、场景、客户意图和对销售回复有用的信息，不要编造看不到的内容。",
+                    "content": MEDIA_VISION_SYSTEM_PROMPT,
                 },
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": "请理解这张钉钉用户发来的图片，输出可供销售 Agent 回答的上下文。"},
+                        {"type": "text", "text": MEDIA_VISION_USER_PROMPT},
                         {"type": "image_url", "image_url": {"url": data_url}},
                     ],
                 },
@@ -205,7 +213,7 @@ class DingTalkMediaAdapter:
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": "请只转写这段语音的中文内容，不要添加解释。"},
+                        {"type": "text", "text": MEDIA_AUDIO_TRANSCRIBE_PROMPT},
                         {"type": "input_audio", "input_audio": {"data": audio_b64, "format": audio_format}},
                     ],
                 }

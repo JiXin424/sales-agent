@@ -10,8 +10,9 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone as dt_timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sales_agent.llm.prompt_loader import get_prompt
 from sales_agent.services.sales_actions.contracts import (
@@ -43,9 +44,20 @@ def _low_confidence_none(timezone: str) -> SalesActionExtraction:
 
 
 def _build_messages(message: str, now: datetime, timezone: str) -> list[dict[str, str]]:
-    """构造抽取器的 system + user 消息。"""
+    """构造抽取器的 system + user 消息。
+
+    ``now`` 统一换算到 ``timezone`` 声明的本地时区再写进 prompt。否则当
+    ``now`` 是 UTC（容器默认时钟）而 prompt 又声明 ``Asia/Shanghai`` 时，LLM
+    会把相对时间（「1分钟后」）按 +08:00 输出同一钟点数，换算回 UTC 反而早 8
+    小时，被 :func:`validate_action_extraction` 判为 ``past_time`` 而拒绝建提醒。
+    """
+    try:
+        base = now if now.tzinfo is not None else now.replace(tzinfo=dt_timezone.utc)
+        now_local = base.astimezone(ZoneInfo(timezone))
+    except Exception:  # 未知时区名等异常时退回原值，绝不因时区问题中断抽取
+        now_local = now
     user_content = (
-        f"当前时间：{now.isoformat()}\n"
+        f"当前时间：{now_local.isoformat()}\n"
         f"时区：{timezone}\n"
         f"用户消息：{message}"
     )

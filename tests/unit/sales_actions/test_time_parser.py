@@ -61,3 +61,23 @@ def test_too_fuzzy_time_requires_clarification():
     )
     assert decision.action == "clarify"
     assert "哪天" in decision.response_text
+
+
+def test_suggest_action_with_title_but_no_time_is_suggested():
+    """A titled suggestion with no concrete time surfaces for confirmation,
+    not forced into clarify (spec: Agent-inferred action items require user
+    confirmation; the suggest example in the prompt has scheduled_at=null)."""
+    decision = validate_action_extraction(
+        extraction(
+            intent="suggest_action",
+            explicit_create=False,
+            title="给李总发方案",
+            time_text="尽快",
+            scheduled_at=None,
+            missing_fields=["scheduled_at"],
+        ),
+        now=NOW,
+    )
+    assert decision.action == "suggest"
+    assert decision.title == "给李总发方案"
+    assert decision.scheduled_at is None

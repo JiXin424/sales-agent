@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from sales_agent.llm.call_params import get_call_params
+from sales_agent.llm.prompt_loader import get_prompt
 from sales_agent.prompts.task_router_prompt import TASK_ROUTER_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -503,17 +504,9 @@ async def route_task(
 
     # 3. 规则匹配置信度不足或无匹配，尝试 LLM 兜底
     if chat_model is not None:
-        # 解析 router prompt：优先调用方传入，否则经 registry 解析（DB 版本管理）
-        if router_prompt is None and db is not None and tenant_id:
-            try:
-                from sales_agent.services.prompt_registry import PromptRegistry
-
-                router_prompt = await PromptRegistry(db).resolve_prompt(
-                    "router", "task_router", tenant_id, agent_id
-                )
-            except Exception:
-                logger.debug("router prompt resolve failed, fallback to default")
-                router_prompt = None
+        # 解析 router prompt：优先调用方传入，否则从 YAML 加载
+        if router_prompt is None:
+            router_prompt = get_prompt("router", "task_router").template
         llm_result = await _llm_route(message, chat_model, router_prompt)
         if llm_result is not None:
             llm_result.router_type = "llm"

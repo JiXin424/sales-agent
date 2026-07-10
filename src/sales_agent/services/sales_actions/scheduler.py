@@ -19,8 +19,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+
+from sqlalchemy.exc import IntegrityError
 
 from sales_agent.services.sales_actions.card_renderer import (
     CardView,
@@ -111,14 +113,8 @@ def within_digest_window(
     local = now_utc.astimezone(tz)
     wh, wm = window
     window_start = local.replace(hour=wh, minute=wm, second=0, microsecond=0)
-    window_end = window_start + timedelta_hours(grace_hours)
+    window_end = window_start + timedelta(hours=grace_hours)
     return window_start <= local <= window_end
-
-
-def timedelta_hours(hours: float):
-    from datetime import timedelta
-
-    return timedelta(hours=hours)
 
 
 def _now_utc() -> datetime:
@@ -173,8 +169,10 @@ async def run_sales_action_scheduler_once(
 
     delivered = 0
     failed = 0
-    digests_created = 0
 
+    # Pass 1 — claim → render → send → record, then COMMIT so deliveries are
+    # durable BEFORE any digest work. This is the I-1 guarantee: a digest
+    # collision/failure in pass 2 can never roll back an already-sent card.
     async with session_factory() as db:
         repo = SalesActionRepository(db)
         reminders = await repo.claim_due_reminders(
@@ -188,7 +186,15 @@ async def run_sales_action_scheduler_once(
             else:
                 failed += 1
 
-        # digest 幂等创建（下一轮扫描投递）
+        await db.commit()
+
+    # Pass 2 — idempotent digest creation in its OWN transaction. Each insert
+    # is wrapped in a SAVEPOINT (see ``_create_due_digests``) so a unique-
+    # constraint collision — a concurrent worker that won the pre-check→commit
+    # race — rolls back ONLY that savepoint, never the deliveries above.
+    digests_created = 0
+    async with session_factory() as db:
+        repo = SalesActionRepository(db)
         digests_created = await _create_due_digests(
             repo,
             now=now,
@@ -197,7 +203,6 @@ async def run_sales_action_scheduler_once(
             evening_time=evening_time,
             grace_hours=grace,
         )
-
         await db.commit()
 
     return SchedulerRunResult(
@@ -309,7 +314,16 @@ async def _create_due_digests(
     evening_time: str,
     grace_hours: int,
 ) -> int:
-    """对每个仍有 pending 动作的作用域，按本地时间窗口幂等创建 digest 提醒。"""
+    """对每个仍有 pending 动作的作用域，按本地时间窗口幂等创建 digest 提醒。
+
+    幂等性双保险（I-1）：
+
+    1. 预检 ``reminder_idempotency_key_exists`` —— 常见单 worker 路径直接跳过，
+       避免不必要的 savepoint 开销（纯优化）；
+    2. 每个 insert 包裹 SAVEPOINT 并捕获 ``IntegrityError`` —— 硬保证：即便两个
+       worker 同时通过预检、随后撞上 ``uq_sales_action_reminders_idempotency`` 唯一
+       约束，也只回滚该 savepoint，绝不向上抛出、绝不回滚调用方已提交的投递。
+    """
     scopes = await repo.list_active_action_scopes()
     created = 0
     # 本地日期用配置时区统一确定（digest 是按用户当日的概念）。
@@ -326,14 +340,27 @@ async def _create_due_digests(
             key = build_digest_idempotency_key(
                 kind, scope.tenant_id, scope.agent_id, scope.user_id, today
             )
+            # 预检（优化）：单 worker 常见路径跳过，避免 savepoint 开销。
             if await repo.reminder_idempotency_key_exists(key):
                 continue
-            repo.add_digest_reminder(
-                scope,
-                reminder_type=kind,
-                remind_at=now,
-                idempotency_key=key,
-            )
+            # SAVEPOINT（硬保证）：预检与 insert 之间的竞争窗口里，另一 worker
+            # 可能已提交同一 digest；此时 insert 撞唯一约束，savepoint 吸收
+            # IntegrityError，调用方事务与已投递提醒不受影响。
+            try:
+                async with repo.db.begin_nested():
+                    repo.add_digest_reminder(
+                        scope,
+                        reminder_type=kind,
+                        remind_at=now,
+                        idempotency_key=key,
+                    )
+            except IntegrityError:
+                logger.debug(
+                    "sales action %s digest already created concurrently (key=%s)",
+                    kind,
+                    key,
+                )
+                continue
             created += 1
     return created
 

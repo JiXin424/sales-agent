@@ -198,6 +198,42 @@ async def test_callback_complete_is_idempotent(session_factory):
     assert second.reason_code == "already_done"
 
 
+@pytest.mark.asyncio
+async def test_callback_snooze_is_idempotent(session_factory):
+    """Duplicate snooze button event (same action+event+new_time) is a no-op.
+
+    Locks the ``SalesActionReminder | ActionStateResult`` contract of
+    ``snooze_action``: a second click returns ``already_snoozed`` and does NOT
+    create a second snooze reminder.
+    """
+    cid = await _seed_pending_card(session_factory)
+    sender = FakeSender()
+    new_time = datetime(2026, 7, 10, 3, 0, tzinfo=UTC)
+    req = SalesActionCallbackRequest(
+        action_id=cid, tenant_id="t1", agent_id="a1", user_id="u1",
+        button="snooze", event_id="click3", card_instance_id="out_xyz",
+        new_time=new_time,
+    )
+    async with session_factory() as db:
+        first = await handle_sales_action_callback(db, req, sender=sender)
+        second = await handle_sales_action_callback(db, req, sender=sender)
+        await db.commit()
+    assert first.status == "snoozed"
+    assert second.status == "snoozed"
+    assert second.reason_code == "already_snoozed"
+    # exactly one snooze reminder - the duplicate did not create a second
+    async with session_factory() as db:
+        snooze_reminders = (
+            await db.execute(
+                select(SalesActionReminder).where(
+                    SalesActionReminder.action_id == cid,
+                    SalesActionReminder.reminder_type == "snooze",
+                )
+            )
+        ).scalars().all()
+        assert len(snooze_reminders) == 1
+
+
 # ---------------------------------------------------------------------------
 # not_found / cross-scope
 # ---------------------------------------------------------------------------

@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
@@ -23,6 +23,10 @@ from sales_agent.models.sales_action import (
     SalesActionDelivery,
     SalesActionReminder,
 )
+from sales_agent.services.sales_actions.card_renderer import (
+    build_digest_idempotency_key,
+)
+from sales_agent.services.sales_actions.repository import SalesActionRepository
 from sales_agent.services.sales_actions.scheduler import (
     run_sales_action_scheduler_once,
 )
@@ -350,3 +354,62 @@ async def test_digest_not_created_outside_window(session_factory):
         grace_hours=2,
     )
     assert r.digests_created == 0
+
+
+# ---------------------------------------------------------------------------
+# Scenario 5 (I-1 regression): a concurrent digest-insert collision is absorbed
+# by the SAVEPOINT and never rolls back deliveries or raises.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_digest_collision_absorbed_by_savepoint(session_factory, monkeypatch):
+    """Two workers race past the pre-check; the loser's insert hits the
+    ``uq_sales_action_reminders_idempotency`` unique constraint. The SAVEPOINT
+    in ``_create_due_digests`` must catch the ``IntegrityError`` so the run does
+    NOT raise, does NOT duplicate the digest, and does NOT roll back deliveries.
+    """
+    cid = await _seed_card(session_factory)  # scope t1/a1/u1 has a pending action
+    now = datetime(2026, 7, 10, 1, 5, tzinfo=UTC)  # 09:05 Shanghai - in morning window
+    today = date(2026, 7, 10)
+    key = build_digest_idempotency_key("morning_digest", "t1", "a1", "u1", today)
+    assert key == "morning_digest:t1:a1:u1:2026-07-10"
+
+    # Simulate a concurrent worker that already committed this scope+date digest.
+    await _seed_reminder(
+        session_factory,
+        action_id=None,
+        reminder_type="morning_digest",
+        status="scheduled",
+        remind_at=now,
+        idempotency_key=key,
+    )
+
+    # Force the pre-check to "not found" (False) so the code proceeds to the
+    # insert and collides with the pre-seeded row -> exercises the savepoint.
+    async def _precheck_misses(self, idempotency_key):  # noqa: ANN001
+        return False
+
+    monkeypatch.setattr(
+        SalesActionRepository, "reminder_idempotency_key_exists", _precheck_misses
+    )
+
+    sender = FakeSender()
+    # Must NOT raise; deliveries (none due here) and the pre-seeded digest survive.
+    result = await run_sales_action_scheduler_once(
+        session_factory, lambda: sender, now,
+        morning_time="09:00", evening_time="99:99", timezone_name="Asia/Shanghai",
+        grace_hours=2,
+    )
+
+    assert result.digests_created == 0  # collision absorbed, not counted
+    async with session_factory() as db:
+        digests = (
+            await db.execute(
+                select(SalesActionReminder).where(
+                    SalesActionReminder.reminder_type == "morning_digest"
+                )
+            )
+        ).scalars().all()
+        assert len(digests) == 1  # the pre-seeded one - no duplicate created
+        assert digests[0].idempotency_key == key

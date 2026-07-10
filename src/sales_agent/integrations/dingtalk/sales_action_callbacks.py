@@ -98,10 +98,8 @@ async def handle_sales_action_callback(
 
     if req.button == "complete":
         result = await repo.complete_action(scope, req.action_id, event_id=req.event_id)
-        ack_status = "done"
     elif req.button == "cancel":
         result = await repo.cancel_action(scope, req.action_id, event_id=req.event_id)
-        ack_status = "cancelled"
     else:  # snooze
         if req.new_time is None:
             return ActionStateResult(
@@ -114,24 +112,23 @@ async def handle_sales_action_callback(
             new_time=req.new_time,
         )
         if isinstance(outcome, ActionStateResult):
-            result = outcome
             # already_snoozed / not_found / already_terminal
-            ack_status = "snoozed" if result.reason_code == "already_snoozed" else result.status
+            result = outcome
         else:
             result = ActionStateResult(
                 action_id=req.action_id, status="snoozed", reason_code="snoozed"
             )
-            ack_status = "snoozed"
 
     await db.flush()
 
     # 回渲染原卡片（非阻塞：失败仅记录，不影响状态机结果）。
     # 仅在确有状态翻转/幂等命中时才重渲染；动作不存在（not_found）不重渲染，
     # 避免把一张「已完成」回执写到一张与该动作无关的卡片上。
+    # ack 状态恒等于 result.status（done/cancelled/snoozed 三态才进此分支），故直接透传。
     if req.card_instance_id and result.status in {"done", "cancelled", "snoozed"}:
         try:
             md = render_acknowledgement(
-                action_id=req.action_id, status=ack_status, new_time=req.new_time
+                action_id=req.action_id, status=result.status, new_time=req.new_time
             )
             await sender.update_card(req.card_instance_id, md)
         except Exception as exc:

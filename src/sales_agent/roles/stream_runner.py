@@ -45,6 +45,11 @@ async def run() -> None:
     load_call_params(settings.llm_call_defaults_path)
     logger.info("LLM call params loaded (stream runner)")
 
+    # 加载 Prompt 模板
+    from sales_agent.llm.prompt_loader import load_prompts
+    load_prompts(settings.prompts_path)
+    logger.info("Prompts loaded (stream runner)")
+
     # 加载 TenantRuntime
     runtime = get_tenant_runtime()
     errors = runtime.validate_startup()

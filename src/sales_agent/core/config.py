@@ -252,6 +252,9 @@ class Settings(BaseModel):
     long_term_memory: LongTermMemoryConfig = LongTermMemoryConfig()
     user_profile_memory: UserProfileMemoryConfig = UserProfileMemoryConfig()
 
+    # LLM 调用参数（temperature/max_tokens）默认值文件路径，开发者维护、git 管版本
+    llm_call_defaults_path: str = "config/llm_call_defaults.yaml"
+
     # 延迟导入避免循环依赖
     @property
     def dingtalk(self):

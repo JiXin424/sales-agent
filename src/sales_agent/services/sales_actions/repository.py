@@ -868,6 +868,69 @@ class SalesActionRepository:
         await self.db.flush()
         return ActionStateResult(action_id=action_id, status="observed", reason_code="outcome_captured")
 
+    # ------------------------------------------------------------------
+    # observe prompt reminder creation (Task 7 — Scheduler)
+    # ------------------------------------------------------------------
+
+    async def find_overdue_pursuit_actions(
+        self, *, now: datetime, limit: int = 50
+    ) -> list[SalesActionCard]:
+        """Find pursuit actions past their scheduled_at that have no outcome yet.
+
+        Pursuit actions are identified by a non-null ``success_criteria``.
+        Only ``pending`` actions that are past their deadline and haven't been
+        observed (``outcome_tag IS NULL``) are returned, ordered by oldest first.
+        """
+        stmt = (
+            select(SalesActionCard)
+            .where(
+                SalesActionCard.status == "pending",
+                SalesActionCard.scheduled_at < now,
+                SalesActionCard.success_criteria.isnot(None),  # pursuit action
+                SalesActionCard.outcome_tag.is_(None),          # not yet observed
+            )
+            .order_by(SalesActionCard.scheduled_at.asc())
+            .limit(limit)
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def create_observe_prompt_reminder(
+        self,
+        scope: SalesActionScope,
+        action_id: str,
+        now: datetime,
+    ) -> str | None:
+        """Create a one-time observe_prompt reminder. Idempotent.
+
+        One ``observe_prompt`` per action — idempotency prevents duplicates
+        across concurrent scheduler runs.
+        """
+        key = f"observe:{scope.tenant_id}:{scope.agent_id}:{scope.user_id}:{action_id}"
+        existing = await self.db.execute(
+            select(SalesActionReminder).where(
+                SalesActionReminder.idempotency_key == key,
+                SalesActionReminder.status.in_(["scheduled", "sending"]),
+            )
+        )
+        if existing.scalar_one_or_none():
+            return None
+
+        reminder = SalesActionReminder(
+            action_id=action_id,
+            tenant_id=scope.tenant_id,
+            agent_id=scope.agent_id,
+            user_id=scope.user_id,
+            remind_at=now,  # immediate
+            reminder_type="observe_prompt",
+            status="scheduled",
+            attempts=0,
+            idempotency_key=key,
+        )
+        self.db.add(reminder)
+        await self.db.flush()
+        return reminder.id
+
     async def get_card_for_reminder(
         self, reminder: SalesActionReminder
     ) -> SalesActionCard | None:

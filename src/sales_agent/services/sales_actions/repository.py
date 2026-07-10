@@ -248,6 +248,47 @@ class SalesActionRepository:
     # complete
     # ------------------------------------------------------------------
 
+    async def _transition_to_terminal(
+        self,
+        scope: SalesActionScope,
+        action_id: str,
+        *,
+        new_status: str,
+        event_type: str,
+        reason_code: str,
+        event_id: str | None,
+    ) -> ActionStateResult:
+        """Shared terminal-transition for complete/cancel.
+
+        - missing / cross-scope → ``not_found``；
+        - already terminal → 幂等 no-op（``already_done``/``already_terminal``），
+          不重复写事件；
+        - 否则翻转为 ``new_status``、取消在途提醒、写一条事件。
+        """
+        card = await self._get_scoped_card(scope, action_id)
+        if card is None:
+            return ActionStateResult(action_id=action_id, status="not_found", reason_code="action_not_found")
+
+        if card.status in TERMINAL_ACTION_STATUSES:
+            return ActionStateResult(
+                action_id=action_id,
+                status=card.status,
+                reason_code="already_done" if card.status == "done" else "already_terminal",
+            )
+
+        card.status = new_status
+        await self._cancel_active_reminders(scope, action_id)
+        self.db.add(
+            self._event(
+                scope,
+                action_id=action_id,
+                event_type=event_type,
+                payload={"event_id": event_id} if event_id else {},
+            )
+        )
+        await self.db.flush()
+        return ActionStateResult(action_id=action_id, status=new_status, reason_code=reason_code)
+
     async def complete_action(
         self,
         scope: SalesActionScope,
@@ -256,30 +297,11 @@ class SalesActionRepository:
         event_id: str | None = None,
     ) -> ActionStateResult:
         """把动作置为终态 ``done`` 并取消在途提醒；幂等。"""
-        card = await self._get_scoped_card(scope, action_id)
-        if card is None:
-            return ActionStateResult(action_id=action_id, status="not_found", reason_code="action_not_found")
-
-        # Already terminal → idempotent no-op (do not duplicate events).
-        if card.status in TERMINAL_ACTION_STATUSES:
-            return ActionStateResult(
-                action_id=action_id,
-                status=card.status,
-                reason_code="already_done" if card.status == "done" else "already_terminal",
-            )
-
-        card.status = "done"
-        await self._cancel_active_reminders(scope, action_id)
-        self.db.add(
-            self._event(
-                scope,
-                action_id=action_id,
-                event_type="action_completed",
-                payload={"event_id": event_id} if event_id else {},
-            )
+        return await self._transition_to_terminal(
+            scope, action_id,
+            new_status="done", event_type="action_completed",
+            reason_code="completed", event_id=event_id,
         )
-        await self.db.flush()
-        return ActionStateResult(action_id=action_id, status="done", reason_code="completed")
 
     # ------------------------------------------------------------------
     # cancel
@@ -293,29 +315,11 @@ class SalesActionRepository:
         event_id: str | None = None,
     ) -> ActionStateResult:
         """把动作置为终态 ``cancelled`` 并取消在途提醒；幂等。"""
-        card = await self._get_scoped_card(scope, action_id)
-        if card is None:
-            return ActionStateResult(action_id=action_id, status="not_found", reason_code="action_not_found")
-
-        if card.status in TERMINAL_ACTION_STATUSES:
-            return ActionStateResult(
-                action_id=action_id,
-                status=card.status,
-                reason_code="already_terminal",
-            )
-
-        card.status = "cancelled"
-        await self._cancel_active_reminders(scope, action_id)
-        self.db.add(
-            self._event(
-                scope,
-                action_id=action_id,
-                event_type="action_cancelled",
-                payload={"event_id": event_id} if event_id else {},
-            )
+        return await self._transition_to_terminal(
+            scope, action_id,
+            new_status="cancelled", event_type="action_cancelled",
+            reason_code="cancelled", event_id=event_id,
         )
-        await self.db.flush()
-        return ActionStateResult(action_id=action_id, status="cancelled", reason_code="cancelled")
 
     # ------------------------------------------------------------------
     # snooze
@@ -329,7 +333,13 @@ class SalesActionRepository:
         event_id: str,
         new_time: datetime,
     ) -> SalesActionReminder | ActionStateResult:
-        """为动作创建一条新的 ``snooze`` 提醒（不改原提醒）。"""
+        """推迟动作：取消所有在途提醒，再创建一条 ``snooze`` 提醒。
+
+        - 缺失/跨作用域 → ``ActionStateResult(not_found)``；
+        - 已终态 → ``ActionStateResult(already_terminal)``；
+        - 同一 ``(action_id, event_id, new_time)`` 重复请求 → 幂等返回已存在的提醒
+          （按 idempotency_key 去重，不抛 IntegrityError）。
+        """
         card = await self._get_scoped_card(scope, action_id)
         if card is None:
             return ActionStateResult(action_id=action_id, status="not_found", reason_code="action_not_found")
@@ -341,6 +351,23 @@ class SalesActionRepository:
                 reason_code="already_terminal",
             )
 
+        key = snooze_idempotency_key(action_id, event_id, new_time)
+
+        # Idempotent dedup: a repeat snooze with the same (action_id, event_id,
+        # new_time) returns the existing reminder instead of crashing on the
+        # unique idempotency_key constraint.
+        existing = (
+            await self.db.execute(
+                select(SalesActionReminder).where(SalesActionReminder.idempotency_key == key)
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            return existing
+
+        # Cancel prior in-flight reminders so only the new time fires —
+        # otherwise the user gets pinged at the time they just deferred.
+        await self._cancel_active_reminders(scope, action_id)
+
         reminder = SalesActionReminder(
             action_id=action_id,
             tenant_id=scope.tenant_id,
@@ -350,7 +377,7 @@ class SalesActionRepository:
             reminder_type="snooze",
             status="scheduled",
             attempts=0,
-            idempotency_key=snooze_idempotency_key(action_id, event_id, new_time),
+            idempotency_key=key,
         )
         self.db.add(reminder)
         self.db.add(

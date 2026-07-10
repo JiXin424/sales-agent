@@ -32,6 +32,7 @@ from sales_agent.services.sales_actions.contracts import (
 from sales_agent.services.sales_actions.detector import detect_fast_action_intent
 from sales_agent.services.sales_actions.parser import parse_sales_action_request
 from sales_agent.services.sales_actions.repository import (
+    ActionStateResult,
     SalesActionRepository,
 )
 from sales_agent.services.sales_actions.time_parser import (
@@ -142,10 +143,11 @@ class SalesActionService:
         )
         decision = validate_action_extraction(extraction, now=now)
 
-        # LLM 识别出操作型意图但快路由没命中 → 交给状态机分支
+        # LLM 识别出操作型意图但快路由没命中 → 交给状态机分支（复用已抽取结果，避免二次 LLM 调用）
         if decision.action == "ignore" and decision.reason_code == "deferred_to_service":
             return await self._handle_state_intent(
                 scope, extraction.intent, message, conversation_id, source_event_id, now,
+                extraction=extraction,
             )
 
         if decision.action == "ignore":
@@ -214,14 +216,25 @@ class SalesActionService:
         conversation_id: str,
         source_event_id: str | None,
         now: datetime,
+        *,
+        extraction: SalesActionExtraction | None = None,
     ) -> SalesActionOperationResult:
+        # An operational message means the user has moved on from any pending
+        # create-clarification flow — drop the stale partial so a later create
+        # message doesn't merge against it. (snooze's own missing_time path
+        # stashes a fresh partial below.)
+        if intent != "snooze_action":
+            self._discard_pending(scope, conversation_id)
+
         if intent == "list_actions":
             return await self._handle_list(scope)
 
-        # complete / cancel / snooze —— 抽取（取 customer/title，snooze 取新时间）
-        extraction = await parse_sales_action_request(
-            message, self.chat_model, now, timezone="Asia/Shanghai"
-        )
+        # complete / cancel / snooze —— 抽取（取 customer/title，snooze 取新时间）。
+        # 复用调用方已算好的 extraction（来自 deferred_to_service 分支），避免二次 LLM 调用。
+        if extraction is None:
+            extraction = await parse_sales_action_request(
+                message, self.chat_model, now, timezone="Asia/Shanghai"
+            )
         target = await self._resolve_target_action(scope, extraction)
 
         if intent == "complete_action":
@@ -267,9 +280,20 @@ class SalesActionService:
                 reason_code="missing_time",
                 action_id=target.id,
             )
-        reminder = await self.repo.snooze_action(
+        result = await self.repo.snooze_action(
             scope, target.id, event_id=source_event_id or "", new_time=new_time
         )
+        # snooze_action may return ActionStateResult (not_found / already_terminal
+        # under a concurrent transition) — surface that instead of faking success.
+        if isinstance(result, ActionStateResult):
+            self._discard_pending(scope, conversation_id)
+            return SalesActionOperationResult(
+                operation="snooze",
+                status=result.status,
+                response_text="",
+                action_id=target.id,
+                reason_code=result.reason_code,
+            )
         when = new_time.strftime("%Y-%m-%d %H:%M")
         self._discard_pending(scope, conversation_id)
         return SalesActionOperationResult(
@@ -278,7 +302,7 @@ class SalesActionService:
             response_text=f"已推迟「{target.title}」到 {when}",
             action_id=target.id,
             scheduled_at=new_time,
-            reason_code=getattr(reminder, "reason_code", "") or "snoozed",
+            reason_code="snoozed",
         )
 
     async def _handle_list(self, scope: SalesActionScope) -> SalesActionOperationResult:

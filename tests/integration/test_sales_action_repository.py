@@ -239,7 +239,8 @@ async def test_cancel_terminal_action_is_idempotent(db_session):
 
     res = await repo.cancel_action(scope, action.id, event_id="cancel1")
     assert res.status == "done"
-    assert res.reason_code == "already_terminal"
+    # already-terminal no-op reports the prior state consistently
+    assert res.reason_code == "already_done"
 
 
 @pytest.mark.asyncio
@@ -267,6 +268,55 @@ async def test_snooze_unknown_action_returns_not_found(db_session):
         _scope(), "nope", event_id="snooze1", new_time=datetime(2026, 7, 10, 16, 0, tzinfo=timezone.utc)
     )
     assert res.status == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_snooze_cancels_original_reminder(db_session):
+    """推迟后，原 one_time 提醒应被取消，只有新 snooze 提醒会触发。"""
+    repo = SalesActionRepository(db_session)
+    scope = _scope()
+    action = await _create_action(repo, scope)
+
+    new_time = datetime(2026, 7, 10, 16, 0, tzinfo=timezone.utc)
+    await repo.snooze_action(scope, action.id, event_id="snooze1", new_time=new_time)
+
+    reminders = (
+        await db_session.execute(
+            select(SalesActionReminder).where(SalesActionReminder.action_id == action.id)
+        )
+    ).scalars().all()
+    by_type = {r.reminder_type: r for r in reminders}
+    assert by_type["one_time"].status == "cancelled"
+    assert by_type["snooze"].status == "scheduled"
+    # only the snooze reminder is claimable as due
+    due = await repo.claim_due_reminders(now=new_time, limit=10)
+    due_types = {r.reminder_type for r in due}
+    assert "snooze" in due_types
+    assert "one_time" not in due_types
+
+
+@pytest.mark.asyncio
+async def test_snooze_is_idempotent_on_duplicate(db_session):
+    """同一 (action_id, event_id, new_time) 重复 snooze 返回已存在提醒，不抛错。"""
+    repo = SalesActionRepository(db_session)
+    scope = _scope()
+    action = await _create_action(repo, scope)
+    new_time = datetime(2026, 7, 10, 16, 0, tzinfo=timezone.utc)
+
+    first = await repo.snooze_action(scope, action.id, event_id="snooze1", new_time=new_time)
+    second = await repo.snooze_action(scope, action.id, event_id="snooze1", new_time=new_time)
+    assert second.id == first.id  # same row, no crash
+
+    snooze_reminders = [
+        r for r in (
+            await db_session.execute(
+                select(SalesActionReminder)
+                .where(SalesActionReminder.action_id == action.id)
+                .where(SalesActionReminder.reminder_type == "snooze")
+            )
+        ).scalars().all()
+    ]
+    assert len(snooze_reminders) == 1
 
 
 @pytest.mark.asyncio

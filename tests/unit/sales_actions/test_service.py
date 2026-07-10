@@ -50,6 +50,7 @@ class StubRepo:
         self.completed = []
         self.cancelled = []
         self.snoozed = []
+        self.snooze_result = None
 
     async def create_action(self, scope, **kw):
         card = SimpleNamespace(id="card-1", title=kw["title"], status="pending",
@@ -73,6 +74,8 @@ class StubRepo:
 
     async def snooze_action(self, scope, action_id, *, event_id, new_time):
         self.snoozed.append((action_id, new_time))
+        if self.snooze_result is not None:
+            return self.snooze_result
         return SimpleNamespace(reason_code="snoozed")
 
 
@@ -193,3 +196,87 @@ async def test_list_path_returns_pending_summary():
     assert res.status == "listed"
     assert "任务A" in res.response_text
     assert res.actions and res.actions[0]["action_id"] == "c1"
+
+
+@pytest.mark.asyncio
+async def test_snooze_on_terminal_action_does_not_fake_success():
+    """If snooze_action returns already_terminal, surface it — don't claim snoozed."""
+    from sales_agent.services.sales_actions.repository import ActionStateResult
+
+    repo = StubRepo()
+    repo.pending = [SimpleNamespace(id="card-x", title="回电张总", customer_name="张总",
+                                    status="pending", scheduled_at=NOW)]
+    repo.snooze_result = ActionStateResult(action_id="card-x", status="done", reason_code="already_terminal")
+    fake = FakeChatModel({
+        "推迟": {
+            "intent": "snooze_action", "confidence": 0.9,
+            "customer_name": "张总", "scheduled_at": "2026-07-10T16:00:00+00:00",
+            "timezone": "Asia/Shanghai",
+        }
+    })
+    svc = SalesActionService(repo, fake)
+    res = await svc.handle_message(
+        scope=_scope(), message="把张总那个推迟到下午4点", conversation_id="c1",
+        topic_id=None, source_event_id="e1", now=NOW,
+    )
+    assert res.operation == "snooze"
+    assert res.status == "done"  # the real state, not faked as "snoozed"
+    assert res.reason_code == "already_terminal"
+    assert "已推迟" not in res.response_text
+
+
+@pytest.mark.asyncio
+async def test_snooze_path_creates_reminder_when_healthy():
+    repo = StubRepo()
+    repo.pending = [SimpleNamespace(id="card-x", title="回电张总", customer_name="张总",
+                                    status="pending", scheduled_at=NOW)]
+    fake = FakeChatModel({
+        "推迟": {
+            "intent": "snooze_action", "confidence": 0.9,
+            "customer_name": "张总", "scheduled_at": "2026-07-10T16:00:00+00:00",
+            "timezone": "Asia/Shanghai",
+        }
+    })
+    svc = SalesActionService(repo, fake)
+    res = await svc.handle_message(
+        scope=_scope(), message="把张总那个推迟到下午4点", conversation_id="c1",
+        topic_id=None, source_event_id="e1", now=NOW,
+    )
+    assert res.operation == "snooze"
+    assert res.status == "snoozed"
+    assert "已推迟" in res.response_text
+    assert repo.snoozed  # called
+
+
+@pytest.mark.asyncio
+async def test_state_intent_discards_stale_clarification_partial():
+    """A list/complete message drops a prior create-clarification partial so a
+    later create doesn't merge with the stale title."""
+    repo = StubRepo()
+    fake = FakeChatModel({
+        # first create: missing time → clarify, stashes partial title "打电话"
+        "MARKER_NOTIME": {
+            "intent": "create_action", "explicit_create": True, "confidence": 0.9,
+            "title": "打电话", "action_type": "call_back", "timezone": "Asia/Shanghai",
+        },
+        # later create: fully specified, different title
+        "MARKER_FULL": {
+            "intent": "create_action", "explicit_create": True, "confidence": 0.9,
+            "title": "拜访客户", "action_type": "visit_prepare",
+            "scheduled_at": "2026-07-11T10:00:00+00:00", "timezone": "Asia/Shanghai",
+        },
+    })
+    svc = SalesActionService(repo, fake)
+    scope = _scope()
+    # 1) create with missing time → clarify, stashes "打电话"
+    await svc.handle_message(scope=scope, message="MARKER_NOTIME", conversation_id="c1",
+                             topic_id=None, source_event_id="e1", now=NOW)
+    # 2) list message in between → must discard the stale partial
+    await svc.handle_message(scope=scope, message="我还有哪些任务", conversation_id="c1",
+                             topic_id=None, source_event_id=None, now=NOW)
+    # 3) a new full create → must use the NEW title, not the stale "打电话"
+    res = await svc.handle_message(scope=scope, message="MARKER_FULL", conversation_id="c1",
+                                   topic_id=None, source_event_id="e2", now=NOW)
+    assert res.operation == "create"
+    assert repo.created[-1]["title"] == "拜访客户"
+

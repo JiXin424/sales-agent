@@ -33,6 +33,7 @@ from langgraph.graph import END, START, StateGraph
 
 from sales_agent.graph.online.edges import (
     route_after_scenario,
+    route_after_sales_action,
     route_context_resolution,
     route_online_message,
     route_context_resolution,
@@ -57,6 +58,8 @@ from sales_agent.graph.online.nodes import (
     profile_transparency_node,
     scenario_coach_node,
     reset_context_node,
+    sales_action_command_node,
+    sales_action_suggestion_node,
 )
 from sales_agent.graph.online.state import OnlineConversationState
 
@@ -108,6 +111,8 @@ def build_online_graph() -> StateGraph:
     builder.add_node("enqueue_memory_candidate", enqueue_memory_candidate_node)
     builder.add_node("profile_recall", profile_recall_node)
     builder.add_node("profile_transparency", profile_transparency_node)
+    builder.add_node("sales_action", sales_action_command_node)
+    builder.add_node("sales_action_suggestion", sales_action_suggestion_node)
 
     # ── Edges ──────────────────────────────────────────────────────
     builder.add_edge(START, "normalize_turn")
@@ -127,6 +132,7 @@ def build_online_graph() -> StateGraph:
             "chat": "context_resolution",
             "direct_chat": "direct_evidence_routing",
             "scenario_coach": "scenario_coach",
+            "sales_action": "sales_action",
         },
     )
 
@@ -164,6 +170,18 @@ def build_online_graph() -> StateGraph:
         },
     )
 
+    # From sales_action: handled → END; service declined (response_kind=chat)
+    # → resume the normal chat path via context_resolution so the user still
+    # gets a real answer.
+    builder.add_conditional_edges(
+        "sales_action",
+        route_after_sales_action,
+        {
+            "sales_action_end": END,
+            "resume_chat": "context_resolution",
+        },
+    )
+
     # Clarification path
     builder.add_edge("clarification_response", "log_control_response")
     builder.add_edge("log_control_response", END)
@@ -177,7 +195,10 @@ def build_online_graph() -> StateGraph:
     # because context_status is not "resolved" and topic management is skipped.
     builder.add_edge("direct_evidence_routing", "chat")
     builder.add_edge("chat", "enqueue_memory_candidate")
-    builder.add_edge("enqueue_memory_candidate", END)
+    # Post-chat sales-action suggestion (dormant unless the flag is set); must
+    # never block the normal answer — it only appends a confirmation prompt.
+    builder.add_edge("enqueue_memory_candidate", "sales_action_suggestion")
+    builder.add_edge("sales_action_suggestion", END)
 
     # Guided flow path
     builder.add_edge("guided_flow", "log_flow_output")

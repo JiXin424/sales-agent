@@ -221,6 +221,12 @@ async def handle_dingtalk_event(
                 memory_trace=result.get("memory_trace"),
                 memory_degraded=bool(result.get("memory_degraded")),
                 memory_degradation_reason=result.get("memory_degradation_reason"),
+                # Sales actions (Task 4)
+                sales_action_operation=result.get("sales_action_operation"),
+                sales_action_status=result.get("sales_action_status"),
+                sales_action_id=result.get("sales_action_id"),
+                sales_action_scheduled_at=result.get("sales_action_scheduled_at"),
+                sales_action_reason_code=result.get("sales_action_reason_code"),
                 latency_ms=latency_ms,
             )
 
@@ -270,6 +276,12 @@ async def handle_dingtalk_event(
             memory_trace=result.get("memory_trace"),
             memory_degraded=bool(result.get("memory_degraded")),
             memory_degradation_reason=result.get("memory_degradation_reason"),
+            # Sales actions (Task 4)
+            sales_action_operation=result.get("sales_action_operation"),
+            sales_action_status=result.get("sales_action_status"),
+            sales_action_id=result.get("sales_action_id"),
+            sales_action_scheduled_at=result.get("sales_action_scheduled_at"),
+            sales_action_reason_code=result.get("sales_action_reason_code"),
             latency_ms=latency_ms,
         )
 

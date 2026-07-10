@@ -82,6 +82,16 @@ TURN_SCOPED_DEFAULTS: dict[str, Any] = {
     "memory_degraded": False,
     "memory_degradation_reason": None,
     "profile_version": None,
+    # Sales-action per-turn outputs (Task 4). NOTE: sales_action_pending_clarification
+    # is intentionally NOT listed here — it must persist across turns via the
+    # checkpoint so the follow-up message routes back to the sales-action node.
+    "sales_action_operation": None,
+    "sales_action_status": None,
+    "sales_action_id": None,
+    "sales_action_scheduled_at": None,
+    "sales_action_reason_code": None,
+    "suggested_sales_action": None,
+    "sales_action_suggestion_enabled": False,
 }
 
 

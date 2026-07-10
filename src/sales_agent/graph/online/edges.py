@@ -58,3 +58,17 @@ def route_after_scenario(state: OnlineConversationState) -> str:
     if state.get("flow_action") == "direct_chat":
         return "direct_chat"
     return "chat"
+
+
+def route_after_sales_action(state: OnlineConversationState) -> str:
+    """Return the next node after ``sales_action_command_node``.
+
+    - ``"sales_action_end"`` → END — the turn was handled as a sales action
+      (created/clarified/listed/…).
+    - ``"resume_chat"`` → context_resolution — the service declined
+      (``response_kind == "chat"``); resume the normal chat path so the user
+      still gets a real answer.
+    """
+    if state.get("response_kind") == "sales_action":
+        return "sales_action_end"
+    return "resume_chat"

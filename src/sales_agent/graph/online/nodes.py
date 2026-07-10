@@ -93,6 +93,15 @@ from sales_agent.services.topic_restore import (
     MAX_RESTORE_ATTEMPTS,
     resolve_topic_restore,
 )
+from sales_agent.services.sales_actions import (
+    SalesActionOperationResult,
+    SalesActionRepository,
+    SalesActionScope,
+    SalesActionService,
+    detect_fast_action_intent,
+)
+from sales_agent.services.sales_actions.parser import parse_sales_action_request
+from sales_agent.services.sales_actions.time_parser import validate_action_extraction
 
 logger = logging.getLogger(__name__)
 
@@ -153,12 +162,18 @@ def normalize_turn_node(state: OnlineConversationState) -> dict[str, Any]:
 
     1. **Duplicate** — ``event_id`` matches ``last_event_id``.
     2. **Reset** — ``reset_requested`` is ``True`` (Task 6).
-    3. **Memory command** — ``long_term_memory_enabled`` & explicit memory command
+    3. **Profile transparency** — user-profile-memory transparency command.
+    4. **Memory command** — ``long_term_memory_enabled`` & explicit memory command
        like "记住我负责华东区".  Explicit commands do NOT enter guided flow.
-    4. **Start** — guided flows enabled & a requested-flow trigger.
-    5. **Cancel** — guided flows enabled & active flow & cancel command.
-    6. **Advance** — guided flows enabled & active flow.
-    7. **Chat** — default.
+    5. **Start** — guided flows enabled & a requested-flow trigger.
+    6. **Cancel** — guided flows enabled & active flow & cancel command.
+    7. **Advance** — guided flows enabled & active flow.
+    8. **Pending sales-action clarification** — a prior turn flagged
+       ``sales_action_pending_clarification``; route the follow-up back to the
+       sales-action node (Task 4).
+    9. **Explicit sales-action command** — ``detect_fast_action_intent`` matches
+       (create/complete/cancel/snooze/list) (Task 4).
+    10. **Chat** — default.
 
     Reset must not fire on a duplicate — a redelivered reset event is a
     no-op, not a second state clear.
@@ -190,6 +205,14 @@ def normalize_turn_node(state: OnlineConversationState) -> dict[str, Any]:
         flow_action = "cancel"
     elif guided_enabled and state.get("active_flow"):
         flow_action = "advance"
+    elif state.get("sales_action_pending_clarification"):
+        # A prior sales-action turn asked for clarification (e.g. "几点？");
+        # route the follow-up back to the sales-action node so the service can
+        # complete/re-clarify/abandon it. (Guided flow is higher priority.)
+        flow_action = "sales_action"
+    elif detect_fast_action_intent(message) != "none":
+        # Explicit sales-action command (create/complete/cancel/snooze/list).
+        flow_action = "sales_action"
     else:
         flow_action = "chat"
 
@@ -731,6 +754,179 @@ async def enqueue_memory_candidate_node(
     except Exception:
         logger.warning("memory outbox enqueue failed", exc_info=True)
         return {"memory_reason_code": "inferred_outbox_enqueue_failed"}
+
+
+# =============================================================
+# sales_action nodes (Task 4)
+# =============================================================
+
+# Fail-open reply when the sales-action service cannot run (no DB / exception).
+_SALES_ACTION_UNAVAILABLE = "销售动作暂时不可用，请稍后再试。"
+_SALES_ACTION_FAILED = "销售动作处理失败，请稍后再试。"
+
+
+def _sales_action_error_state(message: str, reason_code: str) -> dict[str, Any]:
+    """Build a fail-open sales-action state update.
+
+    Deliberately omits ``last_event_id`` so a failed turn does NOT advance the
+    dedup cursor — a redelivery can then be reprocessed once the DB recovers.
+    """
+    return {
+        "answer_dict": {"summary": message, "sections": []},
+        "response_kind": "sales_action",
+        "sales_action_operation": "noop",
+        "sales_action_status": "failed",
+        "sales_action_reason_code": reason_code,
+        "sales_action_pending_clarification": None,
+    }
+
+
+async def sales_action_command_node(
+    state: OnlineConversationState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """Handle an explicit sales-action command (or a pending-clarification turn).
+
+    Builds a :class:`SalesActionScope` from the state identity fields (there is
+    no ``resolve_dingtalk_user_scope`` helper — identity comes from the graph
+    state + runtime tenant), calls :meth:`SalesActionService.handle_message`
+    with the fixed Task-3 signature, and maps the typed
+    :class:`SalesActionOperationResult` onto Online state fields.
+
+    Outcomes:
+
+    - ``response_kind == "sales_action"`` → surface the reply + metadata and
+      terminate (the graph routes to END). When the service clarifies, the
+      ``reason_code`` is stashed in ``sales_action_pending_clarification`` so
+      the next turn routes back here.
+    - ``response_kind == "chat"`` (service declined / not an action) → clear any
+      pending clarification and mark the turn to resume the normal chat path
+      (the graph routes to ``context_resolution``).
+
+    Fail-open: missing DB or service exception degrades to a clear sales_action
+    error reply and never crashes the graph.
+    """
+    ctx = _unpack_context(config) or {}
+    db = ctx.get("db")
+    message = state.get("message", "")
+
+    if db is None:
+        return _sales_action_error_state(_SALES_ACTION_UNAVAILABLE, "missing_db")
+
+    scope = SalesActionScope(
+        tenant_id=state.get("tenant_id", ""),
+        agent_id=state.get("agent_id", ""),
+        user_id=state.get("user_id", ""),
+        channel=state.get("channel", "dingtalk"),
+        dingtalk_user_id=state.get("session_user_id"),
+    )
+
+    # Test seam (mirrors chat_runner / evidence_router_override): inject a fake
+    # service so the node's mapping logic can be unit-tested without a DB.
+    service_override = ctx.get("sales_action_service_override")
+    if service_override is not None:
+        service: SalesActionService = service_override
+    else:
+        service = SalesActionService(SalesActionRepository(db), ctx.get("chat_model"))
+
+    try:
+        result: SalesActionOperationResult = await service.handle_message(
+            scope=scope,
+            message=message,
+            conversation_id=state.get("conversation_id", ""),
+            topic_id=state.get("topic_id"),
+            source_event_id=state.get("event_id"),
+            now=ctx.get("now") or datetime.now(timezone.utc),
+        )
+    except Exception:
+        logger.exception("sales_action_command_node failed")
+        return _sales_action_error_state(_SALES_ACTION_FAILED, "exception")
+
+    # Service declined — not a sales action after all. Clear any stale pending
+    # clarification and let the graph resume the normal chat path.
+    if result.response_kind == "chat":
+        return {
+            "response_kind": "chat",
+            "sales_action_operation": "ignore",
+            "sales_action_status": "not_handled",
+            "sales_action_reason_code": result.reason_code or "not_an_action",
+            "sales_action_pending_clarification": None,
+        }
+
+    # Handled as a sales action — surface the reply + metadata.
+    # On a clarify result, carry the reason so the next turn routes back here.
+    pending = result.reason_code if result.operation == "clarify" else None
+    return {
+        "answer_dict": {
+            "summary": result.response_text,
+            "sections": [],
+            # list/suggest payload for Task-5 card rendering (harmless elsewhere)
+            "actions": list(result.actions),
+        },
+        "response_kind": "sales_action",
+        "sales_action_operation": result.operation,
+        "sales_action_status": result.status,
+        "sales_action_id": result.action_id,
+        "sales_action_scheduled_at": result.scheduled_at,
+        "sales_action_reason_code": result.reason_code,
+        "sales_action_pending_clarification": pending,
+        "last_event_id": state.get("event_id"),
+    }
+
+
+async def sales_action_suggestion_node(
+    state: OnlineConversationState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """Post-chat: append a sales-action confirmation prompt when a strong
+    actionable plan is detected.
+
+    Must NOT block the normal answer — it is dormant unless
+    ``sales_action_suggestion_enabled`` is set, and any failure is swallowed.
+    When enabled and the extractor detects a ``suggest`` decision with a title,
+    a short confirmation prompt is appended to ``answer_dict.sections`` (the
+    normal chat answer stays intact).
+    """
+    if not state.get("sales_action_suggestion_enabled"):
+        return {}
+    # Only augment a normal chat answer; never touch sales-action/control paths.
+    if state.get("response_kind") != "chat":
+        return {}
+
+    ctx = _unpack_context(config) or {}
+    chat_model = ctx.get("chat_model")
+    if chat_model is None:
+        return {}
+
+    message = state.get("message", "")
+    now = ctx.get("now") or datetime.now(timezone.utc)
+    try:
+        extraction = await parse_sales_action_request(
+            message, chat_model, now, timezone="Asia/Shanghai"
+        )
+        decision = validate_action_extraction(extraction, now=now)
+    except Exception:
+        logger.warning("sales_action_suggestion_node failed", exc_info=True)
+        return {}
+
+    if decision.action != "suggest" or not decision.title:
+        return {}
+
+    prompt = f"建议下一步：{decision.title}。需要我帮你设个提醒吗？"
+    answer = dict(state.get("answer_dict") or {})
+    sections = list(answer.get("sections") or [])
+    sections.append({"title": "下一步建议", "content": prompt})
+    answer["sections"] = sections
+    return {
+        "answer_dict": answer,
+        "suggested_sales_action": {
+            "title": decision.title,
+            "action_type": decision.action_type,
+            "customer_name": decision.customer_name,
+            "scheduled_at": decision.scheduled_at.isoformat() if decision.scheduled_at else None,
+            "reason_code": decision.reason_code,
+        },
+    }
 
 
 # =============================================================

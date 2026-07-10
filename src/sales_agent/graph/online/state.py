@@ -6,6 +6,7 @@ needed for routing, guided-flow tracking, and deduplication.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from typing_extensions import TypedDict
 
@@ -93,6 +94,21 @@ class OnlineConversationState(TypedDict, total=False):
     memory_degraded: bool
     memory_degradation_reason: str | None
     profile_version: int | None
+
+    # ── Sales Actions (Task 4) ────────────────────────────────────
+    # Per-turn outputs (reset each turn via TURN_SCOPED_DEFAULTS).
+    sales_action_operation: str | None  # create/complete/cancel/snooze/list/clarify/suggest/ignore
+    sales_action_status: str | None  # created/done/cancelled/snoozed/clarify/empty/failed…
+    sales_action_id: str | None
+    sales_action_scheduled_at: datetime | None
+    suggested_sales_action: dict[str, Any] | None  # post-chat suggestion metadata
+    sales_action_suggestion_enabled: bool
+    # Cross-turn: set on a clarify turn so the next turn routes back to the
+    # sales-action node to complete/re-clarify/abandon. Deliberately NOT in
+    # TURN_SCOPED_DEFAULTS so the checkpoint value survives across turns.
+    sales_action_pending_clarification: str | None
+    # reason_code mirror for the DingTalk turn result.
+    sales_action_reason_code: str | None
 
 
 __all__ = [

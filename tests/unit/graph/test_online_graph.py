@@ -855,3 +855,269 @@ def test_user_memory_context_is_separate_from_retrieval_content():
     assert "## 长期用户记忆" in user_content
     assert "- user_memory_context：" not in user_content
     assert "企业知识库内容" not in user_content
+
+
+# ====================================================================
+# Sales-action routing (Task 4)
+# ====================================================================
+
+
+def test_normalize_routes_explicit_sales_action_command():
+    """An explicit reminder/action phrase routes to ``sales_action``."""
+    from sales_agent.graph.online.nodes import normalize_turn_node
+
+    update = normalize_turn_node({
+        "message": "提醒我半小时后给张总回电话",
+        "event_id": "evt1",
+        "last_event_id": None,
+        "guided_flows_enabled": True,
+    })
+    assert update["flow_action"] == "sales_action"
+
+
+def test_normalize_ordinary_chat_does_not_route_to_sales_action():
+    """An ordinary chat message must NOT route to ``sales_action``."""
+    from sales_agent.graph.online.nodes import normalize_turn_node
+
+    update = normalize_turn_node({
+        "message": "今天天气怎么样",
+        "event_id": "evt1",
+        "last_event_id": None,
+        "guided_flows_enabled": True,
+    })
+    assert update["flow_action"] != "sales_action"
+
+
+def test_normalize_list_command_routes_to_sales_action():
+    """A list-actions command (``还有哪些任务``) routes to ``sales_action``."""
+    from sales_agent.graph.online.nodes import normalize_turn_node
+
+    update = normalize_turn_node({
+        "message": "我还有哪些任务",
+        "event_id": "evt1",
+        "last_event_id": None,
+        "guided_flows_enabled": True,
+    })
+    assert update["flow_action"] == "sales_action"
+
+
+def test_duplicate_still_wins_before_sales_action():
+    """Duplicate detection is higher priority than sales-action routing."""
+    from sales_agent.graph.online.nodes import normalize_turn_node
+
+    update = normalize_turn_node({
+        "message": "提醒我给张总回电话",
+        "event_id": "evt1",
+        "last_event_id": "evt1",  # duplicate
+        "guided_flows_enabled": True,
+    })
+    assert update["flow_action"] == "duplicate"
+
+
+def test_reset_still_wins_before_sales_action():
+    """Reset is higher priority than sales-action routing."""
+    from sales_agent.graph.online.nodes import normalize_turn_node
+
+    update = normalize_turn_node({
+        "message": "提醒我给张总回电话",
+        "event_id": "evt1",
+        "last_event_id": "evt0",
+        "reset_requested": True,
+    })
+    assert update["flow_action"] == "reset"
+
+
+def test_active_guided_flow_beats_sales_action():
+    """An active guided flow advances rather than routing to a sales action,
+    even when the message contains an explicit reminder keyword (guided flow
+    is higher priority than sales-action command)."""
+    from sales_agent.graph.online.nodes import normalize_turn_node
+
+    update = normalize_turn_node({
+        "message": "提醒我明天见客户",
+        "event_id": "evt1",
+        "last_event_id": None,
+        "guided_flows_enabled": True,
+        "active_flow": "small_win_appreciation",
+    })
+    assert update["flow_action"] == "advance"
+
+
+def test_pending_sales_action_clarification_routes_to_sales_action():
+    """When a sales-action clarification is pending (set on a prior turn), the
+    follow-up message routes back to ``sales_action`` so the service can
+    complete/re-clarify/abandon it."""
+    from sales_agent.graph.online.nodes import normalize_turn_node
+
+    update = normalize_turn_node({
+        "message": "下午3点",
+        "event_id": "evt1",
+        "last_event_id": None,
+        "guided_flows_enabled": True,
+        "sales_action_pending_clarification": "missing_time",
+    })
+    assert update["flow_action"] == "sales_action"
+
+
+# ── sales_action_command_node mapping (node-level, no DB) ──────────
+
+
+def _sales_action_cfg(ctx_overrides: dict | None = None):
+    """Build a RunnableConfig whose __pregel_runtime.context is *ctx_overrides*."""
+    from types import SimpleNamespace
+    return {
+        "configurable": {
+            "__pregel_runtime": SimpleNamespace(context=ctx_overrides or {}),
+        }
+    }
+
+
+def _sales_action_state(message: str = "提醒我给张总回电话") -> dict:
+    return {
+        "tenant_id": "t1", "agent_id": "a1", "user_id": "u1",
+        "session_user_id": "du1", "channel": "dingtalk",
+        "conversation_id": "c1", "message": message, "event_id": "ev1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_sales_action_command_node_maps_created_result():
+    """A ``created`` service result is mapped to state fields + answer_dict."""
+    from datetime import datetime, timezone
+    from sales_agent.graph.online.nodes import sales_action_command_node
+    from sales_agent.services.sales_actions import SalesActionOperationResult
+
+    fake_svc = AsyncMock()
+    fake_svc.handle_message = AsyncMock(return_value=SalesActionOperationResult(
+        operation="create",
+        status="created",
+        response_text="已创建提醒：2026-07-10 15:30，提醒你给张总回电话。",
+        response_kind="sales_action",
+        action_id="card-1",
+        scheduled_at=datetime(2026, 7, 10, 15, 30, tzinfo=timezone.utc),
+        reason_code="created",
+    ))
+    cfg = _sales_action_cfg({
+        "db": MagicMock(),
+        "chat_model": None,
+        "sales_action_service_override": fake_svc,
+    })
+    ret = await sales_action_command_node(_sales_action_state(), cfg)
+    assert ret["response_kind"] == "sales_action"
+    assert ret["sales_action_operation"] == "create"
+    assert ret["sales_action_status"] == "created"
+    assert ret["sales_action_id"] == "card-1"
+    assert ret["sales_action_reason_code"] == "created"
+    assert ret["sales_action_pending_clarification"] is None
+    assert "张总" in ret["answer_dict"]["summary"]
+    # Scope is built from state identity fields (not a nonexistent resolver).
+    scope = fake_svc.handle_message.call_args.kwargs["scope"]
+    assert scope.tenant_id == "t1"
+    assert scope.agent_id == "a1"
+    assert scope.user_id == "u1"
+    assert scope.dingtalk_user_id == "du1"
+
+
+@pytest.mark.asyncio
+async def test_sales_action_command_node_sets_pending_clarification():
+    """A ``clarify`` result surfaces the reason as pending clarification."""
+    from sales_agent.graph.online.nodes import sales_action_command_node
+    from sales_agent.services.sales_actions import SalesActionOperationResult
+
+    fake_svc = AsyncMock()
+    fake_svc.handle_message = AsyncMock(return_value=SalesActionOperationResult(
+        operation="clarify",
+        status="clarify",
+        response_text="你希望几点提醒你？",
+        response_kind="sales_action",
+        reason_code="missing_time",
+    ))
+    cfg = _sales_action_cfg({
+        "db": MagicMock(),
+        "sales_action_service_override": fake_svc,
+    })
+    ret = await sales_action_command_node(_sales_action_state(), cfg)
+    assert ret["response_kind"] == "sales_action"
+    assert ret["sales_action_operation"] == "clarify"
+    assert ret["sales_action_pending_clarification"] == "missing_time"
+    assert "几点" in ret["answer_dict"]["summary"]
+
+
+@pytest.mark.asyncio
+async def test_sales_action_command_node_falls_through_on_ignore():
+    """When the service declines (response_kind=chat), the node clears any
+    pending clarification and marks the turn to resume the normal chat path."""
+    from sales_agent.graph.online.nodes import sales_action_command_node
+    from sales_agent.services.sales_actions import SalesActionOperationResult
+
+    fake_svc = AsyncMock()
+    fake_svc.handle_message = AsyncMock(return_value=SalesActionOperationResult(
+        response_kind="chat",
+        operation="ignore",
+        status="not_handled",
+        reason_code="not_an_action",
+    ))
+    cfg = _sales_action_cfg({
+        "db": MagicMock(),
+        "sales_action_service_override": fake_svc,
+    })
+    ret = await sales_action_command_node(_sales_action_state("今天天气不错"), cfg)
+    assert ret["response_kind"] == "chat"
+    assert ret["sales_action_pending_clarification"] is None
+
+
+@pytest.mark.asyncio
+async def test_sales_action_command_node_fail_open_when_no_db():
+    """Missing db degrades to a clear sales_action error, never a crash."""
+    from sales_agent.graph.online.nodes import sales_action_command_node
+
+    cfg = _sales_action_cfg({"db": None, "chat_model": None})
+    ret = await sales_action_command_node(_sales_action_state(), cfg)
+    assert ret["response_kind"] == "sales_action"
+    assert ret["sales_action_status"] == "failed"
+    assert ret["sales_action_reason_code"] == "missing_db"
+
+
+# ── Graph-level: sales action reached + suggestion dormant ─────────
+
+
+@pytest.mark.asyncio
+async def test_explicit_action_routes_through_graph_to_sales_action(online_graph, config):
+    """End-to-end through the compiled graph: an explicit reminder phrase
+    reaches the sales_action node and returns response_kind=sales_action."""
+    from sales_agent.services.sales_actions import SalesActionOperationResult
+
+    fake_svc = AsyncMock()
+    fake_svc.handle_message = AsyncMock(return_value=SalesActionOperationResult(
+        operation="create",
+        status="created",
+        response_text="已创建提醒：2026-07-10 15:30，提醒你给张总回电话。",
+        response_kind="sales_action",
+        action_id="card-1",
+        reason_code="created",
+    ))
+    ctx = {**_CONTEXT, "db": MagicMock(), "sales_action_service_override": fake_svc}
+    result = await online_graph.ainvoke(
+        _make_input("提醒我半小时后给张总回电话"),
+        config=config,
+        context=ctx,
+    )
+    assert result["response_kind"] == "sales_action"
+    assert result["sales_action_status"] == "created"
+    assert result["sales_action_id"] == "card-1"
+    assert result["last_event_id"] is not None
+
+
+@pytest.mark.asyncio
+async def test_sales_action_suggestion_node_dormant_for_chat(online_graph, config):
+    """With the suggestion flag off (default), a normal chat answer is
+    returned unchanged — the suggestion node must NOT block or alter it."""
+    result = await online_graph.ainvoke(
+        _make_input("帮我写一段开场白"),
+        config=config,
+        context=_CONTEXT,
+    )
+    assert result["response_kind"] == "chat"
+    # suggestion is dormant → no suggested_sales_action surfaced
+    assert result.get("suggested_sales_action") is None
+    assert result["answer_dict"]["summary"] == "chat stub reply"

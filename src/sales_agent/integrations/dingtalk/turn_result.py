@@ -11,6 +11,7 @@ never returns a success-shaped result from a failed transaction.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 
@@ -51,6 +52,12 @@ class DingTalkTurnResult:
     memory_trace: dict | None = None
     memory_degraded: bool = False
     memory_degradation_reason: str | None = None
+    # Sales actions (Task 4)
+    sales_action_operation: str | None = None
+    sales_action_status: str | None = None
+    sales_action_id: str | None = None
+    sales_action_scheduled_at: datetime | None = None
+    sales_action_reason_code: str | None = None
 
 
 __all__ = ["DingTalkTurnResult"]

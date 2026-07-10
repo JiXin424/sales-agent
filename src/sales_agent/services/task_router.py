@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from sales_agent.llm.call_params import get_call_params
 from sales_agent.prompts.task_router_prompt import TASK_ROUTER_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -426,10 +427,11 @@ async def _llm_route(
         prompt = (router_prompt or _DEFAULT_ROUTER_PROMPT).format_map(
             _KeepMissingDict(message=message)
         )
+        p = get_call_params("task_router")
         response = await chat_model.generate(
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
-            max_tokens=200,
+            temperature=p.temperature,
+            max_tokens=p.max_tokens,
         )
         # 解析 JSON 响应：DB 版 prompt 输出 intent schema（含嵌套 channel_queries），
         # 用平衡花括号提取完整 JSON，再映射 intent → task_type；兼容旧 task_type schema。

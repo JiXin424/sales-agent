@@ -16,6 +16,7 @@ import httpx
 from openai import AsyncOpenAI
 
 from sales_agent.integrations.dingtalk.config import DingTalkConfig
+from sales_agent.llm.call_params import get_call_params
 from sales_agent.integrations.dingtalk.message_sender import DingTalkAccessTokenManager
 
 logger = logging.getLogger(__name__)
@@ -152,6 +153,7 @@ class DingTalkMediaAdapter:
     async def _describe_image(self, image_bytes: bytes, mime_type: str) -> str:
         client = self._get_openai_client()
         data_url = f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('ascii')}"
+        p = get_call_params("media_vision")
         response = await client.chat.completions.create(
             model=self._config.vision_model,
             messages=[
@@ -167,8 +169,8 @@ class DingTalkMediaAdapter:
                     ],
                 },
             ],
-            temperature=0.1,
-            max_tokens=800,
+            temperature=p.temperature,
+            max_tokens=p.max_tokens,
         )
         content = response.choices[0].message.content
         if isinstance(content, list):
@@ -196,6 +198,7 @@ class DingTalkMediaAdapter:
         client = self._get_openai_client()
         audio_format = _audio_format_for_mime(mime_type)
         audio_b64 = base64.b64encode(audio_bytes).decode("ascii")
+        p = get_call_params("media_audio")
         response = await client.chat.completions.create(
             model=self._config.audio_model,
             messages=[
@@ -207,8 +210,8 @@ class DingTalkMediaAdapter:
                     ],
                 }
             ],
-            temperature=0.0,
-            max_tokens=800,
+            temperature=p.temperature,
+            max_tokens=p.max_tokens,
         )
         content = response.choices[0].message.content
         if isinstance(content, list):

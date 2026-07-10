@@ -9,10 +9,10 @@ from sales_agent.ontology.schemas import EntityCandidate, FactCandidate
 
 
 class FakeExtractor:
-    async def extract_entities(self, content):
+    async def extract_entities(self, content, *, db=None, tenant_id=None, agent_id=None):
         return [EntityCandidate(type="Product", name="福利卡")]
 
-    async def extract_facts(self, content, entities):
+    async def extract_facts(self, content, entities, *, db=None, tenant_id=None, agent_id=None):
         return [FactCandidate(subject_name="福利卡", predicate="description", value="员工福利产品", fact_type="attribute")]
 
 

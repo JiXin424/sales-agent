@@ -923,7 +923,11 @@ async def sales_action_suggestion_node(
     if decision.action != "suggest" or not decision.title:
         return {}
 
-    prompt = f"建议下一步：{decision.title}。需要我帮你设个提醒吗？"
+    prompt_parts = [f"建议下一步：{decision.title}"]
+    if decision.success_criteria:
+        prompt_parts.append(f"成功信号：{decision.success_criteria}")
+    prompt_parts.append("需要我帮你设个提醒吗？")
+    prompt = "\n".join(prompt_parts)
     answer = dict(state.get("answer_dict") or {})
     sections = list(answer.get("sections") or [])
     sections.append({"title": "下一步建议", "content": prompt})
@@ -936,6 +940,8 @@ async def sales_action_suggestion_node(
             "customer_name": decision.customer_name,
             "scheduled_at": decision.scheduled_at.isoformat() if decision.scheduled_at else None,
             "reason_code": decision.reason_code,
+            "success_criteria": decision.success_criteria,
+            "pursuit_goal": decision.pursuit_goal,
         },
     }
 

@@ -61,6 +61,8 @@ def _clarify(extraction: SalesActionExtraction, *, response_text: str, reason_co
         timezone=extraction.timezone,
         response_text=response_text,
         reason_code=reason_code,
+        success_criteria=extraction.success_criteria if extraction.success_criteria else None,
+        pursuit_goal=extraction.pursuit_goal if extraction.pursuit_goal else None,
     )
 
 
@@ -97,6 +99,8 @@ def validate_action_extraction(
             action_type=extraction.action_type,
             timezone=extraction.timezone,
             reason_code="not_an_action",
+            success_criteria=extraction.success_criteria if extraction.success_criteria else None,
+            pursuit_goal=extraction.pursuit_goal if extraction.pursuit_goal else None,
         )
 
     # 2. 低置信度：不信任抽取，直接澄清
@@ -139,6 +143,8 @@ def validate_action_extraction(
                 timezone=extraction.timezone,
                 response_text=f"建议下一步：{extraction.title}",
                 reason_code="suggested",
+                success_criteria=extraction.success_criteria if extraction.success_criteria else None,
+                pursuit_goal=extraction.pursuit_goal if extraction.pursuit_goal else None,
             )
 
         # 以下时间校验仅对 create_action（explicit creation）生效
@@ -179,6 +185,8 @@ def validate_action_extraction(
                 timezone=extraction.timezone,
                 response_text=_CREATE_TEXT_FORMAT.format(when=when, title=extraction.title),
                 reason_code="created",
+                success_criteria=extraction.success_criteria if extraction.success_criteria else None,
+                pursuit_goal=extraction.pursuit_goal if extraction.pursuit_goal else None,
             )
 
         # 9. 非 explicit 的 create_action 可执行计划 → 建议
@@ -191,6 +199,8 @@ def validate_action_extraction(
             timezone=extraction.timezone,
             response_text=f"建议下一步：{extraction.title}",
             reason_code="suggested",
+            success_criteria=extraction.success_criteria if extraction.success_criteria else None,
+            pursuit_goal=extraction.pursuit_goal if extraction.pursuit_goal else None,
         )
 
     # complete/cancel/snooze/list：非建提醒决策，交给 service 层
@@ -201,4 +211,6 @@ def validate_action_extraction(
         action_type=extraction.action_type,
         timezone=extraction.timezone,
         reason_code="deferred_to_service",
+        success_criteria=extraction.success_criteria if extraction.success_criteria else None,
+        pursuit_goal=extraction.pursuit_goal if extraction.pursuit_goal else None,
     )

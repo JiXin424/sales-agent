@@ -27,6 +27,14 @@ SALES_ACTION_EXTRACTOR_PROMPT = """你是一个销售动作抽取器，负责从
 - **send_material** — 发送资料（产品手册、案例等）
 - **other** — 以上都不是
 
+## Pursuit Loop（成功信号 / 推进目标）
+- If this is a pursuit action (user wants to advance a deal):
+  - `success_criteria`: one sentence describing what "done well" looks like.
+    Must be verifiable — e.g., "张总确认技术负责人和可沟通时间", NOT "推进成功".
+  - `pursuit_goal`: one sentence summarizing the top-level goal this action serves.
+    e.g., "推进张总这单".
+- For non-pursuit actions (simple reminders, admin tasks), leave both as empty strings.
+
 ## 关键规则
 
 - **explicit_create**：仅当用户明确说出创建信号词（提醒我/帮我记/设个提醒/定个提醒/别忘了/安排提醒）时为 true；suggest_action 类的「应该/打算」一律 false。
@@ -119,6 +127,8 @@ SALES_ACTION_EXTRACTOR_PROMPT = """你是一个销售动作抽取器，负责从
   "confidence": 0到1的小数,
   "missing_fields": ["缺少的字段名，如 scheduled_at、title"],
   "needs_clarification": true或false,
-  "clarification_question": "一句中文追问或null"
+  "clarification_question": "一句中文追问或null",
+  "success_criteria": "推进类动作的成功信号（一句）或空字符串",
+  "pursuit_goal": "推进类动作的顶层目标（一句）或空字符串"
 }
 """

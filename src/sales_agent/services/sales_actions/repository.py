@@ -184,6 +184,8 @@ class SalesActionRepository:
         source_kind: str,
         context_snapshot: dict,
         agent_advice: str,
+        success_criteria: str | None = None,
+        pursuit_goal: str | None = None,
     ) -> SalesActionCard:
         """创建一张 pending 动作卡片 + 一条 one_time 提醒。
 
@@ -208,6 +210,8 @@ class SalesActionRepository:
             status="pending",
             context_snapshot_json=json.dumps(context_snapshot or {}, ensure_ascii=False),
             agent_advice=agent_advice or "",
+            success_criteria=success_criteria,
+            pursuit_goal=pursuit_goal,
         )
         self.db.add(card)
         await self.db.flush()

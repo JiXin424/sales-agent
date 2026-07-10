@@ -67,6 +67,8 @@ class SalesActionExtraction(BaseModel):
     missing_fields: list[str] = Field(default_factory=list)
     needs_clarification: bool = False
     clarification_question: str | None = None
+    success_criteria: str | None = None
+    pursuit_goal: str | None = None
 
 
 @dataclass(frozen=True)
@@ -85,3 +87,5 @@ class SalesActionDecision:
     timezone: str = "Asia/Shanghai"
     response_text: str = ""
     reason_code: str = ""
+    success_criteria: str | None = None
+    pursuit_goal: str | None = None

@@ -46,6 +46,12 @@ class ExpectedTurn(BaseModel):
     selected_memory_types: list[str] = Field(default_factory=list)
     knowledge_override_violations: int | None = None
     memory_degraded: bool | None = None
+    # Sales action cards / reminders expectations (temporary task data - must
+    # NOT enter long-term memory / profile recall; see sales-action plan).
+    sales_action_operation: str | None = None
+    sales_action_status: str | None = None
+    creates_sales_action: bool | None = None
+    sales_action_duplicate_send: bool | None = None
 
 
 class ScenarioTurn(BaseModel):

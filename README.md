@@ -284,6 +284,16 @@ Spec 2 adds explicit DingTalk remember/correct/forget and policy-gated inferred 
 
 Spec 3 projects active atomic memories into evidence-backed user profiles and recalls only task-relevant profile items into a bounded `USER_MEMORY_CONTEXT` block. It is disabled by default via `user_profile_memory.enabled=false`. Run `scripts/run_user_profile_memory_gate.sh` against an isolated test database before deployment.
 
+### 销售动作卡片与提醒（Sales Action Cards）
+
+钉钉单聊内的销售任务卡片、一次性提醒、每日早/晚间 digest、卡片按钮回调（完成/推迟/取消），以及后台调度投递。**临时运营数据**：任务卡片不进入 `agent_memories` / `user_memory_profiles` / profile recall。
+
+- 默认关闭：`sales_actions.enabled=false`；后台调度器由 `sales_actions.scheduler_enabled`（默认 true，仅 enabled 时生效）控制，随 worker 启动。默认时区 `Asia/Shanghai`，digest 窗口 09:00 / 18:30。
+- 路由：Online Graph 在 guided flow 之后、普通 chat 之前识别显式动作指令；模糊时间/缺失动作 -> 澄清（不建任务）；Agent 推断的任务需用户确认（suggest）。
+- 投递幂等：`claim_due_reminders` 用 `FOR UPDATE SKIP LOCKED`（含失败重试，`max_attempts` 后 dead-letter）；digest 按 `(kind,tenant,agent,user,date)` 唯一键 + SAVEPOINT 去重；按钮回调幂等（`already_done`/`already_snoozed`）。
+- 运维只读视图：API `/agents/{id}/sales-actions`（列表/详情/提醒/投递）+ 控制台「销售任务」页（无编辑按钮）。
+- 发布门禁：`TEST_DATABASE_URL=…test… bash scripts/run_sales_action_gate.sh`（unit + 集成 + fixture eval）。详见运维手册 [`docs/runbooks/sales-actions.md`](docs/runbooks/sales-actions.md)。
+
 ## 快速开始
 
 ### 1. 启动数据库
@@ -833,6 +843,7 @@ PYTHONPATH=src pytest tests/integration/test_pilot_api.py -v
 
 | 日期 | 摘要 |
 |------|------|
+| [2026-07-10](changelog/2026-07-10.md) | **销售动作卡片与提醒（Sales Action Cards）整体交付**：钉钉单聊销售任务卡片 + 一次性提醒 + 每日早/晚 digest + 卡片按钮回调（完成/推迟/取消）+ 后台调度投递 + 只读运维 API/控制台页 + 发布门禁。新增 `sales_action_cards/reminders/deliveries/events` 四表（migration 0016）、`services/sales_actions/` 域（contracts/time_parser/detector/repository/service/card_renderer/scheduler）、Online Graph 销售动作节点（路由优先级在 guided flow 后、普通 chat 前；澄清 partial 经 checkpoint 跨轮合并）、`POST /integrations/dingtalk/sales-actions/callback` 回调、`/agents/{id}/sales-actions` 运维 API、「销售任务」只读页。幂等保证：`FOR UPDATE SKIP LOCKED` 认领（含失败重试 + dead-letter）、digest 唯一键 + SAVEPOINT、按钮回调 `already_*`、终态翻转 `FOR UPDATE` 防并发。默认关闭 `sales_actions.enabled=false`。运维手册 [`docs/runbooks/sales-actions.md`](docs/runbooks/sales-actions.md)，门禁 `scripts/run_sales_action_gate.sh`。 |
 | [2026-07-09](changelog/2026-07-09.md) | **CI/CD 分支部署策略：main 重建全部、dev 仅本机**：dev 不再碰 test（`deploy-targets-dev.json` 删 test 条目 + `deploy-dev.yml` 删 build deploy image 步骤），dev push 只重建本机 prod2；main push fan-out 三台（prod3+prod2+test）仅应用容器 force-recreate（postgres/neo4j 不动，由 `FORCE_RECREATE_APP` + `config --services` 黑名单过滤 infra 实现）；修 `ci-fanout.sh` 把 dev 部署代码错拉成 main 的硬编码 bug（按 `DEPLOY_BRANCH` 拉对应分支）。⚠️ main 落后 dev 50 commit，push main 前建议先 merge dev→main。详见 changelog。 |
 | [2026-07-09](changelog/2026-07-09.md) | **钉钉语音/图片支持流式互动卡片**：此前仅文字走流式卡片，语音/图片被硬门禁（`stream_client.py` `message_type == "text"`）挡在非流式路径。修复：① 抽出 `_should_stream` 门禁，受支持媒体类型在 `media_enabled` 时也进流式；② `_handle_streaming` 内接 `DingTalkMediaAdapter.to_agent_text`，先开「正在识别…」过渡卡片再 ASR/视觉转写，转写文本喂给同一流式图；③ `handle_dingtalk_stream_via_graph` 加可选 `card_id` 复用过渡卡（单卡 UX，文字路径零回归）；④ 修 CardSender 不可用兜底透传真实 `message_type`+媒体字段；⑤ 识别失败在原卡 finalize 友好提示。新增 12 个单测（门禁/转写/失败兜底/复用卡），dingtalk 111 + 相关 41 单测全过。遗留独立隐患：生成节点 `generate_node` 走非流式 `generate()`，token 级打字机可能未真正逐字（`graph_stream.py` 满屏调试日志印证），见 changelog。 |
 | [2026-07-09](changelog/2026-07-09.md) | **记忆评估与生产运维套件（Spec 4 整体交付）**：统一多轮场景 schema（42 场景）+ 版本化报告 + 确定性指标四组（隔离/安全 fail-closed、turn/topic、long-term-memory、recall-profile）+ 确定性 model double 驱动真实 Online Graph + 七个 CLI 模式（unit-memory / graph-multiturn / model-multiturn / dingtalk-staging / compare / online-sample / promote-trace）+ fail-closed 发布门禁 + 在线采样（非阻塞）+ promote-trace 反馈闭环 + 两张新表（`memory_eval_traces` / `promoted_regressions`）。新增运维入口 `scripts/run_memory_eval_gate.sh` 与操作手册 [`docs/runbooks/memory-evaluation.md`](docs/runbooks/memory-evaluation.md)；**不改动在线 Graph 请求路径**。 |

@@ -41,3 +41,8 @@
 - **教训**:用户报「生成的完整回答没渲染 markdown」,我因 CLAUDE.md 反复强调「钉钉 Stream 是生产主入口」而默认 X=钉钉端回答,直接派了钉钉渲染链路子代理;实际 X=**deepeval 生成的 HTML 报告**里的回答字段。停掉重派,浪费一轮算力。① 现象描述的主语(「X 没渲染」「X 报错」「X 慢」)在本项目常可指多个候选产物:钉钉端回答 / eval HTML 报告 / eval MD·CSV 报告 / 前端图调试页 / API 响应体——**最大流量入口 ≠ 用户实际遇到的那个**。② CLAUDE.md「钉钉是主入口」的语境适用于「**验证部署/修复**」(查 stream 日志确认全机健康),**不适用于「用户报告某处现象」**——后者要先问清具体产物。③ 线索:用户前一轮在聊 deepeval 链路,「生成的回答」更可能指 eval 产物;但别靠猜,一句话澄清成本远低于一个错方向子代理。
 - **检查**:用户报「某处没渲染/报错/慢」且主语可指多个产物 → 先一句话列出候选问清是哪个,再派子代理/动手。
 - **相关**:#31
+
+## #47 worktree 合回 main 时 main 已被并发推进:worktree 内 merge main 解冲突再 FF;Edit 对本仓 CJK 块常失配
+- **教训**:① 在 worktree 隔离干活期间,**并发会话会把 main 推进**(本次 main 从 15e04e9 推到 6a8f0ee,加了 scenario-coach 修复 + LLM 参数 docs)。合回时不是 FF,要在 **worktree 内 `git merge main`** 把冲突隔离解决(本次冲突在 README 更新日志表 + changelog/2026-07-10.md,双方各追加同日条目,两侧都保留),commit merge 后 `git -C 主目录 merge --ff-only <worktree分支>` 回 main。② FF 前主目录若有**worktree 现已 tracked 的未跟踪文件**(如进 worktree 前在主目录建的 spec/plan 草稿),FF 会报「untracked would be overwritten」--先 `diff` 确认与提交版字节一致再删,FF 会以 tracked 重建。③ `tasks/plan-stream-websockets-fix.md` 这类他人未跟踪文件别碰,分支不 track 它就不挡 FF。④ **Edit 工具对本仓 CJK 代码块常失配**(不可见码点差异,`old_string` 怎么贴都「not found」):大块 CJK 改动别用 Edit,改用 **Write 整文件**(测试)或 **Python 按 ASCII 锚点 splice**(如 `# Step 5:` 起、`async def _next(` 止),Python 读真字节不靠匹配。⑤ subagent 派发可能撞账户 5h 用量上限(429)中途死,有 plan 全代码的任务可**降级为本会话内联执行**(转录+测试),不必卡死等恢复。
+- **检查**:worktree 合回前先 `git log 15e04e9..main` 看主目录是否被推进;是 -> worktree 内 merge main 解冲突 -> 主目录 FF。主目录未跟踪文件挡 FF -> diff 确认一致再删。CJK 块 Edit 失配 -> Write 整文件 / Python ASCII 锚点 splice。子代理 429 -> plan 有全代码就内联执行。
+- **相关**:#38 #6 #30

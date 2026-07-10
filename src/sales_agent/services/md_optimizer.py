@@ -17,6 +17,8 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
+from sales_agent.llm.call_params import get_call_params
+
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -88,8 +90,8 @@ class MDOptimizer:
     ) -> None:
         """Args:
             chat_model: LLM client that supports
-                ``chat_model.chat(messages, temperature=..., max_tokens=...)``
-                returning an OpenAI-compatible response.
+                ``await chat_model.generate(messages, temperature=..., max_tokens=...)``
+                returning the assistant content string.
             db, tenant_id, agent_id:
                 可选 DB 上下文；非空且 tenant_id 有值时走 ``PromptRegistry`` 三级
                 回退解析 ``md_optimize_system`` / ``md_optimize_user``，运营后台编辑
@@ -143,20 +145,15 @@ class MDOptimizer:
         ]
 
         try:
-            response = await self.chat_model.chat(
+            p = get_call_params("md_optimizer")
+            content = await self.chat_model.generate(
                 messages=messages,
-                temperature=0.3,
-                max_tokens=4096,
+                temperature=p.temperature,
+                max_tokens=p.max_tokens,
             )
         except Exception as e:
             logger.error("MD optimization LLM call failed: %s", e)
             raise RuntimeError(f"MD 优化失败：{e}") from e
-
-        content = getattr(response, "content", None)
-        if not content:
-            # 尝试 OpenAI 格式
-            if hasattr(response, "choices") and response.choices:
-                content = response.choices[0].message.content
 
         if not content or not content.strip():
             raise ValueError("LLM 返回为空，MD 优化失败")

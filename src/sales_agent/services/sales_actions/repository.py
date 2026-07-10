@@ -910,7 +910,6 @@ class SalesActionRepository:
         existing = await self.db.execute(
             select(SalesActionReminder).where(
                 SalesActionReminder.idempotency_key == key,
-                SalesActionReminder.status.in_(["scheduled", "sending"]),
             )
         )
         if existing.scalar_one_or_none():

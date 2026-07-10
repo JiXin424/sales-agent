@@ -41,7 +41,7 @@ class SalesActionCard(TimestampMixin, Base):
 
     # ── Plan → Act → Observe → Replan (pursuit-loop) ──
     success_criteria: Mapped[str | None] = mapped_column(Text, nullable=True)
-    pursuit_goal: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    pursuit_goal: Mapped[str | None] = mapped_column(Text, nullable=True)
     outcome_tag: Mapped[str | None] = mapped_column(Text, nullable=True)
     outcome_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     outcome_met_signal: Mapped[bool | None] = mapped_column(nullable=True)

@@ -972,10 +972,14 @@ async def sales_action_observe_node(
 ) -> dict[str, Any]:
     """Observe: capture an action's outcome from the user's reply.
 
-    Dual entry:
-    1. Inline -- action just completed and the user gave a result in the same message.
-    2. Delayed -- pending_observe_action_id was set on a prior turn; this turn's message
-       is the user's reply to the observe prompt.
+    Entry: ``pending_observe_action_id`` was set on a prior turn (after an action
+    was completed without an inline outcome); this turn's message is the user's
+    reply to the observe prompt, which is classified into an outcome_tag.
+
+    Note: the spec also describes an "inline" entry (user gives outcome in the
+    same message as ``complete``). That path is not yet implemented — for v1
+    the user always sends the outcome on the *next* turn. This node always runs
+    in its own turn, never inline in the same turn as the command node.
     """
     ctx = _unpack_context(config) or {}
     chat_model = ctx.get("chat_model")

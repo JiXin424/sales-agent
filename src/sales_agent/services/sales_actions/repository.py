@@ -184,6 +184,8 @@ class SalesActionRepository:
         source_kind: str,
         context_snapshot: dict,
         agent_advice: str,
+        success_criteria: str | None = None,
+        pursuit_goal: str | None = None,
     ) -> SalesActionCard:
         """创建一张 pending 动作卡片 + 一条 one_time 提醒。
 
@@ -208,6 +210,8 @@ class SalesActionRepository:
             status="pending",
             context_snapshot_json=json.dumps(context_snapshot or {}, ensure_ascii=False),
             agent_advice=agent_advice or "",
+            success_criteria=success_criteria,
+            pursuit_goal=pursuit_goal,
         )
         self.db.add(card)
         await self.db.flush()
@@ -725,6 +729,206 @@ class SalesActionRepository:
                 )
             )
         ).scalar_one_or_none()
+
+    async def get_card(
+        self,
+        scope: SalesActionScope,
+        action_id: str,
+    ) -> SalesActionCard | None:
+        """Get a single action card by scoped ID (read-only)."""
+        return await self._get_scoped_card(scope, action_id)
+
+    # ------------------------------------------------------------------
+    # cancel_by_pursuit_goal (Task 5 — Replan)
+    # ------------------------------------------------------------------
+
+    async def cancel_by_pursuit_goal(
+        self,
+        scope: SalesActionScope,
+        pursuit_goal: str,
+        *,
+        exclude_action_id: str | None = None,
+        event_id: str | None = None,
+    ) -> list[str]:
+        """Cancel all pending actions with matching pursuit_goal (excluding the given one).
+
+        Returns list of cancelled action IDs.
+        """
+        stmt = (
+            select(SalesActionCard)
+            .where(
+                SalesActionCard.tenant_id == scope.tenant_id,
+                SalesActionCard.agent_id == scope.agent_id,
+                SalesActionCard.user_id == scope.user_id,
+                SalesActionCard.pursuit_goal == pursuit_goal,
+                SalesActionCard.status == "pending",
+            )
+        )
+        if exclude_action_id:
+            stmt = stmt.where(SalesActionCard.id != exclude_action_id)
+
+        result = await self.db.execute(stmt)
+        cards = result.scalars().all()
+
+        cancelled_ids = []
+        for card in cards:
+            card.status = "cancelled"
+            await self._cancel_active_reminders(scope, card.id)
+            self.db.add(self._event(
+                scope, action_id=card.id,
+                event_type="action_cancelled",
+                payload={"event_id": event_id, "reason": "superseded_by_replan", "pursuit_goal": pursuit_goal} if event_id else {"reason": "superseded_by_replan", "pursuit_goal": pursuit_goal},
+            ))
+            cancelled_ids.append(card.id)
+
+        await self.db.flush()
+        return cancelled_ids
+
+    # ------------------------------------------------------------------
+    # write_customer_memory (Task 5 — Replan)
+    # ------------------------------------------------------------------
+
+    async def write_customer_memory(
+        self,
+        scope: SalesActionScope,
+        *,
+        customer_scope: str,
+        fact: str,
+        memory_type: str = "sales_pattern",
+    ) -> str | None:
+        """Write or update a customer-scoped atomic memory fact. Idempotent via normalized_key.
+
+        Returns the memory ID or None on duplicate.
+        """
+        import hashlib, json
+        from sales_agent.models.atomic_memory import AtomicMemory
+
+        normalized_key = hashlib.blake2b(
+            f"{scope.tenant_id}:{customer_scope}:{fact[:80]}".encode(), digest_size=16
+        ).hexdigest()
+
+        # Check existing (idempotent)
+        existing = await self.db.execute(
+            select(AtomicMemory).where(AtomicMemory.normalized_key == normalized_key)
+        )
+        if existing.scalar_one_or_none():
+            return None
+
+        mem = AtomicMemory(
+            tenant_id=scope.tenant_id,
+            agent_id=scope.agent_id,
+            subject_type="user",
+            subject_id=scope.user_id,
+            memory_type=memory_type,
+            status="active",
+            source_kind="inferred_user",
+            source_conversation_id="",
+            source_message_ids_json="[]",
+            content_json=json.dumps({"fact": fact, "customer_scope": customer_scope}, ensure_ascii=False),
+            normalized_key=normalized_key,
+            search_text=fact,
+            confidence_band="corroborated",
+            customer_scope=customer_scope,
+        )
+        self.db.add(mem)
+        await self.db.flush()
+        return mem.id
+
+    # ------------------------------------------------------------------
+    # observe
+    # ------------------------------------------------------------------
+
+    async def write_outcome(
+        self,
+        scope: SalesActionScope,
+        action_id: str,
+        *,
+        outcome_tag: str,
+        outcome_note: str,
+        met_signal: bool,
+        event_id: str | None = None,
+    ) -> ActionStateResult:
+        """Write Observe result to a card. Idempotent: no-op if already written."""
+        card = await self._get_scoped_card(scope, action_id, for_update=True)
+        if card is None:
+            return ActionStateResult(action_id=action_id, status="not_found", reason_code="action_not_found")
+        if card.outcome_tag is not None:
+            return ActionStateResult(
+                action_id=action_id, status="already_observed", reason_code="outcome_already_captured"
+            )
+        card.outcome_tag = outcome_tag
+        card.outcome_note = outcome_note
+        card.outcome_met_signal = met_signal
+        card.outcome_captured_at = datetime.now(timezone.utc)
+        self.db.add(self._event(
+            scope, action_id=action_id,
+            event_type="action_observed",
+            payload={"event_id": event_id, "outcome_tag": outcome_tag, "met_signal": met_signal} if event_id else {"outcome_tag": outcome_tag},
+        ))
+        await self.db.flush()
+        return ActionStateResult(action_id=action_id, status="observed", reason_code="outcome_captured")
+
+    # ------------------------------------------------------------------
+    # observe prompt reminder creation (Task 7 — Scheduler)
+    # ------------------------------------------------------------------
+
+    async def find_overdue_pursuit_actions(
+        self, *, now: datetime, limit: int = 50
+    ) -> list[SalesActionCard]:
+        """Find pursuit actions past their scheduled_at that have no outcome yet.
+
+        Pursuit actions are identified by a non-null ``success_criteria``.
+        Only ``pending`` actions that are past their deadline and haven't been
+        observed (``outcome_tag IS NULL``) are returned, ordered by oldest first.
+        """
+        stmt = (
+            select(SalesActionCard)
+            .where(
+                SalesActionCard.status == "pending",
+                SalesActionCard.scheduled_at < now,
+                SalesActionCard.success_criteria.isnot(None),  # pursuit action
+                SalesActionCard.outcome_tag.is_(None),          # not yet observed
+            )
+            .order_by(SalesActionCard.scheduled_at.asc())
+            .limit(limit)
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def create_observe_prompt_reminder(
+        self,
+        scope: SalesActionScope,
+        action_id: str,
+        now: datetime,
+    ) -> str | None:
+        """Create a one-time observe_prompt reminder. Idempotent.
+
+        One ``observe_prompt`` per action — idempotency prevents duplicates
+        across concurrent scheduler runs.
+        """
+        key = f"observe:{scope.tenant_id}:{scope.agent_id}:{scope.user_id}:{action_id}"
+        existing = await self.db.execute(
+            select(SalesActionReminder).where(
+                SalesActionReminder.idempotency_key == key,
+            )
+        )
+        if existing.scalar_one_or_none():
+            return None
+
+        reminder = SalesActionReminder(
+            action_id=action_id,
+            tenant_id=scope.tenant_id,
+            agent_id=scope.agent_id,
+            user_id=scope.user_id,
+            remind_at=now,  # immediate
+            reminder_type="observe_prompt",
+            status="scheduled",
+            attempts=0,
+            idempotency_key=key,
+        )
+        self.db.add(reminder)
+        await self.db.flush()
+        return reminder.id
 
     async def get_card_for_reminder(
         self, reminder: SalesActionReminder

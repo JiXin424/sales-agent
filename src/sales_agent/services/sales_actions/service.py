@@ -206,6 +206,8 @@ class SalesActionService:
             source_kind="explicit_user",
             context_snapshot={"message": message},
             agent_advice="",
+            success_criteria=decision.success_criteria,
+            pursuit_goal=decision.pursuit_goal,
         )
         self._discard_pending(scope, conversation_id)
         return SalesActionOperationResult(
@@ -445,6 +447,8 @@ class SalesActionService:
             missing_fields=[f for f in new.missing_fields if f not in old.missing_fields] or old.missing_fields,
             needs_clarification=new.needs_clarification,
             clarification_question=new.clarification_question,
+            success_criteria=old.success_criteria or new.success_criteria,
+            pursuit_goal=old.pursuit_goal or new.pursuit_goal,
         )
 
     # ------------------------------------------------------------------

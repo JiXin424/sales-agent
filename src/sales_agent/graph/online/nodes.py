@@ -100,7 +100,7 @@ from sales_agent.services.sales_actions import (
     SalesActionService,
     detect_fast_action_intent,
 )
-from sales_agent.services.sales_actions.parser import parse_sales_action_request
+from sales_agent.services.sales_actions.parser import parse_observe_outcome, parse_sales_action_request
 from sales_agent.services.sales_actions.time_parser import validate_action_extraction
 
 logger = logging.getLogger(__name__)
@@ -173,7 +173,10 @@ def normalize_turn_node(state: OnlineConversationState) -> dict[str, Any]:
        sales-action node (Task 4).
     9. **Explicit sales-action command** — ``detect_fast_action_intent`` matches
        (create/complete/cancel/snooze/list) (Task 4).
-    10. **Chat** — default.
+    10. **Pending observe** — ``pursuit_loop_enabled`` & ``pending_observe_action_id``
+        is set from a prior turn where an action was completed without outcome.
+        Routes to :func:`sales_action_observe_node` (Task 4).
+    11. **Chat** — default.
 
     Reset must not fire on a duplicate — a redelivered reset event is a
     no-op, not a second state clear.
@@ -215,6 +218,10 @@ def normalize_turn_node(state: OnlineConversationState) -> dict[str, Any]:
     elif state.get("sales_actions_enabled") and detect_fast_action_intent(message) != "none":
         # Explicit sales-action command (create/complete/cancel/snooze/list).
         flow_action = "sales_action"
+    elif state.get("pursuit_loop_enabled") and state.get("pending_observe_action_id"):
+        # A prior turn completed an action without outcome; route this turn to
+        # observe so the user's reply is classified as an outcome.
+        flow_action = "sales_action_observe"
     else:
         flow_action = "chat"
 
@@ -866,6 +873,14 @@ async def sales_action_command_node(
     # routes back here and can merge the user's follow-up answer.
     pending = result.reason_code if result.operation == "clarify" else None
     pending_partial = result.pending_partial if result.operation == "clarify" else None
+
+    # When completing an action with pursuit_loop_enabled, set
+    # pending_observe_action_id so the next user message routes to
+    # sales_action_observe_node to capture the outcome.
+    observe_pending: str | None = None
+    if result.operation == "complete" and state.get("pursuit_loop_enabled") and result.action_id:
+        observe_pending = result.action_id
+
     return {
         "answer_dict": {
             "summary": result.response_text,
@@ -881,6 +896,7 @@ async def sales_action_command_node(
         "sales_action_reason_code": result.reason_code,
         "sales_action_pending_clarification": pending,
         "sales_action_pending_partial": pending_partial,
+        "pending_observe_action_id": observe_pending,
         "last_event_id": state.get("event_id"),
     }
 
@@ -923,7 +939,11 @@ async def sales_action_suggestion_node(
     if decision.action != "suggest" or not decision.title:
         return {}
 
-    prompt = f"建议下一步：{decision.title}。需要我帮你设个提醒吗？"
+    prompt_parts = [f"建议下一步：{decision.title}"]
+    if decision.success_criteria:
+        prompt_parts.append(f"成功信号：{decision.success_criteria}")
+    prompt_parts.append("需要我帮你设个提醒吗？")
+    prompt = "\n".join(prompt_parts)
     answer = dict(state.get("answer_dict") or {})
     sections = list(answer.get("sections") or [])
     sections.append({"title": "下一步建议", "content": prompt})
@@ -936,8 +956,266 @@ async def sales_action_suggestion_node(
             "customer_name": decision.customer_name,
             "scheduled_at": decision.scheduled_at.isoformat() if decision.scheduled_at else None,
             "reason_code": decision.reason_code,
+            "success_criteria": decision.success_criteria,
+            "pursuit_goal": decision.pursuit_goal,
         },
     }
+
+
+# =============================================================
+# sales_action_observe_node (Task 4)
+# =============================================================
+
+async def sales_action_observe_node(
+    state: OnlineConversationState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """Observe: capture an action's outcome from the user's reply.
+
+    Entry: ``pending_observe_action_id`` was set on a prior turn (after an action
+    was completed without an inline outcome); this turn's message is the user's
+    reply to the observe prompt, which is classified into an outcome_tag.
+
+    Note: the spec also describes an "inline" entry (user gives outcome in the
+    same message as ``complete``). That path is not yet implemented — for v1
+    the user always sends the outcome on the *next* turn. This node always runs
+    in its own turn, never inline in the same turn as the command node.
+    """
+    ctx = _unpack_context(config) or {}
+    chat_model = ctx.get("chat_model")
+    if chat_model is None:
+        return {}
+
+    # Determine which action to observe
+    action_id = state.get("sales_action_id") or state.get("pending_observe_action_id")
+    if not action_id:
+        return {}
+    message = state.get("message", "").strip()
+    if not message:
+        return {}
+
+    db = ctx.get("db")
+    repo = SalesActionRepository(db)
+    scope = SalesActionScope(
+        tenant_id=state.get("tenant_id", ""),
+        agent_id=state.get("agent_id", ""),
+        user_id=state.get("user_id", ""),
+        channel=state.get("channel", "dingtalk"),
+        dingtalk_user_id=state.get("session_user_id"),
+    )
+
+    # Load the card to get its success_criteria
+    card = await repo.get_card(scope, action_id)
+    if card is None or not card.success_criteria:
+        # No success_criteria -> not a pursuit action; skip observe
+        return {"pending_observe_action_id": None}
+
+    # Parse outcome
+    extraction = await parse_observe_outcome(
+        reply=message,
+        success_criteria=card.success_criteria,
+        chat_model=chat_model,
+    )
+
+    # Write to DB
+    result = await repo.write_outcome(
+        scope, action_id,
+        outcome_tag=extraction.outcome_tag,
+        outcome_note=extraction.outcome_note,
+        met_signal=extraction.met_signal,
+        event_id=state.get("event_id"),
+    )
+
+    return {
+        "sales_action_id": action_id,
+        "pending_observe_action_id": None,
+        "sales_action_operation": "observe",
+        "sales_action_status": result.status,
+        "sales_action_reason_code": result.reason_code,
+    }
+
+
+# =============================================================
+# sales_action_replan_node (Task 5)
+# =============================================================
+
+def _build_scope(state: OnlineConversationState) -> SalesActionScope:
+    """Build a SalesActionScope from graph state identity fields."""
+    return SalesActionScope(
+        tenant_id=state.get("tenant_id", ""),
+        agent_id=state.get("agent_id", ""),
+        user_id=state.get("user_id", ""),
+        channel=state.get("channel", "dingtalk"),
+        dingtalk_user_id=state.get("session_user_id"),
+    )
+
+
+REPLAN_PROMPT = """
+你是一个销售策略修正器。根据已完成销售动作的结果，更新商机判断并给出受约束的恢复动作。
+
+成功动作 = 动作标题，成功信号 = 期望结果，实际结果 = 用户汇报。
+
+规则：
+1. outcome_tag="achieved" → 轻收尾，可选建议下一阶段
+2. outcome_tag="new_obstacle" → 把障碍写进客户事实；下一动作必须尊重新约束（如"预算冻结"→不做花钱/催款动作）
+3. outcome_tag="partial" → 总结进展，建议推进下一步
+4. outcome_tag="no_response" → 标记缺乏反馈，建议轻量检查
+
+返回 JSON:
+{
+  "memory_fact": "可写入的客户事实，或 null",
+  "cancel_siblings": true/false,
+  "next_action": {
+    "title": "下一动作标题",
+    "action_type": "...",
+    "success_criteria_new": "新的成功信号",
+    "suggested_time": "建议时间或 null",
+    "rationale": "为什么会提这个动作"
+  } | null,
+  "message": "给用户的诊断+建议文本"
+}
+"""
+
+
+async def sales_action_replan_node(
+    state: OnlineConversationState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """Replan: given an observed outcome, update customer knowledge and suggest the next constrained action.
+
+    Dual behavior:
+    - ``outcome_tag == "achieved"`` → light wrap-up message; no memory/cancel/suggest.
+    - ``outcome_tag in {partial, new_obstacle, no_response}`` → full replan:
+      write customer memory fact, cancel sibling actions matching pursuit_goal,
+      suggest the next constrained action via LLM.
+
+    The suggestion is returned for user confirmation — v1 does NOT auto-create cards.
+    """
+    if not state.get("pursuit_loop_enabled"):
+        return {}
+
+    ctx = _unpack_context(config) or {}
+    chat_model = ctx.get("chat_model")
+    db = ctx.get("db")
+    if chat_model is None or db is None:
+        return {}
+
+    action_id = state.get("sales_action_id")
+    if not action_id:
+        return {}
+
+    repo = SalesActionRepository(db)
+    scope = _build_scope(state)
+    card = await repo.get_card(scope, action_id)
+    if card is None or card.outcome_tag is None:
+        return {}  # no outcome -> nothing to replan
+
+    # ── achieved: light wrap-up ──
+    if card.outcome_tag == "achieved":
+        msg = f"恭喜达成「{card.title}」。"
+        if card.success_criteria:
+            msg += f" 成功信号「{card.success_criteria}」已命中。"
+        return {
+            "replan_suggestion": None,
+            "replan_cancelled_ids": [],
+            "response_kind": "chat",
+            "answer_dict": {"summary": msg, "sections": []},
+        }
+
+    # ── partial / new_obstacle / no_response: full replan ──
+    outcome_info = f"outcome_tag={card.outcome_tag}, outcome_note={card.outcome_note}"
+    customer_memories = await _load_customer_memories(db, scope, card.customer_name)
+
+    messages = [
+        {"role": "system", "content": REPLAN_PROMPT},
+        {"role": "user", "content": json.dumps({
+            "action_title": card.title,
+            "success_criteria": card.success_criteria or "",
+            "pursuit_goal": card.pursuit_goal or "",
+            "customer_name": card.customer_name or "",
+            "outcome": {"tag": card.outcome_tag, "note": card.outcome_note},
+            "customer_memories": customer_memories,
+        }, ensure_ascii=False)},
+    ]
+
+    try:
+        raw = await chat_model.generate(
+            messages=messages, response_format={"type": "json_object"}, max_tokens=800, temperature=0.0
+        )
+        # Parse JSON from LLM output (may be fenced in ```json … ```)
+        text = raw.strip()
+        import re
+        fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
+        if fenced:
+            text = fenced.group(1)
+        plan = json.loads(text)
+    except Exception:
+        plan = {"message": f"基于结果'{outcome_info}'，建议下一个推进动作。", "next_action": None, "memory_fact": None, "cancel_siblings": False}
+
+    # ── Write customer memory ──
+    if plan.get("memory_fact") and card.customer_name:
+        await repo.write_customer_memory(
+            scope, customer_scope=card.customer_name, fact=plan["memory_fact"]
+        )
+
+    # ── Cancel sibling actions ──
+    cancelled = []
+    if plan.get("cancel_siblings") and card.pursuit_goal:
+        cancelled = await repo.cancel_by_pursuit_goal(
+            scope, card.pursuit_goal, exclude_action_id=action_id, event_id=state.get("event_id")
+        )
+
+    # ── Build response ──
+    next_action = plan.get("next_action")
+    suggestion = None
+    if next_action and next_action.get("title"):
+        suggestion = {
+            "title": next_action["title"],
+            "action_type": next_action.get("action_type", "other"),
+            "success_criteria": next_action.get("success_criteria_new", ""),
+            "pursuit_goal": card.pursuit_goal,
+            "customer_name": card.customer_name,
+            "suggested_time": next_action.get("suggested_time"),
+            "rationale": next_action.get("rationale", ""),
+        }
+
+    result_text = plan.get("message", "已更新商机判断，建议下一步。")
+    if suggestion:
+        result_text += f"\n\n建议下一步：{suggestion['title']}。需要我帮你设个提醒吗？"
+
+    return {
+        "replan_suggestion": suggestion,
+        "replan_cancelled_ids": cancelled,
+        "suggested_sales_action": suggestion,
+        "response_kind": "chat",
+        "answer_dict": {"summary": result_text, "sections": []},
+    }
+
+
+async def _load_customer_memories(db, scope, customer_name: str | None) -> list[str]:
+    """Load customer-scoped memory facts for the replan context."""
+    if not customer_name:
+        return []
+    from sqlalchemy import select
+    from sales_agent.models.atomic_memory import AtomicMemory
+    result = await db.execute(
+        select(AtomicMemory).where(
+            AtomicMemory.tenant_id == scope.tenant_id,
+            AtomicMemory.agent_id == scope.agent_id,
+            AtomicMemory.subject_id == scope.user_id,
+            AtomicMemory.customer_scope == customer_name,
+            AtomicMemory.status == "active",
+        ).order_by(AtomicMemory.updated_at.desc()).limit(10)
+    )
+    import json
+    facts = []
+    for mem in result.scalars():
+        try:
+            data = json.loads(mem.content_json)
+            facts.append(data.get("fact", mem.search_text))
+        except Exception:
+            facts.append(mem.search_text)
+    return facts
 
 
 # =============================================================

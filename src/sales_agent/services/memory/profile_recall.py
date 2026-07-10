@@ -119,6 +119,7 @@ async def retrieve_user_memory_context(
     knowledge_policy: str | None,
     max_items: int,
     max_chars: int,
+    customer_scope: str | None = None,
 ) -> RecallResult:
     start = time.time()
     trace = RecallTrace()
@@ -139,6 +140,13 @@ async def retrieve_user_memory_context(
         memory_repo = AtomicMemoryRepository(db)
         records = await memory_repo.list_active_memories(scope)
         filtered = [record for record in records if record.memory_type in eligible_types]
+        # Include customer-scoped facts when available
+        # WHERE ... AND (customer_scope = :customer_scope OR customer_scope IS NULL)
+        if customer_scope is not None:
+            filtered = [
+                record for record in filtered
+                if record.customer_scope is None or record.customer_scope == customer_scope
+            ]
         trace.candidate_count = len(filtered)
         selected = rank_recall_items(filtered, standalone_query=standalone_query, max_items=max_items)
         context_text = format_user_memory_context(selected, max_items=max_items, max_chars=max_chars)

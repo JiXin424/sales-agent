@@ -39,10 +39,19 @@ class SalesActionCard(TimestampMixin, Base):
     context_snapshot_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     agent_advice: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
+    # ── Plan → Act → Observe → Replan (pursuit-loop) ──
+    success_criteria: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pursuit_goal: Mapped[str | None] = mapped_column(Text, nullable=True)
+    outcome_tag: Mapped[str | None] = mapped_column(Text, nullable=True)
+    outcome_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    outcome_met_signal: Mapped[bool | None] = mapped_column(nullable=True)
+    outcome_captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     __table_args__ = (
         Index("ix_sales_action_cards_scope_status", "tenant_id", "agent_id", "user_id", "status"),
         Index("ix_sales_action_cards_scheduled", "status", "scheduled_at"),
         Index("ix_sales_action_cards_source_event", "tenant_id", "source_event_id"),
+        Index("ix_sales_action_cards_pursuit_goal", "tenant_id", "pursuit_goal", "status"),
     )
 
 

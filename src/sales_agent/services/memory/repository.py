@@ -82,6 +82,7 @@ class AtomicMemoryRepository:
             observed_at=row.observed_at,
             last_confirmed_at=row.last_confirmed_at,
             expires_at=row.expires_at,
+            customer_scope=row.customer_scope,
         )
 
     async def _audit(

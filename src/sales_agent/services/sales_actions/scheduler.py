@@ -188,6 +188,32 @@ async def run_sales_action_scheduler_once(
 
         await db.commit()
 
+    # Pass 1.5 — Create observe_prompt reminders for overdue pursuit actions.
+    # Only runs when pursuit_loop_enabled so toggling the feature off stops ALL
+    # observe-prompts — even for leftover pursuit cards from a prior enablement window.
+    # Actions with success_criteria (pursuit actions) that are past their
+    # scheduled_at and still lack an outcome_tag need an observe_prompt so the
+    # user gets asked for results. Own transaction so failures never roll back
+    # Pass 1 deliveries.
+    if cfg.pursuit_loop_enabled:
+        async with session_factory() as db:
+            repo = SalesActionRepository(db)
+            overdue = await repo.find_overdue_pursuit_actions(now=now, limit=50)
+            for card in overdue:
+                if card.outcome_tag is not None:
+                    continue  # already observed (safety check)
+                await repo.create_observe_prompt_reminder(
+                    scope=SalesActionScope(
+                        tenant_id=card.tenant_id,
+                        agent_id=card.agent_id,
+                        user_id=card.user_id,
+                        channel=card.channel,
+                    ),
+                    action_id=card.id,
+                    now=now,
+                )
+            await db.commit()
+
     # Pass 2 — idempotent digest creation in its OWN transaction. Each insert
     # is wrapped in a SAVEPOINT (see ``_create_due_digests``) so a unique-
     # constraint collision — a concurrent worker that won the pre-check→commit
@@ -234,7 +260,16 @@ async def _deliver_single(repo: SalesActionRepository, sender, reminder) -> bool
         )
         return False
     try:
-        md = render_due_reminder(CardView.from_card(card))
+        if reminder.reminder_type == "observe_prompt":
+            md = (
+                f"📋 动作「{card.title}」已到时间。\n\n"
+                f"请回复结果：\n"
+                f"• 约到交流 / 有回复但没推进\n"
+                f"• 出现新异议\n"
+                f"• 没回复"
+            )
+        else:
+            md = render_due_reminder(CardView.from_card(card))
         out_track_id = await sender.send_markdown_card(
             scope.dingtalk_user_id, card.title, md
         )

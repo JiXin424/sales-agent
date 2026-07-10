@@ -67,6 +67,21 @@ class SalesActionExtraction(BaseModel):
     missing_fields: list[str] = Field(default_factory=list)
     needs_clarification: bool = False
     clarification_question: str | None = None
+    success_criteria: str | None = None
+    pursuit_goal: str | None = None
+
+
+OUTCOME_TAGS: frozenset[str] = frozenset({"achieved", "partial", "new_obstacle", "no_response"})
+
+
+class OutcomeExtraction(BaseModel):
+    """Observe LLM result: structured outcome from user's reply."""
+
+    outcome_tag: Literal["achieved", "partial", "new_obstacle", "no_response"]
+    outcome_note: str = ""
+    met_signal: bool = False
+    confidence: float = Field(ge=0, le=1)
+    parse_failed: bool = False
 
 
 @dataclass(frozen=True)
@@ -85,3 +100,5 @@ class SalesActionDecision:
     timezone: str = "Asia/Shanghai"
     response_text: str = ""
     reason_code: str = ""
+    success_criteria: str | None = None
+    pursuit_goal: str | None = None

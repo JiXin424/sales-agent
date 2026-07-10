@@ -36,6 +36,8 @@ class AtomicMemory(TimestampMixin, Base):
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_datetime)
     last_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Pursuit-loop: customer scope tag for per-customer facts
+    customer_scope: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         Index(

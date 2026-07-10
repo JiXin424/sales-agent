@@ -142,6 +142,7 @@ class WebSearchConfig(BaseModel):
     enabled: bool = True
     api_key: str = ""
     top_n: int = 5
+    max_gap_entities: int = 2  # 部分命中时，每轮最多 web 补全的未命中实体数
 
 
 class Neo4jConfig(BaseModel):
@@ -394,6 +395,9 @@ class Settings(BaseModel):
         web_search_top_n = os.getenv("BOCHA_TOP_N", "")
         if web_search_top_n:
             raw.setdefault("web_search", {})["top_n"] = int(web_search_top_n)
+        web_search_max_gap = os.getenv("BOCHA_MAX_GAP_ENTITIES", "")
+        if web_search_max_gap:
+            raw.setdefault("web_search", {})["max_gap_entities"] = int(web_search_max_gap)
 
         # 环境变量覆盖 guided_flows 配置
         guided_flows_enabled = os.getenv("GUIDED_FLOWS_ENABLED")

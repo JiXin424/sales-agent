@@ -55,7 +55,6 @@ class ReleaseService:
             retrieval_profile_id=release.retrieval_profile_id,
             router_profile_id=release.router_profile_id,
             manifest_hash=release.manifest_hash,
-            prompt_set_id=release.prompt_set_id,
             model_snapshot_json=release.model_snapshot_json,
             graph_definition_version=release.graph_definition_version,
             code_revision=release.code_revision,

@@ -16,7 +16,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sales_agent.models.agent import Agent
 from sales_agent.models.agent_knowledge_scope import AgentKnowledgeScope
-from sales_agent.models.agent_prompt_set import AgentPromptSet
 from sales_agent.models.tenant import Tenant
 
 logger = logging.getLogger(__name__)
@@ -103,7 +102,6 @@ async def ensure_default_agent_for_tenant(db: AsyncSession, tenant_id: str, tena
     )
     db.add(prompt_set)
     await db.flush()
-    agent.prompt_set_id = prompt_set.id
 
     # 4. 默认知识作用域（tenant_all，兼容旧行为）
     scope = AgentKnowledgeScope(

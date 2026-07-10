@@ -12,7 +12,7 @@ from typing import Any
 
 from sales_agent.graph.guided_flow.types import FlowAdvance, FlowServices, FlowStart
 from sales_agent.services.agent_executor import execute_agent
-from sales_agent.services.prompt_resolver_helper import resolve_execution_prompts
+from sales_agent.llm.prompt_loader import get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -190,9 +190,11 @@ async def _generate_card(
     prompt_text: str | None = None
     system_prompt_text: str | None = None
     if services.db is not None:
-        prompt_text, system_prompt_text = await resolve_execution_prompts(
-            services.db, services.agent_id, services.tenant_id, flow_id,
-        )
+        try:
+            prompt_text = get_prompt("task", flow_id).template
+            system_prompt_text = get_prompt("system", "system_constraint").template
+        except Exception:
+            logger.warning("Prompt resolution failed", exc_info=True)
 
     answer = await execute_agent(
         chat_model=services.chat_model,

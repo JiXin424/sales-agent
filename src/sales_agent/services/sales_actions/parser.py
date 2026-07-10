@@ -13,7 +13,6 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from sales_agent.prompts.sales_action_extractor_prompt import SALES_ACTION_EXTRACTOR_PROMPT
 from sales_agent.services.sales_actions.contracts import (
     OUTCOME_TAGS,
     OutcomeExtraction,
@@ -50,7 +49,7 @@ def _build_messages(message: str, now: datetime, timezone: str) -> list[dict[str
         f"用户消息：{message}"
     )
     return [
-        {"role": "system", "content": SALES_ACTION_EXTRACTOR_PROMPT},
+        {"role": "system", "content": get_prompt("task", "sales_action_extractor").template},
         {"role": "user", "content": user_content},
     ]
 

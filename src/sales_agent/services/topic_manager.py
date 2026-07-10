@@ -27,10 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sales_agent.llm.call_params import get_call_params
 from sales_agent.models.conversation import ConversationMessage
 from sales_agent.models.conversation_topic import ConversationTopic
-from sales_agent.prompts.clarification_resolver_prompt import (
-    CLARIFICATION_RESOLVER_PROMPT,
-)
-from sales_agent.services.prompt_resolver_helper import resolve_router_prompt
+from sales_agent.llm.prompt_loader import get_prompt
 from sales_agent.services.structured_router_output import (
     ClarificationDecision,
     ContextDecision,
@@ -558,13 +555,7 @@ async def resolve_clarification(
     if chat_model is not None:
         try:
             # 命中 LLM 段才解析 prompt，避免无谓 DB 往返（短路命令不调 LLM）
-            system_prompt = await resolve_router_prompt(
-                db,
-                "clarification_resolver",
-                tenant_id,
-                agent_id,
-                default=CLARIFICATION_RESOLVER_PROMPT,
-            )
+            system_prompt = get_prompt("router", "clarification_resolver").template
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": trimmed},

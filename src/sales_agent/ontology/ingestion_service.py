@@ -376,16 +376,9 @@ class OntologyIngestionService:
                 "facts_pending_review": stats.facts_pending_review,
                 "conflicts_created": stats.conflicts_created,
             })
-        # 预解析 image_interpret prompt（同步 _read_content/_pdf_page_to_vision 无法 await）
-        from sales_agent.ontology.img_parser import IMAGE_INTERPRET_PROMPT
-        from sales_agent.services.prompt_resolver_helper import resolve_knowledge_prompt
-        image_prompt = await resolve_knowledge_prompt(
-            self.db,
-            "image_interpret",
-            tenant_id,
-            agent_id,
-            default=IMAGE_INTERPRET_PROMPT,
-        )
+        # 预解析 image_interpret prompt
+        from sales_agent.llm.prompt_loader import get_prompt
+        image_prompt = get_prompt("knowledge", "image_interpret").template
         content = _read_content(path, image_prompt=image_prompt)
         source_document_id = generate_id()
         now = utcnow()

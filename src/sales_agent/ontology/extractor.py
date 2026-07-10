@@ -92,28 +92,9 @@ def parse_facts_json(raw: str) -> list[FactCandidate]:
         for item in data.get("facts", data.get("relations", []))
         if str(item.get("subject_name", item.get("subject", ""))).strip()
     ]
-
-
-ENTITY_EXTRACTION_PROMPT = """你是销售知识本体抽取专家。请从文档中抽取实体。
-输出 JSON：{{"entities":[{{"type":"Product","name":"实体名","aliases":[],"properties":{{}},"confidence":0.8,"evidence":[{{"excerpt":"原文片段","locator":"位置"}}]}}]}}
-只抽取文档明确提到的信息。
-
-文档：
-{content}
-"""
-
-FACT_EXTRACTION_PROMPT = """你是销售知识本体抽取专家。请从文档和实体列表中抽取可审计事实。
-输出 JSON：{{"facts":[{{"subject_name":"主体","predicate":"关系或属性","object_name":"客体","value":null,"fact_type":"relation","confidence":0.8,"risk_level":"low","evidence":[{{"excerpt":"原文片段","locator":"位置"}}]}}]}}
-高风险事实包括价格承诺、交付承诺、资质认证、政策条款、合规边界和关键技术指标。
-重点抽取：赔付标准（差价N倍赔付）、保障条款（退票补贴/买贵退差/假一赔N）、服务承诺（N天无理由/先行赔付）、价格政策等具有法律或商业约束力的承诺。
-只抽取文档明确提到的信息。
-
-实体：
-{entities_json}
-
-文档片段：
-{content}
-"""
+# ENTITY_EXTRACTION_PROMPT / FACT_EXTRACTION_PROMPT 保留供 prompt_defaults.py 引用（旧系统兼容）
+ENTITY_EXTRACTION_PROMPT = "（内容已迁移至 config/prompts.yaml）"
+FACT_EXTRACTION_PROMPT = "（内容已迁移至 config/prompts.yaml）"
 
 
 async def _generate_with_retry(
@@ -164,7 +145,7 @@ async def extract_entities(
     db, tenant_id, agent_id :
         可选 DB 上下文，传入时走 ``PromptRegistry`` 三级回退（运营后台编辑
         ``knowledge/entity_extraction`` 生效），否则回退到模块常量
-        :data:`ENTITY_EXTRACTION_PROMPT`。单测不传仍走旧路径。
+        YAML ``knowledge/entity_extraction``。
     """
     chunks = _chunk_content(content)
     seen: set[str] = set()
@@ -174,15 +155,8 @@ async def extract_entities(
         # 分片间加延迟，降低 API 瞬时并发压力
         if len(chunks) > 1:
             await asyncio.sleep(3)
-        from sales_agent.services.prompt_resolver_helper import resolve_knowledge_prompt
-        prompt = await resolve_knowledge_prompt(
-            db,
-            "entity_extraction",
-            tenant_id,
-            agent_id,
-            default=ENTITY_EXTRACTION_PROMPT,
-            content=chunk,
-        )
+        from sales_agent.llm.prompt_loader import get_prompt as _get_prompt
+        prompt = _get_prompt("knowledge", "entity_extraction").template.format(content=chunk)
         raw = await _generate_with_retry(
             chat_model,
             messages=[{"role": "user", "content": prompt}],
@@ -243,7 +217,7 @@ async def extract_facts(
     db, tenant_id, agent_id :
         可选 DB 上下文，传入时走 ``PromptRegistry`` 三级回退（运营后台编辑
         ``knowledge/fact_extraction`` 生效），否则回退到模块常量
-        :data:`FACT_EXTRACTION_PROMPT`。单测不传仍走旧路径。
+        YAML ``knowledge/fact_extraction``。
     """
     chunks = _chunk_content(content)
     seen: set[tuple[str, str, str | None]] = set()
@@ -263,16 +237,8 @@ async def extract_facts(
                 [{"type": e.type, "name": e.name, "aliases": e.aliases, "properties": e.properties} for e in batch],
                 ensure_ascii=False,
             )
-            from sales_agent.services.prompt_resolver_helper import resolve_knowledge_prompt
-            prompt = await resolve_knowledge_prompt(
-                db,
-                "fact_extraction",
-                tenant_id,
-                agent_id,
-                default=FACT_EXTRACTION_PROMPT,
-                content=chunk,
-                entities_json=entities_json,
-            )
+            from sales_agent.llm.prompt_loader import get_prompt as _get_prompt
+            prompt = _get_prompt("knowledge", "fact_extraction").template.format(content=chunk, entities_json=entities_json)
             raw = await _generate_with_retry(
                 chat_model,
                 messages=[{"role": "user", "content": prompt}],

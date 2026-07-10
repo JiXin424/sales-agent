@@ -25,11 +25,8 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sales_agent.llm.call_params import get_call_params
+from sales_agent.llm.prompt_loader import get_prompt
 from sales_agent.models.conversation_topic import ConversationTopic
-from sales_agent.prompts.topic_restore_resolver_prompt import (
-    TOPIC_RESTORE_RESOLVER_PROMPT,
-)
-from sales_agent.services.prompt_resolver_helper import resolve_router_prompt
 from sales_agent.services.structured_router_output import (
     TopicRestoreDecision,
     parse_model_json,
@@ -194,13 +191,7 @@ async def resolve_topic_restore(
     # 5. Model-based resolution.
     if chat_model is not None and candidates:
         try:
-            system_prompt = await resolve_router_prompt(
-                db,
-                "topic_restore_resolver",
-                tenant_id,
-                agent_id,
-                default=TOPIC_RESTORE_RESOLVER_PROMPT,
-            )
+            system_prompt = get_prompt("router", "topic_restore_resolver").template
             candidate_json = json.dumps(
                 [
                     {"topic_id": c.id, "summary": c.summary}

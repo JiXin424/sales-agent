@@ -26,8 +26,10 @@ def _load_llm_call_params():
     """
     from sales_agent.core.config import get_settings
     from sales_agent.llm.call_params import load_call_params
+    from sales_agent.llm.prompt_loader import load_prompts
 
     load_call_params(get_settings().llm_call_defaults_path)
+    load_prompts(get_settings().prompts_path)
 
 
 @pytest.fixture(scope="session")

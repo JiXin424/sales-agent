@@ -7,9 +7,9 @@ import logging
 from typing import Any
 
 from sales_agent.llm.call_params import get_call_params
+from sales_agent.llm.prompt_loader import get_prompt
 from sales_agent.scenarios.loader import ScenarioRegistry, get_scenario_registry
 from sales_agent.scenarios.models import ScenarioMatchDecision
-from sales_agent.scenarios.prompt import SCENARIO_MATCHER_PROMPT
 from sales_agent.services.structured_router_output import parse_model_json
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ async def match_scenario(
         return _no_match("empty_message")
 
     questions = registry.list_questions()
-    system_prompt = SCENARIO_MATCHER_PROMPT.format(
+    system_prompt = get_prompt("router", "scenario_matcher").template.format(
         questions_json=json.dumps(questions, ensure_ascii=False, indent=2)
     )
     messages = [

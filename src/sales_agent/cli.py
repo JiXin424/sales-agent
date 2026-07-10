@@ -157,13 +157,10 @@ async def _chat(tenant: str, user: str):
                         task_type=route_result.task_type,
                     )
 
-                # Prompt 解析（接入 DB 版本管理）
-                from sales_agent.services.prompt_resolver_helper import (
-                    resolve_execution_prompts,
-                )
-                _task_prompt, _system_prompt = await resolve_execution_prompts(
-                    db, None, tenant, route_result.task_type
-                )
+                # Prompt 解析（YAML 全局加载）
+                from sales_agent.llm.prompt_loader import get_prompt as _get_prompt
+                _task_prompt = _get_prompt("task", route_result.task_type).template
+                _system_prompt = _get_prompt("system", "system_constraint").template
 
                 # Agent 执行
                 answer_dict = await execute_agent(
@@ -290,13 +287,10 @@ async def _eval(tenant: str, file: str):
                         task_type=route_result.task_type,
                     )
 
-                # Prompt 解析（接入 DB 版本管理）
-                from sales_agent.services.prompt_resolver_helper import (
-                    resolve_execution_prompts,
-                )
-                _task_prompt, _system_prompt = await resolve_execution_prompts(
-                    db, None, tenant, route_result.task_type
-                )
+                # Prompt 解析（YAML 全局加载）
+                from sales_agent.llm.prompt_loader import get_prompt as _get_prompt
+                _task_prompt = _get_prompt("task", route_result.task_type).template
+                _system_prompt = _get_prompt("system", "system_constraint").template
 
                 answer_dict = await execute_agent(
                     chat_model=provider.chat,

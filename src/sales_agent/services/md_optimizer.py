@@ -116,22 +116,9 @@ class MDOptimizer:
             ValueError: LLM 返回空结果。
             RuntimeError: LLM 调用失败。
         """
-        from sales_agent.services.prompt_resolver_helper import resolve_knowledge_prompt
-        system_prompt = await resolve_knowledge_prompt(
-            self.db,
-            "md_optimize_system",
-            self.tenant_id,
-            self.agent_id,
-            default=MD_OPTIMIZE_SYSTEM_PROMPT,
-        )
-        user_prompt = await resolve_knowledge_prompt(
-            self.db,
-            "md_optimize_user",
-            self.tenant_id,
-            self.agent_id,
-            default=MD_OPTIMIZE_USER_TEMPLATE,
-            content=raw_content,
-        )
+        from sales_agent.llm.prompt_loader import get_prompt as _get_prompt
+        system_prompt = _get_prompt("knowledge", "md_optimize_system").template
+        user_prompt = _get_prompt("knowledge", "md_optimize_user").template.format(content=raw_content)
         if source_type_hint:
             hint = (
                 f"\n\n**提示：** 这篇文档的 source_type 应该是 `{source_type_hint}`。"

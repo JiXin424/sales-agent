@@ -43,7 +43,6 @@ class ReadinessService:
         })
 
         # 2. Prompt set
-        prompt_ok = bool(agent.prompt_set_id)
         checks.append({
             "check": "prompt_set",
             "label": "Prompt 集合",

@@ -11,13 +11,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from sales_agent.llm.call_params import get_call_params
-from sales_agent.prompts.risk_check_prompt import RISK_CHECK_PROMPT
 # 复用 task_router 的平衡括号 JSON 提取器：``re.search(r"\{[^}]+\}")`` 在嵌套
 # JSON 上会截断（risk prompt 同样可能返回嵌套结构），此处与 task_router 保持一致。
 from sales_agent.services.task_router import _extract_first_json
 
-# 默认风险检查 prompt（已外移到 prompts/risk_check_prompt.py，便于 DB 版本管理）。
-_DEFAULT_RISK_PROMPT = RISK_CHECK_PROMPT
+# risk prompt 已迁移至 config/prompts.yaml（get_prompt("risk", "risk_check")）
 
 logger = logging.getLogger(__name__)
 
@@ -276,7 +274,7 @@ class RiskChecker:
         对应 spec §7.2。
         """
         try:
-            prompt = (risk_prompt or _DEFAULT_RISK_PROMPT).format(
+            prompt = (risk_prompt or get_prompt("risk", "risk_check").template).format(
                 message=message, answer=answer_text[:1000]
             )
             p = get_call_params("risk_checker")

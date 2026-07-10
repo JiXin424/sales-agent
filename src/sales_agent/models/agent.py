@@ -35,7 +35,6 @@ class Agent(TimestampMixin, Base):
     # 模型/运行时配置引用。"runtime" = 使用 TenantRuntime（dedicated 模式默认）
     model_config_ref: Mapped[str] = mapped_column(Text, nullable=False, default="runtime")
     # 子配置表的外键（通过 id 文本引用，不强制 FK 约束以保持迁移弹性）
-    prompt_set_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     knowledge_scope_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     risk_policy_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     eval_suite_id: Mapped[str | None] = mapped_column(Text, nullable=True)

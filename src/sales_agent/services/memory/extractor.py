@@ -5,7 +5,7 @@ import logging
 from pydantic import BaseModel, Field
 
 from sales_agent.llm.call_params import get_call_params
-from sales_agent.prompts.memory_extractor_prompt import MEMORY_EXTRACTOR_PROMPT
+from sales_agent.llm.prompt_loader import get_prompt
 from sales_agent.services.memory.contracts import MemoryCandidate
 from sales_agent.services.memory.policy import classify_sensitivity, classify_stability
 from sales_agent.services.structured_router_output import parse_model_json
@@ -30,7 +30,7 @@ async def extract_memory_candidates(
         f"已验证工具事实：{verified_tool_facts}\n"
     )
     messages = [
-        {"role": "system", "content": MEMORY_EXTRACTOR_PROMPT},
+        {"role": "system", "content": get_prompt("task", "memory_extraction").template},
         {"role": "user", "content": user_content},
     ]
 

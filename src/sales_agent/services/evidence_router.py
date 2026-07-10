@@ -13,8 +13,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sales_agent.llm.call_params import get_call_params
-from sales_agent.prompts.evidence_router_prompt import EVIDENCE_ROUTER_PROMPT
-from sales_agent.services.prompt_resolver_helper import resolve_router_prompt
+from sales_agent.llm.prompt_loader import get_prompt
 from sales_agent.services.structured_router_output import EvidenceDecision, parse_model_json
 from sales_agent.services.task_router import (
     ALL_TASK_TYPES,
@@ -134,13 +133,7 @@ async def route_intent_evidence(
     EvidenceDecision
         路由决策，包含 intent、knowledge_policy、response_mode 等。
     """
-    system_prompt = await resolve_router_prompt(
-        db,
-        "evidence_router",
-        tenant_id,
-        agent_id,
-        default=EVIDENCE_ROUTER_PROMPT,
-    )
+    system_prompt = get_prompt("router", "evidence_router").template
     if recent_context:
         user_content = f"{recent_context}\n\n用户消息：{standalone_query}\n"
     else:

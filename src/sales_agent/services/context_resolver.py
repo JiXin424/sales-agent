@@ -13,9 +13,8 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sales_agent.llm.call_params import get_call_params
+from sales_agent.llm.prompt_loader import get_prompt
 from sales_agent.models.conversation_topic import ConversationTopic
-from sales_agent.prompts.context_resolver_prompt import CONTEXT_RESOLVER_PROMPT
-from sales_agent.services.prompt_resolver_helper import resolve_router_prompt
 from sales_agent.services.structured_router_output import ContextDecision, parse_model_json
 
 logger = logging.getLogger(__name__)
@@ -136,13 +135,7 @@ async def resolve_context(
     ContextDecision
         解析后的结构化决策。
     """
-    system_prompt = await resolve_router_prompt(
-        db,
-        "context_resolver",
-        tenant_id,
-        agent_id,
-        default=CONTEXT_RESOLVER_PROMPT,
-    )
+    system_prompt = get_prompt("router", "context_resolver").template
     messages = _build_messages(message, topic, recent_messages, system_prompt)
 
     for attempt in range(2):

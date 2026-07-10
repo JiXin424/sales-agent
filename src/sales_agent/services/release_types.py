@@ -33,7 +33,6 @@ class ReleaseManifest:
     retrieval_profile_id: str
     router_profile_id: str
     manifest_hash: str
-    prompt_set_id: str | None = None
     model_snapshot_json: str = "{}"
     graph_definition_version: str | None = None
     code_revision: str | None = None

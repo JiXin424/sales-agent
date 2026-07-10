@@ -33,7 +33,6 @@ from sales_agent.models.eval import EvalRun, EvalSuite
 from sales_agent.models.feedback import Feedback
 from sales_agent.models.knowledge_gap import KnowledgeGap
 from sales_agent.models.pilot_report import PilotReport
-from sales_agent.models.prompt import PromptVersion
 from sales_agent.models.review_item import ReviewItem
 from sales_agent.services.agent_clone_service import AgentCloneService, _manifest_to_dict
 from sales_agent.services.agent_readiness_service import ReadinessService, can_activate
@@ -295,39 +294,13 @@ async def list_agent_prompts(
     offset: int = Query(0, ge=0),
 ):
     """列出该 Agent 的 prompt 版本（含租户级 active + 该 Agent 独立副本）。"""
-    from sales_agent.models.agent_prompt_set import AgentPromptSet
     from sqlalchemy import or_
     agent = await _load_agent(db, agent_id)
     # 独立副本 OR 该 tenant 的 active 版本
-    where = [PromptVersion.tenant_id == agent.tenant_id,
-             or_(PromptVersion.agent_id == agent.id,
-                 (PromptVersion.agent_id.is_(None)) & (PromptVersion.status == "active"))]
-    total = (await db.execute(
-        select(func.count()).select_from(PromptVersion).where(*where)
-    )).scalar() or 0
-    rows = (await db.execute(
-        select(PromptVersion).where(*where).order_by(PromptVersion.created_at.desc())
-        .limit(limit).offset(offset)
-    )).scalars().all()
-    items = [{
-        "id": r.id, "task_type": r.task_type,
-        "prompt_category": r.prompt_category, "prompt_key": r.prompt_key,
-        "version": r.version, "status": r.status,
-        "description": r.description, "agent_scoped": r.agent_id == agent.id,
-        "created_at": r.created_at, "updated_at": r.updated_at,
-    } for r in rows]
-    # 附带 Agent prompt_set 映射
-    ps = (await db.execute(
-        select(AgentPromptSet).where(AgentPromptSet.id == agent.prompt_set_id)
-    )).scalar_one_or_none() if agent.prompt_set_id else None
-    mapping = json.loads(ps.task_prompt_versions_json or "{}") if ps else {}
-    return {"items": items, "total": total, "limit": limit, "offset": offset,
-            "prompt_set_mapping": mapping}
-
+    return []  # prompt system removed (YAML migration)
 
 async def _ensure_agent_prompt_set(db: AsyncSession, agent: Agent):
     """获取或创建 Agent 的 prompt_set（无则新建并绑定）。"""
-    from sales_agent.models.agent_prompt_set import AgentPromptSet
 
     if agent.prompt_set_id:
         ps = (await db.execute(

@@ -427,6 +427,153 @@ class SalesActionRepository:
         return list((await self.db.execute(stmt)).scalars().all())
 
     # ------------------------------------------------------------------
+    # ops visibility (agent-scoped reads for the operations API/console)
+    # ------------------------------------------------------------------
+    # 业务路径按 (tenant, agent, user) 三元组隔离；运维视角是「该 Agent 下所有
+    # 用户的任务」，故这里按 (tenant, agent) 聚合，user_id 仅作为可选过滤项。
+
+    async def list_actions_for_agent(
+        self,
+        tenant_id: str,
+        agent_id: str,
+        *,
+        status: str | None = None,
+        action_type: str | None = None,
+        user_id: str | None = None,
+        scheduled_from: datetime | None = None,
+        scheduled_to: datetime | None = None,
+    ) -> list[SalesActionCard]:
+        """按 Agent 维度列出动作卡片（跨用户，可选过滤）。"""
+        stmt = (
+            select(SalesActionCard)
+            .where(
+                SalesActionCard.tenant_id == tenant_id,
+                SalesActionCard.agent_id == agent_id,
+            )
+            .order_by(SalesActionCard.scheduled_at.desc())
+        )
+        if status is not None:
+            stmt = stmt.where(SalesActionCard.status == status)
+        if action_type is not None:
+            stmt = stmt.where(SalesActionCard.action_type == action_type)
+        if user_id is not None:
+            stmt = stmt.where(SalesActionCard.user_id == user_id)
+        if scheduled_from is not None:
+            stmt = stmt.where(SalesActionCard.scheduled_at >= scheduled_from)
+        if scheduled_to is not None:
+            stmt = stmt.where(SalesActionCard.scheduled_at <= scheduled_to)
+        return list((await self.db.execute(stmt)).scalars().all())
+
+    async def get_action_detail(
+        self,
+        tenant_id: str,
+        agent_id: str,
+        action_id: str,
+    ) -> dict | None:
+        """取单张卡片及其提醒/投递/事件（运维详情抽屉用）。
+
+        按 (tenant, agent, action_id) 定位；action_id 在 tenant 内唯一，跨租户
+        返回 None。
+        """
+        card = (
+            await self.db.execute(
+                select(SalesActionCard).where(
+                    SalesActionCard.id == action_id,
+                    SalesActionCard.tenant_id == tenant_id,
+                    SalesActionCard.agent_id == agent_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if card is None:
+            return None
+        reminders = list(
+            (
+                await self.db.execute(
+                    select(SalesActionReminder)
+                    .where(
+                        SalesActionReminder.action_id == action_id,
+                        SalesActionReminder.tenant_id == tenant_id,
+                        SalesActionReminder.agent_id == agent_id,
+                    )
+                    .order_by(SalesActionReminder.remind_at.asc())
+                )
+            ).scalars().all()
+        )
+        deliveries = list(
+            (
+                await self.db.execute(
+                    select(SalesActionDelivery)
+                    .where(
+                        SalesActionDelivery.action_id == action_id,
+                        SalesActionDelivery.tenant_id == tenant_id,
+                        SalesActionDelivery.agent_id == agent_id,
+                    )
+                    .order_by(SalesActionDelivery.created_at.desc())
+                )
+            ).scalars().all()
+        )
+        events = list(
+            (
+                await self.db.execute(
+                    select(SalesActionEvent)
+                    .where(
+                        SalesActionEvent.action_id == action_id,
+                        SalesActionEvent.tenant_id == tenant_id,
+                        SalesActionEvent.agent_id == agent_id,
+                    )
+                    .order_by(SalesActionEvent.created_at.desc())
+                )
+            ).scalars().all()
+        )
+        return {"card": card, "reminders": reminders, "deliveries": deliveries, "events": events}
+
+    async def list_reminders_for_agent(
+        self,
+        tenant_id: str,
+        agent_id: str,
+        *,
+        status: str | None = None,
+        user_id: str | None = None,
+    ) -> list[SalesActionReminder]:
+        """按 Agent 维度列出提醒（跨用户，可按 status/user 过滤）。"""
+        stmt = (
+            select(SalesActionReminder)
+            .where(
+                SalesActionReminder.tenant_id == tenant_id,
+                SalesActionReminder.agent_id == agent_id,
+            )
+            .order_by(SalesActionReminder.remind_at.desc())
+        )
+        if status is not None:
+            stmt = stmt.where(SalesActionReminder.status == status)
+        if user_id is not None:
+            stmt = stmt.where(SalesActionReminder.user_id == user_id)
+        return list((await self.db.execute(stmt)).scalars().all())
+
+    async def list_deliveries_for_agent(
+        self,
+        tenant_id: str,
+        agent_id: str,
+        *,
+        status: str | None = None,
+        user_id: str | None = None,
+    ) -> list[SalesActionDelivery]:
+        """按 Agent 维度列出投递记录（跨用户，可按 status/user 过滤）。"""
+        stmt = (
+            select(SalesActionDelivery)
+            .where(
+                SalesActionDelivery.tenant_id == tenant_id,
+                SalesActionDelivery.agent_id == agent_id,
+            )
+            .order_by(SalesActionDelivery.created_at.desc())
+        )
+        if status is not None:
+            stmt = stmt.where(SalesActionDelivery.status == status)
+        if user_id is not None:
+            stmt = stmt.where(SalesActionDelivery.user_id == user_id)
+        return list((await self.db.execute(stmt)).scalars().all())
+
+    # ------------------------------------------------------------------
     # claim_due_reminders  (FOR UPDATE SKIP LOCKED)
     # ------------------------------------------------------------------
 

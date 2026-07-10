@@ -10,7 +10,7 @@ import { Outlet, useNavigate, useLocation, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   AppstoreOutlined, BookOutlined, DashboardOutlined, EditOutlined, ExperimentOutlined, MessageOutlined,
-  NodeIndexOutlined, SettingOutlined, TrophyOutlined, ApartmentOutlined, HistoryOutlined,
+  NodeIndexOutlined, SettingOutlined, TrophyOutlined, ApartmentOutlined, HistoryOutlined, ScheduleOutlined,
 } from '@ant-design/icons';
 import { getAgent } from '@/api/agents';
 import { useAgent } from '@/context/AgentContext';
@@ -38,6 +38,7 @@ function agentNavItems(agentId: string) {
     { key: `${base}/optimization`, icon: <ExperimentOutlined />, label: '知识迭代' },
     { key: `${base}/prompts`, icon: <EditOutlined />, label: 'Prompt' },
     { key: `${base}/conversations`, icon: <MessageOutlined />, label: '对话记录' },
+    { key: `${base}/sales-actions`, icon: <ScheduleOutlined />, label: '销售任务' },
     { key: `${base}/coach`, icon: <TrophyOutlined />, label: '教练' },
     { key: `${base}/settings`, icon: <SettingOutlined />, label: '设置' },
   ];

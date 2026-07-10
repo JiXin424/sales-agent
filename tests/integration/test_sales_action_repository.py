@@ -163,6 +163,30 @@ async def test_complete_unknown_action_returns_not_found(db_session):
     assert res.reason_code == "action_not_found"
 
 
+@pytest.mark.asyncio
+async def test_complete_action_locks_card_row_for_update(db_session):
+    """F2: complete/cancel load the card with SELECT ... FOR UPDATE so two
+    concurrent terminal transitions serialize and only one writes an event
+    (cancel shares the same _transition_to_terminal path)."""
+    repo = SalesActionRepository(db_session)
+    scope = _scope()
+    action = await _create_action(repo, scope)
+
+    captured: dict = {}
+    real_get = SalesActionRepository._get_scoped_card
+
+    async def spy(scope_, action_id, **kwargs):
+        # Instance-attribute assignment is not descriptor-bound, so this spy
+        # receives exactly the args _transition_to_terminal passes.
+        captured["for_update"] = kwargs.get("for_update", False)
+        return await real_get(repo, scope_, action_id, **kwargs)
+
+    repo._get_scoped_card = spy
+    await repo.complete_action(scope, action.id, event_id="lock1")
+
+    assert captured.get("for_update") is True
+
+
 # ---------------------------------------------------------------------------
 # Step 2: claim_due_reminders marks sending once
 # ---------------------------------------------------------------------------

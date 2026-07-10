@@ -26,7 +26,6 @@ class OptimizationRelease(TimestampMixin, Base):
     knowledge_version_id: Mapped[str] = mapped_column(Text, nullable=False)
     retrieval_profile_id: Mapped[str] = mapped_column(Text, nullable=False)
     router_profile_id: Mapped[str] = mapped_column(Text, nullable=False)
-    prompt_set_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     model_snapshot_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     graph_definition_version: Mapped[str | None] = mapped_column(Text, nullable=True)
     code_revision: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -42,7 +42,6 @@ _RECOGNITION_TEXT_KEYS = {
     "transcription",
 }
 
-# --- 模块级 prompt 常量（保留供 prompt_defaults.py 引用；内容已迁移至 config/prompts.yaml） ---
 MEDIA_VISION_SYSTEM_PROMPT = (
     "你是销售陪跑助手的图片理解模块。请用中文简洁描述图片中的文字、场景、"
     "客户意图和对销售回复有用的信息，不要编造看不到的内容。"

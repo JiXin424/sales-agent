@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sales_agent.models.agent import Agent
 from sales_agent.models.agent_channel_config import AgentChannelConfig
 from sales_agent.models.agent_knowledge_scope import AgentKnowledgeScope
-from sales_agent.models.agent_prompt_set import AgentPromptSet
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +56,6 @@ def _agent_to_dict(agent: Agent) -> dict[str, Any]:
         "status": agent.status,
         "source_agent_id": agent.source_agent_id,
         "model_config_ref": agent.model_config_ref,
-        "prompt_set_id": agent.prompt_set_id,
         "knowledge_scope_id": agent.knowledge_scope_id,
         "risk_policy_id": agent.risk_policy_id,
         "eval_suite_id": agent.eval_suite_id,
@@ -157,7 +155,6 @@ class AgentService:
         )
         self.db.add(prompt_set)
         await self.db.flush()
-        agent.prompt_set_id = prompt_set.id
 
         scope = AgentKnowledgeScope(
             agent_id=agent.id, tenant_id=tenant_id,

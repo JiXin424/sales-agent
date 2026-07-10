@@ -20,10 +20,8 @@ from sales_agent.models.agent import Agent
 from sales_agent.models.agent_channel_config import AgentChannelConfig
 from sales_agent.models.agent_clone_manifest import AgentCloneManifest
 from sales_agent.models.agent_knowledge_scope import AgentKnowledgeScope
-from sales_agent.models.agent_prompt_set import AgentPromptSet
 from sales_agent.models.agent_risk_policy import AgentRiskPolicy
 from sales_agent.models.eval import EvalSuite
-from sales_agent.models.prompt import PromptVersion
 
 logger = logging.getLogger(__name__)
 

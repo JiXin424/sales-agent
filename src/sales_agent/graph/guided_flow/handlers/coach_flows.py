@@ -11,13 +11,7 @@ import re
 from typing import Any
 
 from sales_agent.llm.call_params import get_call_params
-from sales_agent.prompts.coach_quick import (
-    SB_CARD_TEMPLATE,
-    SB_SPLIT_TEMPLATE,
-    SB_SYSTEM,
-    SW_CARD_TEMPLATE,
-    SW_SYSTEM,
-)
+from sales_agent.llm.prompt_loader import get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -95,16 +89,16 @@ async def _sw_llm_card(
 
     Args:
         tpl: 调用方经 ``PromptRegistry`` 解析的出卡模板；None 时回退内置。
-        system: 调用方解析的 system 人设；None 时回退 SW_SYSTEM。
+        system: 调用方解析的 system 人设；None 时回退 get_prompt("coach", "coach_sw_system").template。
     """
-    template = tpl or SW_CARD_TEMPLATE
+    template = tpl or get_prompt("coach", "coach_sw_card").template
     prompt = template.format(
         small_win=payload.get("small_win", ""),
         strength=payload.get("strength", ""),
         gratitude=payload.get("gratitude", ""),
         energy_sentence=payload.get("energy_sentence", ""),
     )
-    return await _llm_generate(chat_model, system or SW_SYSTEM, prompt, call_site="coach_small_win")
+    return await _llm_generate(chat_model, system or get_prompt("coach", "coach_sw_system").template, prompt, call_site="coach_small_win")
 
 
 def _sw_needs_clarify(text: str) -> bool:
@@ -171,7 +165,7 @@ def _sb_start() -> tuple[str, dict[str, Any], str]:
 # 第 2 步帮拆「事实/解释/担心」、第 4 步出 7 段破框卡，都用 LLM；
 # 无模型或调用失败时回退到下面的规则版（_sb_split / _sb_final_reply）。
 
-# SW_SYSTEM / SB_SYSTEM 已外移到 prompts/coach_quick.py（纳入 DB 版本管理），顶部 import。
+# coach prompt 模板已迁移至 config/prompts.yaml（get_prompt("coach", key).template）
 
 
 async def _llm_generate(
@@ -201,22 +195,22 @@ async def _sb_llm_split(
     chat_model: Any, sales_input: str, user_split: str,
     tpl: str | None = None, system: str | None = None,
 ) -> str | None:
-    template = tpl or SB_SPLIT_TEMPLATE
+    template = tpl or get_prompt("coach", "coach_sb_split").template
     prompt = template.format(sales_input=sales_input, user_split=user_split)
-    return await _llm_generate(chat_model, system or SB_SYSTEM, prompt, call_site="coach_block_split")
+    return await _llm_generate(chat_model, system or get_prompt("coach", "coach_sb_system").template, prompt, call_site="coach_block_split")
 
 
 async def _sb_llm_card(
     chat_model: Any, payload: dict[str, Any],
     tpl: str | None = None, system: str | None = None,
 ) -> str | None:
-    template = tpl or SB_CARD_TEMPLATE
+    template = tpl or get_prompt("coach", "coach_sb_card").template
     prompt = template.format(
         sales_input=payload.get("sales_input", ""),
         split_text=payload.get("split_text", ""),
         possibilities_attempt=payload.get("possibilities_attempt", ""),
     )
-    return await _llm_generate(chat_model, system or SB_SYSTEM, prompt, call_site="coach_reframe")
+    return await _llm_generate(chat_model, system or get_prompt("coach", "coach_sb_system").template, prompt, call_site="coach_reframe")
 
 
 async def _sb_advance(

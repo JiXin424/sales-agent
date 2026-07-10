@@ -7,7 +7,7 @@
 from .base import Base, TimestampMixin, generate_id, utcnow
 from .tenant import Tenant
 from .agent import Agent
-from .agent_prompt_set import AgentPromptSet
+# prompt_set deleted (YAML migration)
 from .agent_knowledge_scope import AgentKnowledgeScope
 from .agent_risk_policy import AgentRiskPolicy
 from .agent_channel_config import AgentChannelConfig
@@ -34,7 +34,6 @@ from .conversation import (
 from .conversation_topic import ConversationTopic
 from .tenant_model_config import TenantModelConfig
 from .model_call_log import ModelCallLog
-from .prompt import PromptVersion
 from .ingestion import IngestionJob
 from .agent_run import AgentRun, AgentRunStep
 from .feedback import Feedback
@@ -127,7 +126,6 @@ __all__ = [
     "RetrievalLog",
     "TenantModelConfig",
     "ModelCallLog",
-    "PromptVersion",
     "IngestionJob",
     "AgentRun",
     "AgentRunStep",

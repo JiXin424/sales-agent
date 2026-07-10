@@ -9,9 +9,9 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from sales_agent.api.routes import agent, conversations, documents, feedback, health, tenants, prompts, uploads, admin, pilot, agents, coach, ontology, instance, graph_debug, conversation_history, optimization, sales_actions
 from sales_agent.core.config import get_settings
 from sales_agent.core.exceptions import TenantMismatchError, DingTalkTenantMismatchError
+from sales_agent.api.routes import agent, conversations, documents, feedback, health, tenants, uploads, admin, pilot, agents, coach, ontology, instance, graph_debug, conversation_history, optimization, sales_actions
 
 logger = logging.getLogger(__name__)
 
@@ -207,7 +207,6 @@ app.include_router(documents.router)
 app.include_router(agent.router)
 app.include_router(conversations.router)
 app.include_router(feedback.router)
-app.include_router(prompts.router)
 app.include_router(uploads.router)
 app.include_router(admin.router)
 app.include_router(pilot.router)

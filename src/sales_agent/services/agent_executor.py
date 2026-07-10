@@ -10,17 +10,14 @@ from typing import Any
 
 from sales_agent.llm.base import ChatModel
 from sales_agent.llm.call_params import get_call_params
-from sales_agent.prompts.system import SYSTEM_CONSTRAINT
-from sales_agent.services.prompt_defaults import BUILTIN_PROMPTS
 from sales_agent.services.retriever import RetrievalResult
 
 logger = logging.getLogger(__name__)
 
-# task 类默认 prompt，从 prompt_defaults 注册表派生（single source of truth）。
-# 兼容旧代码 ``from agent_executor import _TASK_PROMPTS``。
-_TASK_PROMPTS = {b.key: b.template for b in BUILTIN_PROMPTS if b.category == "task"}
-# task_type 未注册时的兜底 prompt
-_DEFAULT_TASK_PROMPT = _TASK_PROMPTS.get("general_sales_coaching", "")
+# task prompt 已迁移至 config/prompts.yaml（get_prompt("task", task_type)）
+def _get_task_prompt(task_type: str) -> str:
+    from sales_agent.llm.prompt_loader import get_prompt
+    return get_prompt("task", task_type).template
 
 
 def _build_context_block(context: dict[str, Any] | None) -> str:
@@ -235,7 +232,7 @@ def _build_messages(
             追加到 retrieval_content 后面。
     """
     # 1. 获取 prompt 模板：优先运行时解析的模板，否则回退到默认映射
-    template = prompt_text or _TASK_PROMPTS.get(task_type, _DEFAULT_TASK_PROMPT)
+    template = prompt_text or _get_task_prompt(task_type)
 
     # 2. 构建上下文块
     context_block = _build_context_block(context)

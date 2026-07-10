@@ -39,7 +39,6 @@ from sales_agent.models.coach import (
     CoachSettings,
 )
 from sales_agent.models.conversation import Conversation, ConversationMessage
-from sales_agent.prompts.coach_daily_evaluation import build_evaluation_prompt
 
 logger = logging.getLogger(__name__)
 

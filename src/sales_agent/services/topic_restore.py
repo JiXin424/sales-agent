@@ -24,6 +24,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sales_agent.llm.call_params import get_call_params
 from sales_agent.models.conversation_topic import ConversationTopic
 from sales_agent.prompts.topic_restore_resolver_prompt import (
     TOPIC_RESTORE_RESOLVER_PROMPT,
@@ -212,10 +213,11 @@ async def resolve_topic_restore(
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
             ]
+            p = get_call_params("topic_restore")
             response = await chat_model.generate(
                 messages=messages,
-                temperature=0.0,
-                max_tokens=500,
+                temperature=p.temperature,
+                max_tokens=p.max_tokens,
             )
             decision = parse_model_json(response, TopicRestoreDecision)
             # Validate the model's selection against the supplied candidate map.

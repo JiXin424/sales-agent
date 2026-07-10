@@ -24,6 +24,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sales_agent.llm.call_params import get_call_params
 from sales_agent.models.conversation import ConversationMessage
 from sales_agent.models.conversation_topic import ConversationTopic
 from sales_agent.prompts.clarification_resolver_prompt import (
@@ -568,10 +569,11 @@ async def resolve_clarification(
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": trimmed},
             ]
+            p = get_call_params("topic_manager")
             response = await chat_model.generate(
                 messages=messages,
-                temperature=0.0,
-                max_tokens=500,
+                temperature=p.temperature,
+                max_tokens=p.max_tokens,
             )
             return parse_model_json(response, ClarificationDecision)
         except (json.JSONDecodeError, ValueError) as exc:

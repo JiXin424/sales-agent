@@ -422,6 +422,21 @@ class SalesActionService:
         if partial_extraction is None:
             return extraction
 
+        # 本轮抽取若本身已是完整可执行的显式建提醒（有标题+时间+explicit、无需
+        # 澄清），直接采用并丢弃旧半成品，不做合并。否则旧 partial 可能携带已过期
+        # 的时间或空标题，反而污染一个本来就完整的新请求（典型：用户在上一轮失败
+        # 的澄清后直接重发了一条完整的「1分钟后提醒我测试」）。澄清答复（如「明天
+        # 下午3点」）因缺标题不满足此条件，仍会走下面的合并补全。
+        if (
+            extraction.intent == "create_action"
+            and extraction.explicit_create
+            and extraction.title
+            and extraction.scheduled_at
+            and not extraction.needs_clarification
+        ):
+            self._discard_pending(scope, conversation_id)
+            return extraction
+
         # 合并：用本轮抽取补全上一轮缺失的字段（典型：缺时间 → 用户回答时间）
         merged = self._merge_partial(partial_extraction, extraction)
         # 合并后若仍可建提醒则消费半成品；否则保留等待下一轮
@@ -434,17 +449,33 @@ class SalesActionService:
         old: SalesActionExtraction, new: SalesActionExtraction
     ) -> SalesActionExtraction:
         """用 *new* 的非空字段补全 *old*（保留 old 的 intent/explicit_create）。"""
+        merged_title = old.title or new.title
+        merged_scheduled = old.scheduled_at or new.scheduled_at
+        # missing_fields 必须反映合并后的**实际值**：取两轮报缺的并集，再剔除
+        # 合并后已填上的字段。否则「new 已补全(missing 为空) → 列表推导为空 →
+        # or old.missing_fields」会把旧的缺失复活，导致 title/时间已给出却仍被
+        # validate 判 missing_*，一旦中毒每轮都失败（see test_merge_partial）。
+        _filled = set()
+        if merged_title:
+            _filled.add("title")
+        if merged_scheduled:
+            _filled.add("scheduled_at")
+        merged_missing = [
+            f
+            for f in dict.fromkeys([*old.missing_fields, *new.missing_fields])
+            if f not in _filled
+        ]
         return SalesActionExtraction(
             intent=old.intent if old.intent != "none" else new.intent,
             explicit_create=old.explicit_create or new.explicit_create,
-            title=old.title or new.title,
+            title=merged_title,
             customer_name=old.customer_name or new.customer_name,
             action_type=old.action_type if old.action_type != "other" else new.action_type,
             time_text=old.time_text or new.time_text,
-            scheduled_at=old.scheduled_at or new.scheduled_at,
+            scheduled_at=merged_scheduled,
             timezone=old.timezone or new.timezone,
             confidence=max(old.confidence, new.confidence),
-            missing_fields=[f for f in new.missing_fields if f not in old.missing_fields] or old.missing_fields,
+            missing_fields=merged_missing,
             needs_clarification=new.needs_clarification,
             clarification_question=new.clarification_question,
             success_criteria=old.success_criteria or new.success_criteria,

@@ -75,6 +75,7 @@ class AtomicMemoryRecord(BaseModel):
     observed_at: datetime
     last_confirmed_at: datetime | None = None
     expires_at: datetime | None = None
+    customer_scope: str | None = None
 
 
 class MemoryOperationResult(BaseModel):

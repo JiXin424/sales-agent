@@ -110,7 +110,10 @@ def _split_sections(body_lines: list[str]) -> list[AnswerSection]:
     elif preamble:
         sections.append(AnswerSection(title="概述", content="\n".join(preamble).strip()))
 
-    return [s for s in sections if s.content]
+    # 保留所有有标题的 section：分组父标题（如「二、再应对」）自身可能没有独立
+    # 正文、其内容是后续 #### 子节，按 content 过滤会把它丢掉，导致渲染缺这行
+    # 分组标题。这里只按 title 过滤。
+    return [s for s in sections if s.title]
 
 
 def _parse_source_name(lines: list[str]) -> str:

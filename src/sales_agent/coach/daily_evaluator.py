@@ -29,6 +29,7 @@ from sales_agent.coach.constants import (
     INITIAL_SCORE,
     clamp_score,
 )
+from sales_agent.llm.call_params import get_call_params
 from sales_agent.models.coach import (
     CoachCompetencyObservation,
     CoachCompetencyScore,
@@ -604,10 +605,11 @@ class DailyEvaluationService:
         last_err: str | None = None
         for attempt in range(2):
             try:
+                p = get_call_params("daily_evaluator")
                 raw = await chat_model.generate(
                     messages=messages,
-                    temperature=0.1,
-                    max_tokens=2000,
+                    temperature=p.temperature,
+                    max_tokens=p.max_tokens,
                     response_format={"type": "json_object"},
                 )
                 parsed = parse_model_json(raw)

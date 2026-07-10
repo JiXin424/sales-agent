@@ -13,7 +13,7 @@
 
 - **`temperature`**：在全部调用点都是硬编码字面量（evidence_router 0.0、task_router 0.1、agent_executor 0.3、coach_flows 0.2/0.4……）。虽然存在「半套」解耦机制（`ModelConfig.temperature`、models.json、shared 模式 DB config_json），但被 per-call 字面量**完全遮蔽**——实例默认温度实际只在 `health.py:104` 诊断 ping 一处生效，等于摆设。
 - **`max_tokens`**：**零解耦**。不在 `ModelConfig`、不在 models.json、不在任何 DB 表、不在任何 env 变量里，纯粹散落成几十个魔法数字（100/200/300/500/600/700/800/900/1600/2000/4096/5000/6000……）。
-- **`prompt`**：已较大程度解耦（DB 两表 `prompt_versions` + `agent_prompt_sets` + REST API `/tenants/{id}/prompts/*` + 三层解析 Agent 绑定->租户 active->py 兜底），但**有 7 个遗漏点**绕过注册表、仍只在 py 里（详见 §6）。
+- **`prompt`**：已较大程度解耦（DB 两表 `prompt_versions` + `agent_prompt_sets` + REST API `/tenants/{id}/prompts/*` + 三层解析 Agent 绑定->租户 active->py 兜底），但**有 6 个遗漏点**绕过注册表、仍只在 py 里（详见 §5.5）。
 - **附带 bug**：`services/md_optimizer.py:146` 调 `self.chat_model.chat(...)`，但 `ChatModel` / `OpenAICompatibleChat` 只有 `generate` / `stream_generate`，运行时会抛 `AttributeError`（知识库 ingest 链路上的 latent crash）。
 
 > 用户最初设想「prompt 在 py 里、迁去 YAML、做 DB 快照」。经核实纠正：prompt 主要在 DB（py 仅兜底），迁去 YAML 反而降级；版本/回滚/防误删由 git 全包，DB 快照与 git 重复。最终决定：**参数收进 YAML，仅开发者改，不做 DB、不做后台 API、不做前端**。
@@ -24,7 +24,7 @@
 - 把 22~24 处硬编码 `temperature` / `max_tokens` 收进**一个 YAML 文件**，按调用点 key 聚合。
 - runtime 启动时加载并校验 YAML，缓存进内存；运行时零 IO 直接读内存 dict。
 - 改参数 = 改 YAML -> commit -> push -> 重建容器（复用现有 main push 三台 force-recreate 流程）。版本管理、回滚、防误删全交 git。
-- 补齐 7 个漏网 prompt 进 PromptRegistry（修复 prompt 解耦漏洞）。
+- 补齐 6 个漏网 prompt 进 PromptRegistry（修复 prompt 解耦漏洞）。
 - 修 `md_optimizer.py` 的 `.chat()` bug。
 
 ### 非目标
@@ -118,21 +118,23 @@ self._model.generate(messages, temperature=p.temperature, max_tokens=p.max_token
 
 特殊点处理：
 - `health.py:104` 原不传温度（落回实例默认 0.3）-> 改成显式给 `health_ping: {temperature: 0.3, max_tokens: 10}`，顺手消除「实例默认遮蔽」困惑。
-- `daily_evaluator.py:607` 的 `response_format={"type":"json_object"}` **保留在代码**，只把 temperature/max_tokens 抽出。
-- `media_adapter.py:155/199` 用独立 vision/audio model -> 同样进 YAML（key `media_vision` / `media_audio`）。
+- `response_format` 保留在代码：`daily_evaluator.py:607` 和 `retrieval_service.py:68` 都带 `response_format={"type":"json_object"}`，只抽 temperature/max_tokens，response_format 不进 YAML（非目标：结构性参数留代码）。
+- `media_adapter.py:155/199` 走原生 OpenAI SDK `client.chat.completions.create(model=self._config.vision_model/audio_model, ...)` 而非 `.generate()`；纳入方式：读 `get_call_params("media_vision"/"media_audio")` 后把 temperature/max_tokens 传给 `create()`（key `media_vision` / `media_audio`）。
+- 间接调用点：`coach_flows.py:106/204/217` 经 `_llm_generate` helper、`extractor.py:185/276` 经 `_generate_with_retry` helper -> 在 helper 内 `.generate()` 调用处读 `get_call_params`，或在业务点透传 call_site 进 helper 由 helper 解析。
 
-### 5.5 小修：7 个漏网 prompt 补进注册表
+### 5.5 小修：6 个漏网 prompt 补进注册表
 
-在 `src/sales_agent/services/prompt_defaults.py` 的 `BUILTIN_PROMPTS` 注册以下 prompt，使其获得 DB 覆盖路径（三层解析）：
-- `MEMORY_EXTRACTOR_PROMPT`（`prompts/memory_extractor_prompt.py`，现 `memory/extractor.py:32` 直接用、未注册）
-- `TOPIC_RESTORE_RESOLVER_PROMPT`（`prompts/topic_restore_resolver_prompt.py`，`topic_restore.py:201` 唯一来源）
-- `SCENARIO_MATCHER_PROMPT`（`scenarios/prompt.py`，`scenarios/matcher.py:44` 未注册）
-- 重复的 `_ENTITY_EXTRACTION_PROMPT`（`graph/retrieval/ontology_graph.py:23` 是 `ontology/retrieval_service.py:19` 的重复副本，需统一）
-- `media_adapter.py:160/165/205` 三个函数内联 prompt（纯字面量，对注册表不可见）
+在 `src/sales_agent/services/prompt_defaults.py` 的 `BUILTIN_PROMPTS` 注册以下 prompt，使其获得 DB 覆盖路径（三层解析）。`BuiltinPrompt` 字段为 `(category, key, template, required_placeholders, description)`（注意字段名是 `template` 非 `template_text`，无 `task_type` 字段，task 类的 key 即 task_type）：
+- `MEMORY_EXTRACTOR_PROMPT`（`prompts/memory_extractor_prompt.py`，现 `memory/extractor.py:32` 直接用、未注册）-> 注册为 `("task", "memory_extraction", MEMORY_EXTRACTOR_PROMPT, (...), "记忆候选提取")`，调用点改走 `resolve_execution_prompts`。
+- `TOPIC_RESTORE_RESOLVER_PROMPT`（`prompts/topic_restore_resolver_prompt.py`，`topic_restore.py:201` 唯一来源）-> 注册为 `("router", "topic_restore_resolver", ...)`。
+- `SCENARIO_MATCHER_PROMPT`（`scenarios/prompt.py`，`scenarios/matcher.py:44` 未注册）-> 注册为 `("router", "scenario_matcher", ...)`，含占位符 `{questions_json}`。
+- `media_adapter.py:160/165/205` 三个函数内联 prompt（纯字面量，对注册表不可见）-> 先抽成模块级常量再注册（category 取 `system`/`task` 视内容定），调用点改走 resolve。
+
+> 核实更正：原调研称「重复的 `_ENTITY_EXTRACTION_PROMPT`」漏网，实为误判--`ontology/extractor.py:96`（`knowledge/entity_extraction`）与 `ontology/retrieval_service.py:19`（`knowledge/ontology_term_extractor`）是两个**不同 prompt**且**均已注册**，仅命名易混淆，不属漏网，本次不动。
 
 ### 5.6 小修：md_optimizer `.chat()` bug
 
-`services/md_optimizer.py:146` 的 `self.chat_model.chat(...)` 改为 `self.chat_model.generate(...)`（`ChatModel` 接口只有 `generate` / `stream_generate`）。
+`services/md_optimizer.py:146` 的 `self.chat_model.chat(...)` 改为 `await self.chat_model.generate(...)`（`ChatModel` 接口只有 `generate` / `stream_generate`，且 `generate` 是 async）。**同步改 response 解析**：`generate()` 返回纯 `str`，而现有代码（行155-159 附近）按 response 对象取 `.content` / `.choices[0].message.content` -> 改成直接使用 `generate()` 返回的字符串。否则即使改了方法名仍会 `AttributeError`。
 
 > §5.5 / §5.6 可独立成 commit，也可并入本设计主体。实现计划里标清边界。
 
@@ -177,6 +179,12 @@ self._model.generate(messages, temperature=p.temperature, max_tokens=p.max_token
 | `health_ping` | api/routes/health.py:104 | 0.3 | 10 |
 | `media_vision` | integrations/dingtalk/media_adapter.py:155 | 0.1 | 800 |
 | `media_audio` | integrations/dingtalk/media_adapter.py:199 | 0.0 | 800 |
+
+> 核实脚注（2026-07-10 逐行核对）：
+> - `ontology_retrieval`（retrieval_service.py:68）与 `ontology_graph`（ontology_graph.py:75）原码为 `temperature=0`（整数），YAML 统一记 `0.0`（行为等价）。
+> - `ontology_retrieval` 另带 `response_format={"type":"json_object"}`，保留代码不进 YAML（见 §5.4）。
+> - `ontology_entity_extraction` / `ontology_fact_extraction` / `coach_*` 三组为间接调用（经 helper），实际 `.generate()` 在 helper 内，行号为业务入口近似值。
+> - `media_vision` / `media_audio` 走原生 SDK `create()` 非 `.generate()`（见 §5.4）。
 
 ## 8. 测试与回归保障
 

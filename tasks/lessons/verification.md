@@ -51,3 +51,13 @@
 - **教训**:用户报「让机器人5分钟后提醒我,到点没提醒」。第一反应别当「提醒功能有 bug」去 debug 调度器——先判**到底走没走功能路径**。方法:核对生产出站文案是否命中该功能的**硬编码模板**(建提醒是 `已创建提醒：{when}，提醒你{title}。`,失败是「销售动作处理失败」)。本次出站是「收到,5分钟后提醒你上厕所…」+教练式发挥,两模板都不命中 → 走的是普通 chat,LLM 凭训练经验**幻觉承诺**一个门控关闭/未接通的能力,后端零动作。根因三连(#38 同类):① prompt 在「参数/prompt 迁 YAML」重构中被落下(`get_prompt("task","sales_action_extractor")` 查无键);② 调用文件缺 `import get_prompt`;③ 调用在 `try` 外击穿了 docstring 承诺的「失败即降级」契约(异常直接上浮成「处理失败」)。修复=补 YAML prompt+补 import+把构造消息移进 try。门控功能(enabled 默认关)上线用**暗启动+金丝雀**:门控关时休眠代码零行为变化,故可先把代码经 CI 全铺(功能仍关),再单租户开 env 开关做真实端到端(钉钉发「1分钟后提醒我测试」→查 worker 投递日志+用户确认卡片到达),验过再逐个开其余,生产租户开关最后翻。
 - **检查**:现象「答应了但没执行」→ 先核对出站文案是否命中功能硬编码模板,判功能路径 vs 幻觉,别直接 debug 后端。prompt 迁 YAML 后必 grep 每个 `get_prompt(...)` 键在 YAML 存在 + 调用文件 import 齐全 + 调用在 try 内。门控功能改动走暗启动(休眠全铺)+金丝雀(单租户 env 开关先验)。
 - **相关**:#38 #4 #35
+
+## #50 给 LLM 的「当前时间」必须与 prompt 声明的时区一致(容器默认 UTC 是陷阱)
+- **教训**:销售动作抽取器把相对时间(「1分钟后提醒我测试」)交给 LLM 算 scheduled_at。传入的 `now = datetime.now(timezone.utc)`(容器 `TZ` 空、默认 UTC),但 `_build_messages` 的 prompt 同时写「时区：Asia/Shanghai」。LLM 看到 `当前时间：2026-07-10T16:42:31+00:00` 却被告知时区 +08:00,就把结果按 +08:00 输出同一钟点数(16:43+08:00),换算回 UTC 反而**早 8 小时**(08:43 UTC),被 `validate` 判 `past_time`「那个时间已经过去了」拒绝建提醒。金丝雀真实验证才暴露(单测 mock 的 now 恰好一致就测不出)。修复:`_build_messages` 里 `now.astimezone(ZoneInfo(声明时区))` 再写进 prompt(naive 先补 UTC、未知时区容错退回),使 prompt 自洽。下游 `remind_at/scheduled_at` 是 `timestamptz`,按绝对时刻比较天然 tz 安全,故只需修「喂给 LLM 的那一刻」。
+- **检查**:凡把「当前时间」喂给 LLM 做时间推算,now 的时区必须与 prompt 声明/期望输出时区一致——别直接塞 `datetime.now(utc)` 配「Asia/Shanghai」文案。容器 `TZ` 空=UTC,是最常见错配源。此类 bug 需真实端到端(生产入口)才暴露,mock now 的单测会假通过。
+- **相关**:#4 #31
+
+## #51 跨轮合并的 `x or old` 兜底会复活旧值;完整新请求不该与陈旧半成品合并
+- **教训**:澄清流程把上一轮半成品存进 checkpoint `pending_partial`,下一轮 `_merge_partial(old,new)` 补全。`missing_fields=[f for f in new.missing_fields if f not in old.missing_fields] or old.missing_fields` 里的 `or old` 兜底:当本轮已补全(new.missing_fields=[])时列表推导为空 → 回退把**旧的 missing 复活**。于是一旦某轮把 `["title"]` 塞进 pending_partial,之后每轮即使 title 已抽对(title='测试'),`validate` 仍因 `"title" in missing_fields` 判 `missing_title`,用户「他总是解析不出来我要做的事儿」。同理 `scheduled_at=old or new` 会让旧的过期时间赢 → past_time。真实模型复现证明抽取本身正确,锅在合并。修复:①missing_fields 改为「两轮报缺并集 − 合并后已填字段」,与实际值一致;②`_extract_with_merge` 里本轮若已是完整显式建提醒(title+时间+explicit、无需澄清)则**旁路合并**直接采用并丢弃旧 partial——完整新请求不该被陈旧空标题/过期时间污染(澄清答复如「明天3点」缺标题,不触发旁路,仍正常补全)。
+- **检查**:合并/兜底逻辑里的 `newval or oldval`、`filtered or fallback` 要问「新值合法地为空时会不会错误复活旧值」。跨会话/跨轮累积的状态(checkpoint 半成品)要能被一条自足的新输入清零,别让陈旧状态永久污染。此类 bug 需有历史状态才复现,无状态单测/复现会假通过。
+- **相关**:#50 #38

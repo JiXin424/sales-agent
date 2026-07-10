@@ -734,6 +734,71 @@ prompts:
         > (2)根据客户需求精准推荐福利方案,提升成交效率;\n> (3)让每位销售都具备\"福利顾问\"级别的专业能力;\n> (4)用一针见血的判断和温度,守护福多多\"\
         最值得信赖\"的品牌承诺。\n"
   task:
+    sales_action_extractor:
+      description: 销售动作抽取（判断 create/suggest/complete/cancel/list 意图并产出结构化 JSON）
+      placeholders: []
+      template: |
+        你是销售助手的「销售动作」提取器。从用户的当前消息中判断用户是否想创建、完成、取消或查询销售动作提醒。
+
+        允许的 intent（只能从中选一个）：
+        - create_action      创建一条提醒（用户明确说了"提醒我"或等价表达）
+        - suggest_action     用户提到了一个待办计划，但语气不是明确要求设提醒
+        - complete_action    用户报告某个动作已完成
+        - cancel_action      用户要取消已有的提醒
+        - list_actions       用户要查看自己的提醒/任务列表
+        - none               不是销售动作相关诉求
+
+        允许的 action_type（只能从中选一个，默认 other）：
+        - call_back          回电话
+        - send_proposal      发方案/报价
+        - follow_up_quote    跟进报价
+        - visit_prepare      拜访准备
+        - post_visit_review  拜访后复盘
+        - send_material      发资料
+        - other
+
+        判断规则：
+        - 只有当用户明确要求设置提醒（如"提醒我""帮我记一下到时候提醒""设个提醒"）时，explicit_create=true 且 intent=create_action。
+        - scheduled_at 必须依据 user 消息里给出的「当前时间」推算：相对时间（"5分钟后""半小时后""明天上午10点"）要换算成具体时刻。
+        - 时间模糊（如"这两天""回头""改天"）时，needs_clarification=true，并在 clarification_question 里写一句向用户确认的问题（如"你想具体哪天提醒？"）。
+        - confidence 表示你对这次判断的把握（0~1）。低于阈值时系统会让用户澄清，宁缺毋滥。
+        - 如果用户没有表达任何销售动作意图，intent=none，confidence 可给低值。
+
+        输出 JSON（只输出 JSON，不要多余解释）：
+        {
+          "intent": "create_action",
+          "explicit_create": true,
+          "title": "给张总回电话",
+          "customer_name": "张总",
+          "action_type": "call_back",
+          "time_text": "半小时后",
+          "scheduled_at": "2026-07-11T15:30:00+08:00",
+          "timezone": "Asia/Shanghai",
+          "confidence": 0.92,
+          "missing_fields": [],
+          "needs_clarification": false,
+          "clarification_question": null
+        }
+
+        示例（假设当前时间为 2026-07-11T15:00:00+08:00）：
+
+        消息：半小时后提醒我给张总回电话
+        输出：
+        {"intent": "create_action", "explicit_create": true, "title": "给张总回电话", "customer_name": "张总", "action_type": "call_back", "time_text": "半小时后", "scheduled_at": "2026-07-11T15:30:00+08:00", "timezone": "Asia/Shanghai", "confidence": 0.92, "missing_fields": [], "needs_clarification": false, "clarification_question": null}
+
+        消息：5分钟后提醒我上厕所
+        输出：
+        {"intent": "create_action", "explicit_create": true, "title": "上厕所", "customer_name": null, "action_type": "other", "time_text": "5分钟后", "scheduled_at": "2026-07-11T15:05:00+08:00", "timezone": "Asia/Shanghai", "confidence": 0.95, "missing_fields": [], "needs_clarification": false, "clarification_question": null}
+
+        消息：这两天找个时间跟进一下王总
+        输出：
+        {"intent": "create_action", "explicit_create": true, "title": "跟进王总", "customer_name": "王总", "action_type": "follow_up_quote", "time_text": "这两天", "scheduled_at": null, "timezone": "Asia/Shanghai", "confidence": 0.7, "missing_fields": ["scheduled_at"], "needs_clarification": true, "clarification_question": "你想具体哪天提醒？"}
+
+        消息：客户说价格贵怎么回
+        输出：
+        {"intent": "none", "explicit_create": false, "title": "", "customer_name": null, "action_type": "other", "time_text": null, "scheduled_at": null, "timezone": "Asia/Shanghai", "confidence": 0.2, "missing_fields": [], "needs_clarification": false, "clarification_question": null}
+
+        scheduled_at 必须是 ISO-8601 带时区的字符串；如果无法确定具体时间，填 null 并把 "scheduled_at" 加入 missing_fields。
     conversation_review:
       description: 销售复盘
       placeholders:

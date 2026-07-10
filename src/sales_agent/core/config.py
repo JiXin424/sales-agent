@@ -428,6 +428,13 @@ class Settings(BaseModel):
                 guided_flows_enabled.strip().lower() in {"1", "true", "yes", "on"}
             )
 
+        # 环境变量覆盖 sales_actions 配置（销售动作提醒总开关，默认关）
+        sales_actions_enabled = os.getenv("SALES_ACTIONS_ENABLED")
+        if sales_actions_enabled is not None:
+            raw.setdefault("sales_actions", {})["enabled"] = (
+                sales_actions_enabled.strip().lower() in {"1", "true", "yes", "on"}
+            )
+
         # 环境变量覆盖 topic_routing 配置
         topic_routing_enabled = os.getenv("TOPIC_ROUTING_ENABLED")
         if topic_routing_enabled is not None:

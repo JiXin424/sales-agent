@@ -13,6 +13,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from sales_agent.llm.prompt_loader import get_prompt
 from sales_agent.services.sales_actions.contracts import (
     OUTCOME_TAGS,
     OutcomeExtraction,
@@ -81,8 +82,8 @@ async def parse_sales_action_request(
         ``intent="none"``、``confidence=0.0`` 的兜底结果（不抛异常），
         以便调用方降级为普通聊天。
     """
-    messages = _build_messages(message, now, timezone)
     try:
+        messages = _build_messages(message, now, timezone)
         response = await chat_model.generate(
             messages=messages,
             temperature=0.0,

@@ -272,9 +272,8 @@ class Settings(BaseModel):
     user_profile_memory: UserProfileMemoryConfig = UserProfileMemoryConfig()
     sales_actions: SalesActionsConfig = SalesActionsConfig()
 
-    # LLM 调用参数（temperature/max_tokens）默认值文件路径，开发者维护、git 管版本
-    llm_call_defaults_path: str = "config/llm_call_defaults.yaml"
-    prompts_path: str = "config/prompts.yaml"
+    # LLM 配置（参数 + prompt 模板）统一文件路径，开发者维护、git 管版本
+    llm_config_path: str = "config/llm_config.yaml"
 
     # 延迟导入避免循环依赖
     @property

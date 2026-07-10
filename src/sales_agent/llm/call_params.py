@@ -1,6 +1,6 @@
 """LLM 调用参数（temperature/max_tokens）默认值加载器。
 
-启动时 load_call_params() 读 config/llm_call_defaults.yaml 并校验，缓存进内存；
+启动时 load_call_params() 读 config/llm_config.yaml 并校验，缓存进内存；
 运行时 get_call_params(call_site) 零 IO 读取。仅开发者改，版本/回滚交 git。
 """
 from __future__ import annotations
@@ -46,6 +46,9 @@ def load_call_params(path: str) -> None:
     raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
         raise ValueError(f"LLM 调用参数文件顶层必须是 dict: {path}")
+    raw = raw.get("params", {})
+    if not isinstance(raw, dict):
+        raise ValueError(f"LLM 调用参数文件缺少 'params' 段: {path}")
     params: dict[str, CallParams] = {}
     for key, val in raw.items():
         if not isinstance(val, dict):
@@ -59,5 +62,5 @@ def get_call_params(call_site: str) -> CallParams:
     if _PARAMS is None:
         raise RuntimeError("LLM 调用参数未加载，请先在启动序列调 load_call_params()")
     if call_site not in _PARAMS:
-        raise KeyError(f"未知 LLM 调用点 '{call_site}'，请检查 config/llm_call_defaults.yaml")
+        raise KeyError(f"未知 LLM 调用点 '{call_site}'，请检查 config/llm_config.yaml")
     return _PARAMS[call_site]

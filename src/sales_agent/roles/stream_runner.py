@@ -42,12 +42,12 @@ async def run() -> None:
 
     # 加载 LLM 调用参数默认值（temperature/max_tokens）
     from sales_agent.llm.call_params import load_call_params
-    load_call_params(settings.llm_call_defaults_path)
+    load_call_params(settings.llm_config_path)
     logger.info("LLM call params loaded (stream runner)")
 
     # 加载 Prompt 模板
     from sales_agent.llm.prompt_loader import load_prompts
-    load_prompts(settings.prompts_path)
+    load_prompts(settings.llm_config_path)
     logger.info("Prompts loaded (stream runner)")
 
     # 加载 TenantRuntime

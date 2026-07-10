@@ -5,6 +5,7 @@ import re
 from typing import TYPE_CHECKING, Any, Protocol
 
 from sales_agent.llm.base import ChatModel
+from sales_agent.llm.call_params import get_call_params
 from sales_agent.ontology.schemas import GraphEvidence, OntologyAnswer
 
 if TYPE_CHECKING:
@@ -280,10 +281,11 @@ class OntologyAnswerService:
                 graph_evidence, message, task_type,
                 prompt_text=prompt_text,
             )
+        p = get_call_params("ontology_answer")
         raw = await self.chat_model.generate(
             messages=[{"role": "user", "content": rendered_prompt}],
-            temperature=0.2,
-            max_tokens=1600,
+            temperature=p.temperature,
+            max_tokens=p.max_tokens,
         )
         try:
             parsed = _parse_json(raw)

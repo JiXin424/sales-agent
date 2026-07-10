@@ -6,6 +6,7 @@ import time
 from typing import TYPE_CHECKING, Protocol
 
 from sales_agent.llm.base import ChatModel, EmbeddingModel
+from sales_agent.llm.call_params import get_call_params
 from sales_agent.ontology.schemas import GraphEvidence
 
 if TYPE_CHECKING:
@@ -65,13 +66,14 @@ class OntologyRetrievalService:
             question=question,
         )
         try:
+            p = get_call_params("ontology_retrieval")
             raw = await self.chat_model.generate(
                 messages=[{
                     "role": "user",
                     "content": prompt,
                 }],
-                temperature=0,
-                max_tokens=100,
+                temperature=p.temperature,
+                max_tokens=p.max_tokens,
                 response_format={"type": "json_object"},
             )
             parsed = json.loads(raw)

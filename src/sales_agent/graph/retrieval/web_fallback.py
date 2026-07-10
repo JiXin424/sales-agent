@@ -11,6 +11,7 @@ from typing import Any
 
 from langgraph.runtime import Runtime
 
+from sales_agent.llm.call_params import get_call_params
 from sales_agent.services.web_search import bocha_search, web_search_sources_to_context
 
 logger = logging.getLogger(__name__)
@@ -68,10 +69,11 @@ async def web_fallback_and_analyze(
     analysis_text = ""
     if chat_model is not None:
         try:
+            p = get_call_params("web_fallback")
             raw = await chat_model.generate(
                 messages=[{"role": "user", "content": rendered}],
-                temperature=0.2,
-                max_tokens=800,
+                temperature=p.temperature,
+                max_tokens=p.max_tokens,
             )
             parsed = json.loads(raw)
             analysis_text = parsed.get("analysis", raw)

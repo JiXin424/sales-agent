@@ -16,6 +16,7 @@ import logging
 from langgraph.runtime import Runtime
 
 from sales_agent.core.config import get_settings
+from sales_agent.llm.call_params import get_call_params
 
 logger = logging.getLogger(__name__)
 
@@ -72,13 +73,14 @@ async def extract_terms_node(state: dict, runtime: Runtime) -> dict:
     )
 
     try:
+        p = get_call_params("ontology_graph")
         raw = await chat_model.generate(
             messages=[{
                 "role": "user",
                 "content": prompt,
             }],
-            temperature=0,
-            max_tokens=100,
+            temperature=p.temperature,
+            max_tokens=p.max_tokens,
             response_format={"type": "json_object"},
         )
         parsed = json.loads(raw)

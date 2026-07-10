@@ -51,6 +51,8 @@ v0 是本地可运行原型，支持 **HTTP API** 和 **钉钉单聊** 两种接
 - 「本体探索」调试页（`/agents/:id/ontology`）：三栏实时可视化检索过程 / 问答 / 喂给大模型的完整上下文（SSE 流式，复用图谱检索+回答引擎）。
 - **图谱+RAG 混合并行（`KNOWLEDGE_ENGINE=hybrid` 或 `HYBRID_RETRIEVAL=true`）**：graph 路径（钉钉 Stream 生产入口）下，LangGraph `Send` fan-out 同时执行 ontology 图谱检索与 RAG 检索，结果经 state reducer（`sources: add`）合并后统一进 `evidence_gate → generate`。与「混合检索 Hybrid RRF」（向量+关键词，`retrieval.mode: hybrid`）是两个不同维度的混合，可叠加。
 
+- **部分命中实体走 web 缺口补全（2026-07-10）**：ontology 路命中 query 中的部分实体、但另有实体在 KB 无数据时（如「全品C 和 X品牌 区别」，全品C 在图谱、X品牌 不在），对未命中实体定向调 Bocha web 搜索补资料，与 KB 结果合并后交给生成，引用区按来源标「知识库 / 网络搜索」。每轮最多补 `web_search.max_gap_entities`（默认 2）个实体；web 失败/无结果时静默回退纯 KB。
+
 详见 [`docs/ontology-neo4j-ops.md`](docs/ontology-neo4j-ops.md)。
 
 ### legacy_rag（传统 Markdown chunk 检索，回退模式）
@@ -833,6 +835,7 @@ PYTHONPATH=src pytest tests/integration/test_pilot_api.py -v
 
 | 日期 | 摘要 |
 |------|------|
+| [2026-07-10](changelog/2026-07-10.md) | **联网搜索：部分命中实体缺口补全**：hybrid 部署下，query 提到的品牌/产品实体只有部分在知识图谱命中时（如「全品C 和 X品牌 区别」，全品C 在 KB、X品牌 不在），原管线因 `sources>0` 放行只拿全品C 素材硬答。新增 `gap_fill.py` 纯函数缺口检测（`search_terms` 减命中实体名），`_retrieve_via_ontology` 对未命中实体定向调 `web_fallback_and_analyze`（查询词 `"{实体} 产品 功能 介绍"`、`context_message` 保留原句意图），web 结果与 KB 结果**追加合并**（取代原「全空才触发 + 整体替换」），引用区按 `source_type` 区分「知识库/网络搜索」。`web_fallback_and_analyze` 加可选 `search_query`/`context_message`（旧调用点零改动），`WebSearchConfig.max_gap_entities` 默认 2。web 失败静默回退纯 KB。20 单测 + 回归全过。 |
 | [2026-07-10](changelog/2026-07-10.md) | **DeepEval HTML 报告渲染 markdown**：HTML 报告是客户端 JS 渲染，「完整回答」/「参考答案」原先只做尖括号转义、无 markdown→html，导致 `##`/列表/表格/加粗显示成源码。修复：内嵌 marked v12.0.2（`eval/vendor/marked.min.js`，报告保持自包含可离线），新增 `mdToHtml`（先转义 `&`/`<` 防 XSS、保留 `>` 识别 blockquote，再 `marked.parse` gfm+breaks），两字段改调它并补 `.md` CSS。node 实跑验证标题/列表/**表格**/代码块/blockquote 全渲染、`<script>` 被转义不可执行。仅影响 eval HTML 报告，不动生产链路、MD/CSV 报告。详见 changelog。 |
 | [2026-07-09](changelog/2026-07-09.md) | **CI/CD 分支部署策略：main 重建全部、dev 仅本机**：dev 不再碰 test（`deploy-targets-dev.json` 删 test 条目 + `deploy-dev.yml` 删 build deploy image 步骤），dev push 只重建本机 prod2；main push fan-out 三台（prod3+prod2+test）仅应用容器 force-recreate（postgres/neo4j 不动，由 `FORCE_RECREATE_APP` + `config --services` 黑名单过滤 infra 实现）；修 `ci-fanout.sh` 把 dev 部署代码错拉成 main 的硬编码 bug（按 `DEPLOY_BRANCH` 拉对应分支）。⚠️ main 落后 dev 50 commit，push main 前建议先 merge dev→main。详见 changelog。 |
 | [2026-07-09](changelog/2026-07-09.md) | **钉钉语音/图片支持流式互动卡片**：此前仅文字走流式卡片，语音/图片被硬门禁（`stream_client.py` `message_type == "text"`）挡在非流式路径。修复：① 抽出 `_should_stream` 门禁，受支持媒体类型在 `media_enabled` 时也进流式；② `_handle_streaming` 内接 `DingTalkMediaAdapter.to_agent_text`，先开「正在识别…」过渡卡片再 ASR/视觉转写，转写文本喂给同一流式图；③ `handle_dingtalk_stream_via_graph` 加可选 `card_id` 复用过渡卡（单卡 UX，文字路径零回归）；④ 修 CardSender 不可用兜底透传真实 `message_type`+媒体字段；⑤ 识别失败在原卡 finalize 友好提示。新增 12 个单测（门禁/转写/失败兜底/复用卡），dingtalk 111 + 相关 41 单测全过。遗留独立隐患：生成节点 `generate_node` 走非流式 `generate()`，token 级打字机可能未真正逐字（`graph_stream.py` 满屏调试日志印证），见 changelog。 |

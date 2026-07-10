@@ -32,7 +32,7 @@ _TASK_PLACEHOLDERS = ("message",)
 
 
 def _task_entries() -> list[BuiltinPrompt]:
-    """构造 12 个 task 类内置 prompt。延迟 import 避免模块加载顺序问题。"""
+    """构造 task 类内置 prompt。延迟 import 避免模块加载顺序问题。"""
     from sales_agent.prompts import (
         conversation_review,
         customer_context_summary,
@@ -47,8 +47,10 @@ def _task_entries() -> list[BuiltinPrompt]:
         visit_preparation,
         conversation_scoring,
     )
+    from sales_agent.prompts.memory_extractor_prompt import MEMORY_EXTRACTOR_PROMPT
 
     return [
+        BuiltinPrompt("task", "memory_extraction", MEMORY_EXTRACTOR_PROMPT, (), "记忆候选提取"),
         BuiltinPrompt("task", "emotional_support", emotional_support.EMOTIONAL_SUPPORT_PROMPT, _TASK_PLACEHOLDERS, "情绪支持"),
         BuiltinPrompt("task", "knowledge_qa", knowledge_qa.KNOWLEDGE_QA_PROMPT, _TASK_PLACEHOLDERS, "知识问答"),
         BuiltinPrompt("task", "script_generation", script_generation.SCRIPT_GENERATION_PROMPT, _TASK_PLACEHOLDERS, "话术生成"),
@@ -71,6 +73,8 @@ def _system_router_risk_entries() -> list[BuiltinPrompt]:
     from sales_agent.prompts.risk_check_prompt import RISK_CHECK_PROMPT
     from sales_agent.prompts.system import SYSTEM_CONSTRAINT
     from sales_agent.prompts.task_router_prompt import TASK_ROUTER_PROMPT
+    from sales_agent.prompts.topic_restore_resolver_prompt import TOPIC_RESTORE_RESOLVER_PROMPT
+    from sales_agent.scenarios.prompt import SCENARIO_MATCHER_PROMPT
 
     return [
         BuiltinPrompt("system", "system_constraint", SYSTEM_CONSTRAINT, (), "系统约束（Agent 人设与硬性边界）"),
@@ -78,6 +82,8 @@ def _system_router_risk_entries() -> list[BuiltinPrompt]:
         BuiltinPrompt("router", "context_resolver", CONTEXT_RESOLVER_PROMPT, (), "上下文消解（话语-话题关系）"),
         BuiltinPrompt("router", "clarification_resolver", CLARIFICATION_RESOLVER_PROMPT, (), "澄清回复决策"),
         BuiltinPrompt("router", "evidence_router", EVIDENCE_ROUTER_PROMPT, (), "意图证据路由分析器"),
+        BuiltinPrompt("router", "topic_restore_resolver", TOPIC_RESTORE_RESOLVER_PROMPT, (), "话题恢复判断（候选旧话题选择）"),
+        BuiltinPrompt("router", "scenario_matcher", SCENARIO_MATCHER_PROMPT, ("questions_json",), "销售场景意图识别"),
         BuiltinPrompt("risk", "risk_check", RISK_CHECK_PROMPT, ("message", "answer"), "风险检查 LLM 合规复核"),
     ]
 
@@ -109,6 +115,24 @@ def _web_entry() -> list[BuiltinPrompt]:
     from sales_agent.prompts.web_analysis_prompt import WEB_ANALYSIS_PROMPT
     return [
         BuiltinPrompt("web", "web_analysis", WEB_ANALYSIS_PROMPT, ("search_results",), "联网搜索结果分析"),
+    ]
+
+
+def _media_entries() -> list[BuiltinPrompt]:
+    """钉钉媒体适配 prompt：图片理解（system/user）+ 语音转写。
+
+    调用点（media_adapter）无 db/tenant 上下文，注册仅为获得 DB 覆盖的兜底层。
+    """
+    from sales_agent.integrations.dingtalk.media_adapter import (
+        MEDIA_AUDIO_TRANSCRIBE_PROMPT,
+        MEDIA_VISION_SYSTEM_PROMPT,
+        MEDIA_VISION_USER_PROMPT,
+    )
+
+    return [
+        BuiltinPrompt("system", "media_vision_system", MEDIA_VISION_SYSTEM_PROMPT, (), "钉钉图片理解 system 消息"),
+        BuiltinPrompt("task", "media_vision_user", MEDIA_VISION_USER_PROMPT, (), "钉钉图片理解 user 文本"),
+        BuiltinPrompt("task", "media_audio_transcribe", MEDIA_AUDIO_TRANSCRIBE_PROMPT, (), "钉钉语音转写 user 文本"),
     ]
 
 
@@ -144,6 +168,7 @@ BUILTIN_PROMPTS: list[BuiltinPrompt] = [
     *_system_router_risk_entries(),
     *_coach_entries(),
     *_web_entry(),
+    *_media_entries(),
     *_knowledge_entries(),
 ]
 

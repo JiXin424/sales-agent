@@ -20,6 +20,7 @@ from sales_agent.api.schemas import (
     PromptVersionResponse,
     PromptVersionUpdate,
 )
+from sales_agent.llm.call_params import get_call_params
 from sales_agent.services.prompt_registry import PromptRegistry
 from sales_agent.services.tenant_resolver import TenantResolver
 
@@ -355,10 +356,11 @@ async def preview_prompt(
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": rendered},
             ]
+            p = get_call_params("prompt_preview")
             model_output = await model_provider.chat.generate(
                 messages=messages,
-                temperature=0.3,
-                max_tokens=2000,
+                temperature=p.temperature,
+                max_tokens=p.max_tokens,
             )
         except Exception as e:
             logger.warning("Preview generation failed: %s", e)

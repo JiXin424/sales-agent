@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from sales_agent.core.exceptions import ModelFailedError
 from sales_agent.llm.base import ChatModel
+from sales_agent.llm.call_params import get_call_params
 from sales_agent.ontology.schemas import EntityCandidate, EvidenceItem, FactCandidate
 
 if TYPE_CHECKING:
@@ -118,18 +119,18 @@ FACT_EXTRACTION_PROMPT = """你是销售知识本体抽取专家。请从文档�
 async def _generate_with_retry(
     chat_model: ChatModel,
     messages: list[dict[str, str]],
-    temperature: float = 0.1,
-    max_tokens: int = 5000,
+    call_site: str,
     max_retries: int = _MAX_EXTRACTION_RETRIES,
 ) -> str:
     """调用 LLM generate，带退避重试（处理服务暂时不可用等瞬时错误）。"""
+    p = get_call_params(call_site)
     last_error: str = ""
     for attempt in range(max_retries + 1):
         try:
             return await chat_model.generate(
                 messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
+                temperature=p.temperature,
+                max_tokens=p.max_tokens,
             )
         except ModelFailedError as exc:
             last_error = str(exc)
@@ -185,8 +186,7 @@ async def extract_entities(
         raw = await _generate_with_retry(
             chat_model,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
-            max_tokens=5000,
+            call_site="ontology_entity_extraction",
         )
         for entity in parse_entities_json(raw):
             key = (entity.type, entity.name)
@@ -276,8 +276,7 @@ async def extract_facts(
             raw = await _generate_with_retry(
                 chat_model,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=6000,
+                call_site="ontology_fact_extraction",
             )
             for fact in parse_facts_json(raw):
                 key = (fact.subject_name, fact.predicate, fact.object_name)

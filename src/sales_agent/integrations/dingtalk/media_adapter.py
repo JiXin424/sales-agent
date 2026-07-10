@@ -16,6 +16,7 @@ import httpx
 from openai import AsyncOpenAI
 
 from sales_agent.integrations.dingtalk.config import DingTalkConfig
+from sales_agent.llm.call_params import get_call_params
 from sales_agent.integrations.dingtalk.message_sender import DingTalkAccessTokenManager
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,14 @@ _RECOGNITION_TEXT_KEYS = {
     "transcript",
     "transcription",
 }
+
+# --- 模块级 prompt 常量（注册进 BUILTIN_PROMPTS，获得 DB 覆盖路径） ---
+MEDIA_VISION_SYSTEM_PROMPT = (
+    "你是销售陪跑助手的图片理解模块。请用中文简洁描述图片中的文字、场景、"
+    "客户意图和对销售回复有用的信息，不要编造看不到的内容。"
+)
+MEDIA_VISION_USER_PROMPT = "请理解这张钉钉用户发来的图片，输出可供销售 Agent 回答的上下文。"
+MEDIA_AUDIO_TRANSCRIBE_PROMPT = "请只转写这段语音的中文内容，不要添加解释。"
 
 
 class DingTalkMediaAdapter:
@@ -152,23 +161,24 @@ class DingTalkMediaAdapter:
     async def _describe_image(self, image_bytes: bytes, mime_type: str) -> str:
         client = self._get_openai_client()
         data_url = f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('ascii')}"
+        p = get_call_params("media_vision")
         response = await client.chat.completions.create(
             model=self._config.vision_model,
             messages=[
                 {
                     "role": "system",
-                    "content": "你是销售陪跑助手的图片理解模块。请用中文简洁描述图片中的文字、场景、客户意图和对销售回复有用的信息，不要编造看不到的内容。",
+                    "content": MEDIA_VISION_SYSTEM_PROMPT,
                 },
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": "请理解这张钉钉用户发来的图片，输出可供销售 Agent 回答的上下文。"},
+                        {"type": "text", "text": MEDIA_VISION_USER_PROMPT},
                         {"type": "image_url", "image_url": {"url": data_url}},
                     ],
                 },
             ],
-            temperature=0.1,
-            max_tokens=800,
+            temperature=p.temperature,
+            max_tokens=p.max_tokens,
         )
         content = response.choices[0].message.content
         if isinstance(content, list):
@@ -196,19 +206,20 @@ class DingTalkMediaAdapter:
         client = self._get_openai_client()
         audio_format = _audio_format_for_mime(mime_type)
         audio_b64 = base64.b64encode(audio_bytes).decode("ascii")
+        p = get_call_params("media_audio")
         response = await client.chat.completions.create(
             model=self._config.audio_model,
             messages=[
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": "请只转写这段语音的中文内容，不要添加解释。"},
+                        {"type": "text", "text": MEDIA_AUDIO_TRANSCRIBE_PROMPT},
                         {"type": "input_audio", "input_audio": {"data": audio_b64, "format": audio_format}},
                     ],
                 }
             ],
-            temperature=0.0,
-            max_tokens=800,
+            temperature=p.temperature,
+            max_tokens=p.max_tokens,
         )
         content = response.choices[0].message.content
         if isinstance(content, list):

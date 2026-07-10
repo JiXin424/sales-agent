@@ -17,6 +17,19 @@ TEST_DB_URL = os.getenv(
 )
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _load_llm_call_params():
+    """session 级自动加载 LLM 调用参数默认值。
+
+    镜像 app 启动序列（roles/stream_runner.py 调 load_call_params），
+    让跑真实 service 代码的单测能拿到 temperature/max_tokens。
+    """
+    from sales_agent.core.config import get_settings
+    from sales_agent.llm.call_params import load_call_params
+
+    load_call_params(get_settings().llm_call_defaults_path)
+
+
 @pytest.fixture(scope="session")
 def event_loop():
     """创建 session 级别的事件循环。"""

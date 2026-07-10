@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from sales_agent.llm.call_params import get_call_params
 from sales_agent.prompts.risk_check_prompt import RISK_CHECK_PROMPT
 # 复用 task_router 的平衡括号 JSON 提取器：``re.search(r"\{[^}]+\}")`` 在嵌套
 # JSON 上会截断（risk prompt 同样可能返回嵌套结构），此处与 task_router 保持一致。
@@ -278,10 +279,11 @@ class RiskChecker:
             prompt = (risk_prompt or _DEFAULT_RISK_PROMPT).format(
                 message=message, answer=answer_text[:1000]
             )
+            p = get_call_params("risk_checker")
             response = await chat_model.generate(
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=300,
+                temperature=p.temperature,
+                max_tokens=p.max_tokens,
             )
             # 用平衡花括号提取完整 JSON（支持嵌套），与 task_router 一致；
             # 旧 ``re.search(r"\{[^}]+\}")`` 在嵌套 JSON 上会截断出非法 JSON。

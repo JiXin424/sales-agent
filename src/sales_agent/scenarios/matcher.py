@@ -6,6 +6,7 @@ import json
 import logging
 from typing import Any
 
+from sales_agent.llm.call_params import get_call_params
 from sales_agent.scenarios.loader import ScenarioRegistry, get_scenario_registry
 from sales_agent.scenarios.models import ScenarioMatchDecision
 from sales_agent.scenarios.prompt import SCENARIO_MATCHER_PROMPT
@@ -51,10 +52,11 @@ async def match_scenario(
 
     for attempt in range(2):
         try:
+            p = get_call_params("scenario_matcher")
             response = await chat_model.generate(
                 messages=messages,
-                temperature=0.0,
-                max_tokens=200,
+                temperature=p.temperature,
+                max_tokens=p.max_tokens,
             )
             decision = parse_model_json(response, ScenarioMatchDecision)
 

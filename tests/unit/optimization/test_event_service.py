@@ -230,10 +230,12 @@ class TestEventServiceAsync:
         await service.append(iteration, "stage.started")
         await service.append(iteration, "stage.completed")
 
+        # after_sequence=2 跳过已追加的 2 条事件 → 走无事件分支 → 检查迭代状态 → terminal=True
+        # （wait_after 是 long-poll：有事件时立即返回 terminal=False，无事件才判定终态）
         result = await service.wait_after(
             tenant_id=sample_tenant,
             iteration_id=iteration.id,
-            after_sequence=0,
+            after_sequence=2,
             timeout_seconds=1,
         )
         assert result.terminal is True

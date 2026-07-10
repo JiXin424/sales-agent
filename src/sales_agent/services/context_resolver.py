@@ -12,6 +12,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sales_agent.llm.call_params import get_call_params
 from sales_agent.models.conversation_topic import ConversationTopic
 from sales_agent.prompts.context_resolver_prompt import CONTEXT_RESOLVER_PROMPT
 from sales_agent.services.prompt_resolver_helper import resolve_router_prompt
@@ -146,10 +147,11 @@ async def resolve_context(
 
     for attempt in range(2):
         try:
+            p = get_call_params("context_resolver")
             response = await chat_model.generate(
                 messages=messages,
-                temperature=0.0,
-                max_tokens=500,
+                temperature=p.temperature,
+                max_tokens=p.max_tokens,
             )
             return parse_model_json(response, ContextDecision)
         except (json.JSONDecodeError, ValueError) as exc:

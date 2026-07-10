@@ -4,6 +4,7 @@ import logging
 
 from pydantic import BaseModel, Field
 
+from sales_agent.llm.call_params import get_call_params
 from sales_agent.prompts.memory_extractor_prompt import MEMORY_EXTRACTOR_PROMPT
 from sales_agent.services.memory.contracts import MemoryCandidate
 from sales_agent.services.memory.policy import classify_sensitivity, classify_stability
@@ -34,7 +35,8 @@ async def extract_memory_candidates(
     ]
 
     try:
-        raw = await chat_model.generate(messages=messages, temperature=0.0, max_tokens=700)
+        p = get_call_params("memory_extractor")
+        raw = await chat_model.generate(messages=messages, temperature=p.temperature, max_tokens=p.max_tokens)
         parsed = parse_model_json(raw, MemoryExtractionResult)
     except Exception as exc:
         logger.warning("memory extractor parse failure: %s", exc)

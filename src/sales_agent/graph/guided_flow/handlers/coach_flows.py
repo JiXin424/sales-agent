@@ -10,6 +10,7 @@ import logging
 import re
 from typing import Any
 
+from sales_agent.llm.call_params import get_call_params
 from sales_agent.prompts.coach_quick import (
     SB_CARD_TEMPLATE,
     SB_SPLIT_TEMPLATE,
@@ -103,7 +104,7 @@ async def _sw_llm_card(
         gratitude=payload.get("gratitude", ""),
         energy_sentence=payload.get("energy_sentence", ""),
     )
-    return await _llm_generate(chat_model, system or SW_SYSTEM, prompt, max_tokens=600, temperature=0.4)
+    return await _llm_generate(chat_model, system or SW_SYSTEM, prompt, call_site="coach_small_win")
 
 
 def _sw_needs_clarify(text: str) -> bool:
@@ -175,18 +176,19 @@ def _sb_start() -> tuple[str, dict[str, Any], str]:
 
 async def _llm_generate(
     chat_model: Any, system: str, user: str, *,
-    max_tokens: int = 900, temperature: float = 0.4,
+    call_site: str,
 ) -> str | None:
     if chat_model is None:
         return None
+    p = get_call_params(call_site)
     try:
         raw = await chat_model.generate(
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            temperature=temperature,
-            max_tokens=max_tokens,
+            temperature=p.temperature,
+            max_tokens=p.max_tokens,
         )
         out = (raw or "").strip()
         return out or None
@@ -201,7 +203,7 @@ async def _sb_llm_split(
 ) -> str | None:
     template = tpl or SB_SPLIT_TEMPLATE
     prompt = template.format(sales_input=sales_input, user_split=user_split)
-    return await _llm_generate(chat_model, system or SB_SYSTEM, prompt, max_tokens=400, temperature=0.2)
+    return await _llm_generate(chat_model, system or SB_SYSTEM, prompt, call_site="coach_block_split")
 
 
 async def _sb_llm_card(
@@ -214,7 +216,7 @@ async def _sb_llm_card(
         split_text=payload.get("split_text", ""),
         possibilities_attempt=payload.get("possibilities_attempt", ""),
     )
-    return await _llm_generate(chat_model, system or SB_SYSTEM, prompt, max_tokens=900, temperature=0.4)
+    return await _llm_generate(chat_model, system or SB_SYSTEM, prompt, call_site="coach_reframe")
 
 
 async def _sb_advance(

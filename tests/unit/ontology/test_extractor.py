@@ -34,10 +34,16 @@ async def test_extract_facts_chunks_entities_into_batches():
     """实体数 > batch_size 时分批调用 LLM，结果合并。"""
     calls: list[str] = []
 
+    call_idx = 0
+
     class FakeChat:
         async def generate(self, messages, temperature=None, max_tokens=None, **kwargs):
+            nonlocal call_idx
             calls.append(messages[0]["content"])
-            return '{"facts":[{"subject_name":"x","predicate":"p","value":"v"}]}'
+            # 每批返回不同 subject，避免被去重（key=subject/predicate/object）合并成 1
+            subj = f"E{call_idx}"
+            call_idx += 1
+            return f'{{"facts":[{{"subject_name":"{subj}","predicate":"p","value":"v"}}]}}'
 
     entities = [EntityCandidate(type="Product", name=f"E{i}") for i in range(20)]
     facts = await extract_facts(FakeChat(), "content", entities, batch_size=8)

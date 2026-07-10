@@ -11,6 +11,8 @@ import logging
 
 from fastapi import APIRouter
 
+from sales_agent.llm.call_params import get_call_params
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["health"])
@@ -101,9 +103,11 @@ async def model_diagnostics():
     chat_result = {"status": "unknown", "latency_ms": None, "error": None}
     try:
         start = time.time()
+        p = get_call_params("health_ping")
         response = await runtime.model_provider.chat.generate(
             messages=[{"role": "user", "content": "ping"}],
-            max_tokens=10,
+            temperature=p.temperature,
+            max_tokens=p.max_tokens,
         )
         chat_result["status"] = "ok"
         chat_result["latency_ms"] = int((time.time() - start) * 1000)

@@ -9,6 +9,7 @@ import time
 from typing import Any
 
 from sales_agent.llm.base import ChatModel
+from sales_agent.llm.call_params import get_call_params
 from sales_agent.prompts.system import SYSTEM_CONSTRAINT
 from sales_agent.services.prompt_defaults import BUILTIN_PROMPTS
 from sales_agent.services.retriever import RetrievalResult
@@ -191,10 +192,11 @@ async def execute_agent(
 
     # 2. 调用模型
     start_time = time.time()
+    p = get_call_params("agent_executor")
     raw_response = await chat_model.generate(
         messages=messages,
-        temperature=0.3,
-        max_tokens=2000,
+        temperature=p.temperature,
+        max_tokens=p.max_tokens,
     )
     latency_ms = int((time.time() - start_time) * 1000)
     logger.info("Agent execution completed in %d ms for task %s", latency_ms, task_type)

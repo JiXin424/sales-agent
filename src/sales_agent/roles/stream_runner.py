@@ -40,6 +40,11 @@ async def run() -> None:
     await initialize_online_runtime()
     logger.info("Online runtime initialized (stream runner)")
 
+    # 加载 LLM 调用参数默认值（temperature/max_tokens）
+    from sales_agent.llm.call_params import load_call_params
+    load_call_params(settings.llm_call_defaults_path)
+    logger.info("LLM call params loaded (stream runner)")
+
     # 加载 TenantRuntime
     runtime = get_tenant_runtime()
     errors = runtime.validate_startup()

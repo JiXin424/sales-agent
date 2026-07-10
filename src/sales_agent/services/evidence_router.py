@@ -12,6 +12,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sales_agent.llm.call_params import get_call_params
 from sales_agent.prompts.evidence_router_prompt import EVIDENCE_ROUTER_PROMPT
 from sales_agent.services.prompt_resolver_helper import resolve_router_prompt
 from sales_agent.services.structured_router_output import EvidenceDecision, parse_model_json
@@ -147,10 +148,11 @@ async def route_intent_evidence(
 
     for attempt in range(2):
         try:
+            p = get_call_params("evidence_router")
             response = await chat_model.generate(
                 messages=messages,
-                temperature=0.0,
-                max_tokens=500,
+                temperature=p.temperature,
+                max_tokens=p.max_tokens,
             )
             decision = parse_model_json(response, EvidenceDecision)
 

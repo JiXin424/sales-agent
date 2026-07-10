@@ -296,6 +296,14 @@ Spec 3 projects active atomic memories into evidence-backed user profiles and re
 - 运维只读视图：API `/agents/{id}/sales-actions`（列表/详情/提醒/投递）+ 控制台「销售任务」页（无编辑按钮）。
 - 发布门禁：`TEST_DATABASE_URL=…test… bash scripts/run_sales_action_gate.sh`（unit + 集成 + fixture eval）。详见运维手册 [`docs/runbooks/sales-actions.md`](docs/runbooks/sales-actions.md)。
 
+### 卡片反馈采集（M1 capture-first）
+
+用户在互动卡片上的点赞 / 点踩 / 问题反馈多选，经钉钉 Stream 长连接回推。stream client 注册卡片回调 topic（`/v1.0/card/instances/callback`），`SalesAgentCardCallbackHandler` 防御式采集，原始载荷落表 `dingtalk_card_callback_events`（migration 0017）。
+
+- **全租户优雅降级**：无条件注册；`process` 全程 try/except、异常只 log 不外抛、恒 ACK；不发卡片 / 未配 `card_template_id` 的租户零副作用，绝不带崩 Stream 主循环。
+- **归因免映射表**：回调携带 `user_id`，结合固定 `tenant_id` 可确定性重算 conversation_id（`conversation_mapper.generate_conversation_id`）。
+- **M2 待办**（gated on 真实样本）：「原始载荷 → `feedbacks`」映射，点踩多选 → `labels_json` / `categories_json`，幂等与会话兜底。
+
 ## 快速开始
 
 ### 1. 启动数据库
@@ -845,6 +853,7 @@ PYTHONPATH=src pytest tests/integration/test_pilot_api.py -v
 
 | 日期 | 摘要 |
 |------|------|
+| [2026-07-10](changelog/2026-07-10.md) | **钉钉卡片反馈采集（M1 capture-first）**：补上「卡片点赞/点踩/问题反馈多选点了收不到」的接收缺口。stream client 注册卡片回调 topic（`/v1.0/card/instances/callback`），新增 `SalesAgentCardCallbackHandler` 防御式采集 → 原始载荷落新表 `dingtalk_card_callback_events`（migration 0017）。**全租户优雅降级**：无条件注册、异常只 log 不外抛、恒 ACK，不发卡片的租户零副作用。归因免映射表（回调带 user_id，conversation_id 可确定性重算）。「原始载荷 → `feedbacks`」的映射（含点踩多选 → labels/categories）留待 M2 基于真实样本。4 单测 + 迁移 up/down 隔离验证通过。 |
 | [2026-07-10](changelog/2026-07-10.md) | **销售动作卡片与提醒（Sales Action Cards）整体交付**：钉钉单聊销售任务卡片 + 一次性提醒 + 每日早/晚 digest + 卡片按钮回调（完成/推迟/取消）+ 后台调度投递 + 只读运维 API/控制台页 + 发布门禁。新增 `sales_action_cards/reminders/deliveries/events` 四表（migration 0016）、`services/sales_actions/` 域（contracts/time_parser/detector/repository/service/card_renderer/scheduler）、Online Graph 销售动作节点（路由优先级在 guided flow 后、普通 chat 前；澄清 partial 经 checkpoint 跨轮合并）、`POST /integrations/dingtalk/sales-actions/callback` 回调、`/agents/{id}/sales-actions` 运维 API、「销售任务」只读页。幂等保证：`FOR UPDATE SKIP LOCKED` 认领（含失败重试 + dead-letter）、digest 唯一键 + SAVEPOINT、按钮回调 `already_*`、终态翻转 `FOR UPDATE` 防并发。默认关闭 `sales_actions.enabled=false`。运维手册 [`docs/runbooks/sales-actions.md`](docs/runbooks/sales-actions.md)，门禁 `scripts/run_sales_action_gate.sh`。 |
 =======
 =======

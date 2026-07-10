@@ -405,6 +405,17 @@ async def start_dingtalk_stream_worker() -> None:
         handler,
     )
 
+    # 卡片按钮回调（点赞/点踩/问题反馈多选等）——无条件注册，采集落库。
+    # 不发卡片的租户永不收到该 topic，零副作用；handler 内部防御式恒 ACK。
+    from sales_agent.integrations.dingtalk.card_callback_handler import (
+        SalesAgentCardCallbackHandler,
+    )
+
+    client.register_callback_handler(
+        dingtalk_stream.CallbackHandler.TOPIC_CARD_CALLBACK,
+        SalesAgentCardCallbackHandler(runtime.tenant_id),
+    )
+
     _stream_task = asyncio.create_task(client.start())
     logger.info(
         "DingTalk Stream worker started: tenant=%s, corp_id=%s, streaming=%s",

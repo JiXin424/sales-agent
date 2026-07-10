@@ -94,6 +94,7 @@ def _import_dingtalk_models():
         DingTalkInboundMessage,
         DingTalkOutboundMessage,
         DingTalkUserMapping,
+        DingTalkCardCallbackEvent,
     )
 
 

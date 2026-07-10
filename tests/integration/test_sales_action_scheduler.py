@@ -421,3 +421,42 @@ async def test_digest_collision_absorbed_by_savepoint(session_factory, monkeypat
         ).scalars().all()
         assert len(digests) == 1  # the pre-seeded one - no duplicate created
         assert digests[0].idempotency_key == key
+
+
+@pytest.mark.asyncio
+async def test_tenant_scoped_run_claims_only_own_tenant(session_factory):
+    """共享库两租户各一条到期提醒：tenant_id='t1' 的调度只认领并投递 t1 的，
+    绝不碰 t2（防串台回归——A 租户 worker 抢走并用自己钉钉凭证发 B 租户提醒）。"""
+    c1 = await _seed_card(session_factory, tenant_id="t1", dingtalk_user_id="du1")
+    await _seed_reminder(session_factory, action_id=c1, tenant_id="t1")
+    c2 = await _seed_card(
+        session_factory, tenant_id="t2", agent_id="a2", user_id="u2",
+        dingtalk_user_id="du2",
+    )
+    await _seed_reminder(
+        session_factory, action_id=c2, tenant_id="t2", agent_id="a2", user_id="u2"
+    )
+
+    sender = FakeSender()
+    now = datetime(2026, 7, 10, 1, 5, tzinfo=UTC)  # past both remind_at
+
+    result = await run_sales_action_scheduler_once(
+        session_factory, lambda: sender, now,
+        morning_time="99:99", evening_time="99:99",  # disable digests
+        tenant_id="t1",
+    )
+
+    # 只投递了 t1（du1），t2 完全没被触碰
+    assert result.delivered == 1
+    assert len(sender.sends) == 1
+    assert sender.sends[0][0] == "du1"
+
+    async with session_factory() as db:
+        rows = (
+            await db.execute(
+                select(SalesActionReminder.tenant_id, SalesActionReminder.status)
+            )
+        ).all()
+    by_tenant = {t: s for t, s in rows}
+    assert by_tenant["t1"] == "delivered"
+    assert by_tenant["t2"] == "scheduled"  # 未被抢

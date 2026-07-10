@@ -126,6 +126,9 @@ async def run() -> None:
                     _make_sender,
                     settings.sales_actions.scan_interval_seconds,
                     max_attempts=settings.sales_actions.max_attempts,
+                    # 只处理本 worker 所属租户的提醒；共享库多租户（prod2/prod3）
+                    # 下若不传，A 租户 worker 会抢走并用自己钉钉凭证投递 B 租户提醒。
+                    tenant_id=runtime.tenant_id or None,
                 )
             )
             logger.info(

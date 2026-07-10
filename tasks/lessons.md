@@ -72,3 +72,4 @@
 - #50 给 LLM 的「当前时间」必须与 prompt 声明时区一致:容器默认 UTC + prompt 写 Asia/Shanghai → LLM 把相对时间(「1分钟后」)按 +08:00 输出同钟点数,换算回 UTC 早 8h → 被判 past_time 拒建。构造抽取消息时 now.astimezone(声明时区) 再写入,tz-aware 比较才对(timestamptz 存储天然安全)  `[verify]`
 - #51 跨轮合并的 `field=[...] or old.field` 兜底会复活旧值(new 补全后列表为空即回退旧),checkpoint 半成品一旦中毒每轮都失败(title 已给仍判 missing_title)。合并后字段按**合并后实际值**重算;且一条本身完整的新请求不该与陈旧半成品合并,直接旁路(否则旧的过期时间/空标题反污染完整请求)  `[verify]`
 - #52 钉钉 AI 流式卡片(createAndDeliver callbackType=STREAM)创建后必须发 streaming_finalize 结束帧(isFinalize=true)才关闭"生成中"、定格内容,否则永远"加载中"不出内容;一次性推送(提醒/digest)也要 finalize,别只照搬聊天流的 create。DB deliveries.status=success ≠ 用户看到内容(createAndDeliver 本身返回成功即算投递成功),渲染态必须真机看  `[verify]`
+- #53 共享库多租户、每租户各跑一个 worker 扫同一张表时,认领/调度类查询必须按 TENANT_ID 过滤,否则 A 租户 worker 用 FOR UPDATE SKIP LOCKED 抢走 B 租户任务、并用**自己**的凭证投递(串台)。"跨租户全局认领"的注释是"单一全局调度器"旧假设,与"每租户一 worker"部署冲突。启用共享资源上的多租户功能前先问"这查询有没有 tenant 边界";此类 bug 单租户测不出,要多租户共库才暴露  `[verify]`

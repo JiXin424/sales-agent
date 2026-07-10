@@ -66,3 +66,8 @@
 - **教训**:销售动作提醒到点、DB `deliveries.status=success`、拿到 `card_instance_id`,但钉钉卡片一直"加载中"不出内容。根因:卡片模板是钉钉 AI 流式卡片(`createAndDeliver` 带 `callbackType=STREAM`),创建后处于"生成中"态,必须再发 `streaming_finalize`(isFinalize=true)关闭指示器并定格内容。普通聊天回复正常,是因为走了 `send_markdown_card → streaming_update → streaming_finalize` 三步;而 scheduler 一次性推送只 `send_markdown_card`、没 finalize,故永远转圈。DB 记成功是因为 `createAndDeliver` 本身返回成功——**「投递成功」只证明卡片 API 接受了,不证明用户看到了内容**。修复:一次性卡片推送在创建后补 `streaming_finalize`(内容/outTrackId 与创建一致),模式同 `stream_client.py` 的"创建后立即 finalize"兜底。
 - **检查**:凡用钉钉流式/AI 卡片(`callbackType=STREAM`),不管流式聊天还是一次性推送,都要以 `streaming_finalize` 收尾。别把"API 返回 success / DB 记 success"当成"用户看到了内容"——卡片/UI 的渲染态要真机看,成功码只到"接受"层。
 - **相关**:#4 #49
+
+## #53 共享库多租户:每租户一 worker 扫同一张表,认领查询必须按 TENANT_ID 过滤
+- **教训**:销售动作提醒在 prod2(taishan/taishankaifa2 共享 postgres)启用后,用户在 taishan 建的提醒被 taishankaifa2 的机器人发出(串台)。根因:两租户各跑一个 worker、共扫 `sales_action_reminders`,而 `claim_due_reminders` 不按 tenant_id 过滤(docstring 写"跨租户全局认领")。两 worker `FOR UPDATE SKIP LOCKED` 抢同一批到期提醒,谁先抢谁投递,且各用**自己**的钉钉凭证 `DingTalkCardSender(settings.dingtalk)` → B worker 抢走 A 的提醒用 B 机器人发。这是"每租户一 worker + 共享库"部署与"单一全局调度器"设计假设的冲突,启用多租户功能才暴露。修复:每容器已有 TENANT_ID env,串到 scheduler 三个 pass(claim/digest/pursuit),条件式过滤(给定则按租户、为空则全局兼容)。
+- **检查**:凡在共享库上按行级 tenant_id 隔离、又给每租户各起一个后台 worker/scheduler 的场景,所有"认领/扫描/聚合"查询都必须带 tenant 边界。看到 `FOR UPDATE SKIP LOCKED`/全表扫的后台任务先问"这会不会跨租户抢单"。这类 bug 单租户跑不出来,必须多租户共库才复现——多租户启用后要专门验隔离。
+- **相关**:#4 #52

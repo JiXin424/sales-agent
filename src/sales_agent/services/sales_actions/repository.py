@@ -587,6 +587,7 @@ class SalesActionRepository:
         now: datetime,
         limit: int = 50,
         max_attempts: int = 5,
+        tenant_id: str | None = None,
     ) -> list[SalesActionReminder]:
         """认领到期提醒，翻转为 ``sending``。
 
@@ -598,31 +599,36 @@ class SalesActionRepository:
           Task 5 修复——见 task-5-context §MUST-DO repository extension）。
 
         ``attempts >= max_attempts`` 的失败提醒不再被认领（dead-letter）。
-        跨租户全局认领（调度器视角）。同一事务内二次调用看到的是已翻转
-        的 ``sending`` 行，因此返回 ``[]``。
+        同一事务内二次调用看到的是已翻转的 ``sending`` 行，因此返回 ``[]``。
+
+        **租户隔离**：``tenant_id`` 给定时只认领该租户的提醒。这是共享库多
+        租户部署（prod2 taishan/taishankaifa2、prod3 taishanyanshi/songbai 各
+        自的 worker 扫同一张表）的正确性前提——否则 A 租户 worker 会抢走 B 租户
+        的提醒并用**自己**的钉钉凭证投递（串台）。``tenant_id`` 为空时全局认领
+        （兼容假想的单一全局调度器部署）。
         """
-        rows = (
-            await self.db.execute(
-                select(SalesActionReminder)
-                .where(
-                    or_(
-                        and_(
-                            SalesActionReminder.status == "scheduled",
-                            SalesActionReminder.remind_at <= now,
-                        ),
-                        and_(
-                            SalesActionReminder.status == "failed",
-                            SalesActionReminder.next_attempt_at.is_not(None),
-                            SalesActionReminder.next_attempt_at <= now,
-                            SalesActionReminder.attempts < max_attempts,
-                        ),
-                    )
-                )
-                .order_by(SalesActionReminder.remind_at.asc())
-                .limit(limit)
-                .with_for_update(skip_locked=True)
+        stmt = select(SalesActionReminder).where(
+            or_(
+                and_(
+                    SalesActionReminder.status == "scheduled",
+                    SalesActionReminder.remind_at <= now,
+                ),
+                and_(
+                    SalesActionReminder.status == "failed",
+                    SalesActionReminder.next_attempt_at.is_not(None),
+                    SalesActionReminder.next_attempt_at <= now,
+                    SalesActionReminder.attempts < max_attempts,
+                ),
             )
-        ).scalars().all()
+        )
+        if tenant_id:
+            stmt = stmt.where(SalesActionReminder.tenant_id == tenant_id)
+        stmt = (
+            stmt.order_by(SalesActionReminder.remind_at.asc())
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        rows = (await self.db.execute(stmt)).scalars().all()
 
         for r in rows:
             r.status = "sending"
@@ -873,13 +879,15 @@ class SalesActionRepository:
     # ------------------------------------------------------------------
 
     async def find_overdue_pursuit_actions(
-        self, *, now: datetime, limit: int = 50
+        self, *, now: datetime, limit: int = 50, tenant_id: str | None = None
     ) -> list[SalesActionCard]:
         """Find pursuit actions past their scheduled_at that have no outcome yet.
 
         Pursuit actions are identified by a non-null ``success_criteria``.
         Only ``pending`` actions that are past their deadline and haven't been
         observed (``outcome_tag IS NULL``) are returned, ordered by oldest first.
+
+        ``tenant_id`` given scopes the scan to that tenant (shared-DB isolation).
         """
         stmt = (
             select(SalesActionCard)
@@ -892,6 +900,8 @@ class SalesActionRepository:
             .order_by(SalesActionCard.scheduled_at.asc())
             .limit(limit)
         )
+        if tenant_id:
+            stmt = stmt.where(SalesActionCard.tenant_id == tenant_id)
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
@@ -960,11 +970,14 @@ class SalesActionRepository:
         )
         return list((await self.db.execute(stmt)).scalars().all())
 
-    async def list_active_action_scopes(self) -> list[SalesActionScope]:
+    async def list_active_action_scopes(
+        self, *, tenant_id: str | None = None
+    ) -> list[SalesActionScope]:
         """枚举所有仍有 pending 动作的去重作用域（digest 创建用）。
 
         返回的 :class:`SalesActionScope` 携带 ``dingtalk_user_id``（取自卡片），
-        供调度器随后投递 digest 卡片。
+        供调度器随后投递 digest 卡片。``tenant_id`` 给定时只枚举该租户的作用域
+        （共享库多租户下每个 worker 只为自己租户建 digest）。
         """
         stmt = (
             select(
@@ -977,6 +990,8 @@ class SalesActionRepository:
             .where(SalesActionCard.status == "pending")
             .distinct()
         )
+        if tenant_id:
+            stmt = stmt.where(SalesActionCard.tenant_id == tenant_id)
         rows = (await self.db.execute(stmt)).all()
         scopes: list[SalesActionScope] = []
         seen: set[tuple] = set()

@@ -151,11 +151,16 @@ async def run_sales_action_scheduler_once(
     grace_hours: int | None = None,
     max_attempts: int | None = None,
     batch_size: int | None = None,
+    tenant_id: str | None = None,
 ) -> SchedulerRunResult:
     """单次扫描：认领到期 → 投递 → 记录 → 幂等创建 digest。
 
     所有时间/退避参数缺省时从 ``settings.sales_actions`` 读取，便于生产直接调用；
     测试可显式传值以脱离配置。
+
+    ``tenant_id`` 给定时，认领/digest/pursuit 三个 pass 都只作用于该租户——共享库
+    多租户部署（每个租户各跑一个 worker）必须传，否则 A 租户 worker 会抢走并投递
+    B 租户的提醒（串台）。为空时全局（兼容单一全局调度器）。
     """
     cfg = _load_sales_action_config()
     morning_time = morning_time if morning_time is not None else cfg.morning_digest_time
@@ -176,7 +181,7 @@ async def run_sales_action_scheduler_once(
     async with session_factory() as db:
         repo = SalesActionRepository(db)
         reminders = await repo.claim_due_reminders(
-            now=now, limit=batch, max_attempts=max_att
+            now=now, limit=batch, max_attempts=max_att, tenant_id=tenant_id
         )
 
         for reminder in reminders:
@@ -198,7 +203,9 @@ async def run_sales_action_scheduler_once(
     if cfg.pursuit_loop_enabled:
         async with session_factory() as db:
             repo = SalesActionRepository(db)
-            overdue = await repo.find_overdue_pursuit_actions(now=now, limit=50)
+            overdue = await repo.find_overdue_pursuit_actions(
+                now=now, limit=50, tenant_id=tenant_id
+            )
             for card in overdue:
                 if card.outcome_tag is not None:
                     continue  # already observed (safety check)
@@ -228,6 +235,7 @@ async def run_sales_action_scheduler_once(
             morning_time=morning_time,
             evening_time=evening_time,
             grace_hours=grace,
+            tenant_id=tenant_id,
         )
         await db.commit()
 
@@ -353,6 +361,7 @@ async def _create_due_digests(
     morning_time: str,
     evening_time: str,
     grace_hours: int,
+    tenant_id: str | None = None,
 ) -> int:
     """对每个仍有 pending 动作的作用域，按本地时间窗口幂等创建 digest 提醒。
 
@@ -364,7 +373,7 @@ async def _create_due_digests(
        worker 同时通过预检、随后撞上 ``uq_sales_action_reminders_idempotency`` 唯一
        约束，也只回滚该 savepoint，绝不向上抛出、绝不回滚调用方已提交的投递。
     """
-    scopes = await repo.list_active_action_scopes()
+    scopes = await repo.list_active_action_scopes(tenant_id=tenant_id)
     created = 0
     # 本地日期用配置时区统一确定（digest 是按用户当日的概念）。
     local_now = _to_local(now, tz_name)
@@ -436,11 +445,14 @@ async def sales_action_scheduler_loop(
     timezone_name: str | None = None,
     grace_hours: int | None = None,
     batch_size: int | None = None,
+    tenant_id: str | None = None,
 ) -> None:
     """常驻扫描循环：每 ``scan_interval_seconds`` 执行一次 :func:`run_sales_action_scheduler_once`。
 
     发送器生命周期由本循环管理：起始构造一次、在 finally 中关闭，避免每轮重建
     httpx 连接池；每轮 once-run 通过 ``lambda: sender`` 复用同一实例。
+
+    ``tenant_id`` 透传给每轮扫描，使本 worker 只处理自己租户的提醒（共享库隔离）。
     """
     sender = sender_factory()
     try:
@@ -456,6 +468,7 @@ async def sales_action_scheduler_loop(
                     grace_hours=grace_hours,
                     max_attempts=max_attempts,
                     batch_size=batch_size,
+                    tenant_id=tenant_id,
                 )
             except Exception:
                 logger.exception("sales action scheduler loop iteration failed")

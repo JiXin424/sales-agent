@@ -63,7 +63,8 @@ def route_after_scenario(state: OnlineConversationState) -> str:
 def route_after_observe(state: OnlineConversationState) -> str:
     """Route after ``sales_action_observe_node``.
 
-    - ``"observe_end"`` -> END -- outcome was captured or skipped.
+    - ``"observe_end"`` -> sales_action_replan -- outcome was captured or skipped
+      so the replan node updates memory, cancels siblings, and suggests the next action.
     - ``"resume_chat"`` -> context_resolution -- the node fell through without
       capturing an outcome (missing card, early-exit, etc.).
     """

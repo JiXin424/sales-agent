@@ -36,3 +36,8 @@
 - **教训**:① 审计「哪些 prompt/代码在用」不能只看 import/引用,必须从**生产入口**(钉钉 Stream/HTTP graph)反追**运行时执行路径**。import 了≠跑得到:死代码独占(ChatPipeline)、默认 OFF 开关(task_router/risk/topic_routing)、注册了但运行时硬编码「半残」(evidence_router)。逐个 prompt → 调用节点 → 触发条件 → 默认开关 → 🟢可达 / 🟡默认OFF / 🔴不可达。② 多会话**共享同一工作目录**时,任一方 `git reset --hard`/`stash`/`checkout -- .` 会清掉**所有人**未提交改动——commit 只动暂存区,**reset --hard 才是核武器**。本次 router 改动被并发 reset --hard 清掉,靠 stash@{0} 找回。③ 找回:`git reflog`(reset 痕迹)+`git stash list`+`git fsck --lost-found`(dangling/stash 残留)。④ 预防:CLAUDE.md 加规则「实现类任务先 EnterWorktree 隔离」——worktree 物理隔离,主目录 reset 伤不到。
 - **检查**:可达性审计 → 逐个追 调用节点→触发条件→默认开关,标绿/黄/红。改动丢失 → reflog + stash list + fsck --lost-found 找 dangling/stash 残留。
 - **相关**:#4 #27 #31 #32 #36
+
+## #46 现象描述里的「X」指代多个候选产物时先问清是哪个——别因 CLAUDE.md 强调「主入口」就默认最大流量入口
+- **教训**:用户报「生成的完整回答没渲染 markdown」,我因 CLAUDE.md 反复强调「钉钉 Stream 是生产主入口」而默认 X=钉钉端回答,直接派了钉钉渲染链路子代理;实际 X=**deepeval 生成的 HTML 报告**里的回答字段。停掉重派,浪费一轮算力。① 现象描述的主语(「X 没渲染」「X 报错」「X 慢」)在本项目常可指多个候选产物:钉钉端回答 / eval HTML 报告 / eval MD·CSV 报告 / 前端图调试页 / API 响应体——**最大流量入口 ≠ 用户实际遇到的那个**。② CLAUDE.md「钉钉是主入口」的语境适用于「**验证部署/修复**」(查 stream 日志确认全机健康),**不适用于「用户报告某处现象」**——后者要先问清具体产物。③ 线索:用户前一轮在聊 deepeval 链路,「生成的回答」更可能指 eval 产物;但别靠猜,一句话澄清成本远低于一个错方向子代理。
+- **检查**:用户报「某处没渲染/报错/慢」且主语可指多个产物 → 先一句话列出候选问清是哪个,再派子代理/动手。
+- **相关**:#31

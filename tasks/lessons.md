@@ -57,7 +57,7 @@
 - #1  str.format 双花括号是转义,不是占位符  `[format]`
 - #30 DB prompt 字面花括号抛 KeyError;用 format_map+SafeDict;Edit 被 revert 用 git diff 验证  `[format]`
 
-## 验证方法论 / eval≠生产 / 不可见故障 / 子代理交接  (7 条)  → [lessons/verification.md](lessons/verification.md)
+## 验证方法论 / eval≠生产 / 不可见故障 / 子代理交接  (8 条)  → [lessons/verification.md](lessons/verification.md)
 - #4  验证永远走生产入口(钉钉 stream 非 HTTP);解耦改造接入面逐链路核对  `[verify]`
 - #6  superpowers SDD:brief 路径不稳定,必须给子代理确切代码  `[verify]`
 - #25 第三方追踪装饰器(deepeval @observe)生产无 key 仍纯负债,序列化随时炸  `[verify]`
@@ -65,3 +65,4 @@
 - #36 Edit 接入类改动后立即 grep 验证持久化;孤儿文件让 tsc 假通过  `[verify]`
 - #37 会话开始第一动作就复习 lessons 索引,别等用户提醒(索引化后成本极低)  `[verify]`
 - #38 prompt「引用」≠「运行时可达」;从生产入口反追可达性;共享目录会被并发 reset --hard 清,用 worktree 隔离  `[verify]`
+- #46 现象描述「X 没渲染/报错/慢」指代多个候选产物(钉钉端/eval HTML/MD·CSV/前端页)时先问清是哪个,别默认最大流量入口就派子代理  `[verify]`
